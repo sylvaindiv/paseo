@@ -27,14 +27,15 @@ the role profiles' provider, model, mode and effort in Agent profiles.
 The workflow uses the existing plan actions and an agent panel for review status. Any live,
 unresolved structured plan — from the Workflow Router, the Workflow Planner, or an ordinary
 conversation — can be handed off with one action. Handoff classifies the exact final plan through a
-short read-only Codex classifier turn whose decision is validated against a versioned routing policy
-and persisted in the workflow settings; it requires no Router conversation and no saved executor
-profiles, because the executor is launched with the classified provider, model and effort directly
-(only `executor-standard`/`executor-advanced` wording is legacy stored state). While classification
-runs the action is pending and duplicate presses are disabled; failure keeps the plan actionable
-with a retryable error and never routes to a cheaper fallback. The early Router recommendation is
-retained only as context. Plan review remains limited to workflow Planner conversations. Its
-settings retain plan IDs, routing decisions and review limits across reloads. Review
+background read-only Luna/low turn as soon as the plan becomes actionable. The validated decision
+is persisted before any executor starts, so status and other workflow actions stay responsive while
+classification runs. Pressing Handoff records the request immediately; the executor starts once the
+decision is ready, with direct provider, model and effort settings and no saved executor profile.
+Repeated preparation, clicks, reconnects and plugin reloads reuse the same classifier and executor.
+A replaced, resolved or reviewed plan cancels a queued transfer. Failure keeps the plan actionable,
+shows the routing error and never selects a silent fallback. The early Router recommendation is
+retained only as context. Plan review remains limited to workflow Planner conversations. Workflow
+settings retain plan IDs, routing decisions, queued transfers and review limits across reloads. Review
 creates and sends the read-only reviewer before closing the planner's permission. A definitive
 pre-acceptance failure leaves the plan retryable; an uncertain delivery requires manual inspection
 without replay. Planner clarification is transported verbatim and without truncation, not inferred constraints.

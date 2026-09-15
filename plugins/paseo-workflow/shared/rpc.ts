@@ -9,6 +9,21 @@ export const planContext = z.object({
   text: z.string(),
 });
 export const executorSelection = z.enum(["standard", "advanced"]);
+export const availablePlanContext = planContext.extend({
+  permissionRequestId: z.string().optional(),
+});
+export const executionDecision = z.object({
+  category: z.enum(["trivial", "bounded", "diagnostic", "complex", "critical"]),
+  provider: z.literal("codex"),
+  model: z.string().min(1),
+  effort: z.enum(["low", "medium", "high", "xhigh"]),
+  reason: z.string().trim().min(1),
+});
+export const routingStatus = z.object({
+  phase: z.enum(["running", "complete", "failed", "outcome_unknown"]),
+  decision: executionDecision.optional(),
+  error: z.string().optional(),
+});
 export const installRpc = defineRpc({
   name: "workflow.profiles.install.request",
   input: z.object({}),
@@ -21,10 +36,18 @@ export const reviewRpc = defineRpc({
 });
 export const prepareRpc = defineRpc({
   name: "workflow.handoff.prepare.request",
-  input: planContext,
+  input: availablePlanContext,
   output: z.object({
     type: z.literal("workflow.handoff.prepare.response"),
     recommendation: executorSelection.nullable(),
+  }),
+});
+export const enqueueRpc = defineRpc({
+  name: "workflow.handoff.enqueue.request",
+  input: planContext,
+  output: z.object({
+    type: z.literal("workflow.handoff.enqueue.response"),
+    handoffRequested: z.boolean(),
   }),
 });
 export const handoffRpc = defineRpc({
@@ -50,6 +73,8 @@ export const statusRpc = defineRpc({
       .optional(),
     plan: planContext.nullable(),
     recommendation: executorSelection.nullable(),
+    routing: routingStatus.nullable().optional(),
+    handoffRequested: z.boolean().optional(),
     handoff: z
       .object({
         // COMPAT(workflow-executor-selection): added in v0.8.0, remove after 2027-09-13.

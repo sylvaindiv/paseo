@@ -823,6 +823,13 @@ client.addPlanAction({
   title: "Review",
   order: 10,
   query: { launchProfileId: "planner" },
+  async onAvailable(context) {
+    await context.rpc(prepareReviewRpc, {
+      agentId: context.agent.id,
+      workspaceId: context.workspace.id,
+      ...context.plan,
+    });
+  },
   async onPress(context) {
     await context.rpc(reviewPlanRpc, {
       agentId: context.agent.id,
@@ -840,12 +847,18 @@ client.addPlanAction({
 | `order?`                 | Finite number, ascending; defaults to `0`. Ties sort by plugin ID and action ID       |
 | `query.launchProfileId?` | Exact match against the agent's immutable launch profile; omitted matches any profile |
 | `disabledReason?`        | Nonempty reason shown by the host while the action is unavailable                     |
+| `onAvailable?(context)`  | Runs when the live, unresolved action becomes available; no permission is created     |
 | `onPress(context)`       | Synchronous or async business callback; reject or throw to show a retryable error     |
 
-`PluginPlanActionContext` extends `PluginAgentCommandContext`. Its `plan` contains the exact
-`callId`, full Markdown `text`, optional `turnId`, and correlated `permissionRequestId`. The agent
+`PluginPlanActionAvailableContext` extends `PluginAgentCommandContext`. Its `plan` contains the exact
+`callId`, full Markdown `text`, optional `turnId`, and `permissionRequestId` when a native permission
+already exists. The callback can run again after a plugin reload, so its effects must be idempotent.
+It never materializes a native permission.
+
+`PluginPlanActionContext` adds the correlated `permissionRequestId` for `onPress`. The agent
 snapshot exposes optional `launchProfileId`. Use these IDs directly; do not look up the latest plan
-by text or position.
+by text or position. Both contexts expose a `signal`; stop background work when it is aborted because
+the requesting plan view is gone.
 
 Paseo shows Copy first, matching contributions next, and Approve last. Compact layouts put the
 secondary actions in the existing menu and keep Approve visible. Business actions and approval

@@ -77,6 +77,7 @@ export function runtime(
         workspaceId: snapshot.agent.workspaceId ?? undefined,
         launchProfileId: snapshot.agent.launchProfileId,
         labels: snapshot.agent.labels,
+        status: snapshot.agent.status,
         pendingPermissions: snapshot.agent.pendingPermissions,
       };
     },

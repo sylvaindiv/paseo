@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -91,6 +91,9 @@ export function PlanActions({
   const getAgent = useCallback(() => source.getAgent(agentId), [source, agentId]);
   const agent = useSyncExternalStore(source.subscribe, getAgent, getAgent);
   const [model] = useState(() => new PlanActionState(plan.callId));
+  const [lifetime] = useState(() => new AbortController());
+  const availability = useRef(new WeakMap<object, Set<string>>());
+  useEffect(() => () => lifetime.abort(), [lifetime]);
   model.setPlan(plan.callId);
   const state = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
   const contributions = useMemo(
@@ -113,6 +116,65 @@ export function PlanActions({
     fallbackAvailable: supportsStructuredPlans && Boolean(workspaceId) && agent?.status === "idle",
     compact,
   });
+  useEffect(() => {
+    for (const action of actions) {
+      const contribution = action.contribution;
+      const callback = contribution?.onAvailable;
+      if (!contribution || !callback || action.disabled) continue;
+      const calls = availability.current.get(contribution) ?? new Set<string>();
+      if (calls.has(plan.callId)) continue;
+      const plugin = installed.find(
+        (entry) => entry.serverId === serverId && entry.id === action.pluginId,
+      );
+      if (!plugin || !workspaceId) continue;
+      const runtime = createPluginSurfaceRuntime(host?.client ?? null, plugin);
+      if (!runtime) continue;
+      const context = createPluginAgentActionContext({
+        plugin,
+        runtime,
+        state: source,
+        workspaceId,
+        agentId,
+        navigation: createPluginNavigation({ serverId, workspaceId }),
+      });
+      if (!context) {
+        void runtime.paseo.dispose();
+        continue;
+      }
+      calls.add(plan.callId);
+      availability.current.set(contribution, calls);
+      void (async () => {
+        try {
+          await callback({
+            signal: lifetime.signal,
+            ...context,
+            plan: {
+              callId: plan.callId,
+              text: plan.text,
+              turnId: plan.turnId,
+              permissionRequestId: action.permission?.id,
+            },
+          });
+        } catch {
+          // Availability is opportunistic; the action remains available for an explicit retry.
+        } finally {
+          await runtime.paseo.dispose();
+        }
+      })();
+    }
+  }, [
+    actions,
+    agentId,
+    host?.client,
+    installed,
+    lifetime,
+    plan.callId,
+    plan.text,
+    plan.turnId,
+    serverId,
+    source,
+    workspaceId,
+  ]);
   const run = useStableEvent((id: string) => {
     const action = actions.find((candidate) => candidate.id === id);
     if (!action || action.disabled) return;
@@ -168,6 +230,7 @@ export function PlanActions({
         });
         if (!context) throw new Error(t("common.errors.daemonUnavailable"));
         await action.contribution.onPress({
+          signal: lifetime.signal,
           ...context,
           plan: { ...plan, permissionRequestId: permission.id },
         });

@@ -21,6 +21,7 @@ export type {
   PluginWorkspaceCommandContext,
   PluginAgentCommandContext,
   PluginPlanActionContext,
+  PluginPlanActionAvailableContext,
   PluginPlanActionContribution,
   PluginCommandCenterItemContribution,
   PluginClientSlashCommandContribution,

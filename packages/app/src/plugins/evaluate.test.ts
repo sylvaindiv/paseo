@@ -43,6 +43,24 @@ describe("evaluatePluginClientBundle", () => {
     expect(plugin.planActions).toEqual([]);
   });
 
+  it("accepts an optional plan availability callback and rejects invalid callbacks", () => {
+    const plugin = evaluatePluginClientBundle(
+      "workflow",
+      bundle(`
+        plugin.addPlanAction({ id: "handoff", title: "Handoff", onAvailable() {}, onPress() {} });
+      `),
+    );
+    expect(plugin.planActions[0]?.onAvailable).toBeTypeOf("function");
+    expect(() =>
+      evaluatePluginClientBundle(
+        "invalid-workflow",
+        bundle(`
+          plugin.addPlanAction({ id: "handoff", title: "Handoff", onAvailable: "soon", onPress() {} });
+        `),
+      ),
+    ).toThrow("invalid availability callback");
+  });
+
   it.each([
     ['id: "INVALID", title: "Review", onPress() {}', "Invalid plan action id"],
     ['id: "review", title: " ", onPress() {}', "has no title"],

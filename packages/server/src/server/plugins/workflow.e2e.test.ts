@@ -437,6 +437,32 @@ function approvedPlanEntry(plan: { callId: string; text: string }): AgentStreamE
   };
 }
 
+async function prepareRouting(
+  f: Awaited<ReturnType<typeof lifecycleFixture>>,
+  plan: Awaited<ReturnType<typeof pendingPlan>>,
+) {
+  await f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.prepare.request", plan);
+  await expect
+    .poll(
+      async () =>
+        (
+          await f.client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
+            agentId: plan.agentId,
+            workspaceId: plan.workspaceId,
+          })
+        ).routing?.phase,
+    )
+    .toBe("complete");
+}
+
+async function preparedHandoffRpc(
+  f: Awaited<ReturnType<typeof lifecycleFixture>>,
+  plan: Awaited<ReturnType<typeof pendingPlan>> & { selection?: string },
+) {
+  await prepareRouting(f, plan);
+  return f.client.invokePluginRpc("paseo-workflow", "workflow.plan.handoff.request", plan);
+}
+
 async function publishPlanApproval(
   f: Awaited<ReturnType<typeof lifecycleFixture>>,
   plan: Awaited<ReturnType<typeof pendingPlan>>,
@@ -459,8 +485,9 @@ async function publishPlanApproval(
     .toBe(true);
 }
 
-test("an ordinary conversation classifies its pending plan and hands it to one direct-config executor", async () => {
+test("an ordinary conversation prepares in the background and enqueues one executor without blocking status", async () => {
   const f = await lifecycleFixture();
+  let release!: () => void;
   try {
     await f.client.patchDaemonConfig({
       agentProfiles: [
@@ -483,9 +510,39 @@ test("an ordinary conversation classifies its pending plan and hands it to one d
       '{"category":"bounded","provider":"codex","model":"gpt-5.6-sol","effort":"medium","reason":"Scoped fix"}',
     ]);
     const plan = await pendingPlan(f, ordinary.id, "ordinary-plan");
+    f.holds.set(
+      "router",
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    await Promise.all([
+      f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.prepare.request", plan),
+      f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.prepare.request", plan),
+    ]);
+    await expect.poll(() => f.labelled("execution-router").length).toBe(1);
+    expect(f.labelled("executor-bounded")).toHaveLength(0);
+    await expect(
+      f.client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
+        agentId: ordinary.id,
+        workspaceId: f.workspace.id,
+      }),
+    ).resolves.toMatchObject({ routing: { phase: "running" }, handoffRequested: false });
     await expect(
       f.client.invokePluginRpc("paseo-workflow", "workflow.plan.handoff.request", plan),
-    ).resolves.toMatchObject({ agentId: expect.any(String) });
+    ).rejects.toThrow("Executor preparation is required");
+    await Promise.all([
+      f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.enqueue.request", plan),
+      f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.enqueue.request", plan),
+    ]);
+    await expect(
+      f.client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
+        agentId: ordinary.id,
+        workspaceId: f.workspace.id,
+      }),
+    ).resolves.toMatchObject({ routing: { phase: "running" }, handoffRequested: true });
+    f.holds.delete("router");
+    release();
     expect(f.agents("executor-standard")).toHaveLength(0);
     let classifier!: StoredAgentRecord;
     await expect
@@ -497,12 +554,17 @@ test("an ordinary conversation classifies its pending plan and hands it to one d
       })
       .toBeTruthy();
     expect(classifier.launchProfileId).toBeUndefined();
-    expect(classifier.config.model).toBe("gpt-5.6-sol");
-    expect(classifier.config.thinkingOptionId).toBe("medium");
+    expect(classifier.config.model).toBe("gpt-5.6-luna");
+    expect(classifier.config.thinkingOptionId).toBe("low");
     expect(
       f.prompts.filter((prompt) => prompt.text.startsWith("Classify the workflow plan")),
     ).toHaveLength(1);
-    expect(f.labelled("executor-bounded")).toHaveLength(1);
+    await expect
+      .poll(async () => ({
+        count: f.labelled("executor-bounded").length,
+        error: (await f.read()).values.workflows[plan.agentId]?.plans[plan.callId]?.routing?.error,
+      }))
+      .toEqual({ count: 1, error: undefined });
     const executor = f.labelled("executor-bounded")[0]!;
     expect(executor.launchProfileId).toBeUndefined();
     expect(executor.config.model).toBe("gpt-5.6-sol");
@@ -523,6 +585,7 @@ test("an ordinary conversation classifies its pending plan and hands it to one d
       )
       .toBeTruthy();
   } finally {
+    release?.();
     await f.close();
   }
 }, 60_000);
@@ -628,7 +691,7 @@ test.each(["router", "executor-standard"] as const)(
             f.git("commit", "--quiet", "-am", "functional");
           }
         });
-        await f.client.invokePluginRpc("paseo-workflow", "workflow.plan.handoff.request", {
+        await preparedHandoffRpc(f, {
           ...plan,
           selection: "standard",
         });
@@ -1153,7 +1216,7 @@ test("Planner clarification after routing is transported in review, handoff and 
     await expect.poll(() => f.agents("planner")[0]?.lifecycle).toBe("idle");
     const plan = await pendingPlan(f, planner.id, "plan-2");
     await f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.prepare.request", plan);
-    await f.client.invokePluginRpc("paseo-workflow", "workflow.plan.handoff.request", plan);
+    await preparedHandoffRpc(f, plan);
     const executor = f.labelled("executor-diagnostic")[0]!;
     await expect.poll(() => f.labelled("executor-diagnostic")[0]?.lifecycle).toBe("idle");
     await writeFile(path.join(f.directory, "feature.txt"), "functional\n");
@@ -1312,6 +1375,7 @@ test.each(["review", "handoff"] as const)(
       const method =
         action === "review" ? "workflow.plan.review.request" : "workflow.plan.handoff.request";
       const input = action === "review" ? context : { ...context, selection: "advanced" };
+      if (action === "handoff") await prepareRouting(f, context);
       const first = await f.client.invokePluginRpc("paseo-workflow", method, input);
       expect(await f.client.invokePluginRpc("paseo-workflow", method, input)).toEqual(first);
       expect(manager.getAgent(plan.agentId)!.pendingPermissions.size).toBe(0);
@@ -2218,7 +2282,7 @@ test.each([
               f.git("commit", "--quiet", "-am", "functional");
             }
           });
-          await f.client.invokePluginRpc("paseo-workflow", "workflow.plan.handoff.request", {
+          await preparedHandoffRpc(f, {
             ...plan,
             selection: "standard",
           });

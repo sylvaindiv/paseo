@@ -158,6 +158,8 @@ export function runPluginClientBundle(
       if (!title) throw new Error(`Plan action ${actionId} has no title`);
       if (typeof contribution.onPress !== "function")
         throw new Error(`Plan action ${actionId} has no callback`);
+      if (contribution.onAvailable !== undefined && typeof contribution.onAvailable !== "function")
+        throw new Error(`Plan action ${actionId} has invalid availability callback`);
       if (contribution.order !== undefined && !Number.isFinite(contribution.order))
         throw new Error(`Plan action ${actionId} has invalid order`);
       const profileId = contribution.query?.launchProfileId;

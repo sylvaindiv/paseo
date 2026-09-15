@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { decisionJson } from "../shared/decisions";
+import { executionDecision } from "../shared/rpc";
+export { executionDecision } from "../shared/rpc";
 
 export const routes = [
   { category: "trivial", model: "gpt-5.6-luna", effort: "low" },
@@ -15,13 +17,6 @@ const routingTable = routes
   .map((route) => `| ${route.category} | ${route.model} | ${route.effort} |`)
   .join("\n");
 
-export const executionDecision = z.object({
-  category: z.enum(["trivial", "bounded", "diagnostic", "complex", "critical"]),
-  provider: z.literal("codex"),
-  model: z.string().min(1),
-  effort: z.enum(["low", "medium", "high", "xhigh"]),
-  reason: z.string().trim().min(1),
-});
 export type ExecutionDecision = z.infer<typeof executionDecision>;
 
 export const executionOutputSchema = z.toJSONSchema(executionDecision);

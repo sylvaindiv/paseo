@@ -1,5 +1,5 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { installRpc, reviewRpc, handoffRpc, prepareRpc, statusRpc } from "./shared/rpc";
+import { installRpc, reviewRpc, handoffRpc, prepareRpc, enqueueRpc, statusRpc } from "./shared/rpc";
 import { profileId } from "./shared/profiles";
 import { installProfiles } from "./server/install";
 import { workflowSettings } from "./server/state";
@@ -27,6 +27,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(handoffRpc, async ({ selection: _ignored, ...context }, { paseo }) => ({
     type: "workflow.plan.handoff.response" as const,
     ...(await workflow(paseo).handoff(context)),
+  }));
+  server.handle(enqueueRpc, async (input, { paseo }) => ({
+    type: "workflow.handoff.enqueue.response" as const,
+    ...(await workflow(paseo).enqueueHandoff(input)),
   }));
   server.handle(statusRpc, async (input, { paseo }) => ({
     type: "workflow.status.get.response" as const,
@@ -62,6 +66,7 @@ export default function contribute(server: PluginServerContext) {
     if (outcome.kind !== "completed") return;
     // Direct-config executors have no workflow launch profile; trust only the executor role labels.
     const roles = [
+      "execution-router",
       "executor-trivial",
       "executor-bounded",
       "executor-diagnostic",
@@ -74,5 +79,5 @@ export default function contribute(server: PluginServerContext) {
     if (!admitted) return;
     await workflow(paseo).turnEnded(agent.id, turnId);
   });
-  return () => {};
+  return () => controller?.dispose();
 }

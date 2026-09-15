@@ -32,6 +32,18 @@ test("plan actions keep exact context, isolate errors, lock remotely, and overfl
     const handoff = bar.getByRole("button", { name: "Hand off", exact: true });
     const approve = bar.getByRole("button", { name: "Approve", exact: true });
     await expect(bar.getByRole("button")).toHaveText(["Copy", "Revue", "Hand off", "Approve"]);
+    await expect
+      .poll(() =>
+        page.evaluate(() => JSON.parse(sessionStorage.getItem("plan-action-available") ?? "null")),
+      )
+      .toEqual({
+        action: "available",
+        callId: expect.any(String),
+        permissionRequestId: expect.any(String),
+        text: expect.stringContaining('--name="my repo"'),
+        agentId: session.agentId,
+        workspaceId: session.workspaceId,
+      });
     await review.click();
     await expect(bar.getByRole("alert")).toContainText("Review unavailable; retry");
     const reviewError = await bar.getByRole("alert").innerText();
