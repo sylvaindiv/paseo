@@ -36,6 +36,7 @@ export interface WorkflowAgent {
   workspaceId?: string;
   launchProfileId?: string;
   labels: Record<string, string>;
+  status?: string;
   pendingPermissions: Pick<
     AgentPermissionRequest,
     "id" | "kind" | "sourcePlanCallId" | "input" | "metadata"
@@ -71,6 +72,7 @@ interface Routing {
   agentId?: string;
   decision?: ExecutionDecision;
   error?: string;
+  promptStarted?: boolean;
 }
 export interface Workflow {
   id: string;
@@ -102,6 +104,7 @@ export interface Workflow {
       review?: Review;
       handoff?: Handoff;
       routing?: Routing;
+      handoffRequested?: boolean;
       approved?: boolean;
       verification?: string;
       final?: FinalReview;
@@ -189,12 +192,14 @@ function requestFrom(timeline: readonly AgentTimelineItem[]): string {
     .join("\n\nUser follow-up:\n");
 }
 
-function samePlan(left: StoredPlanContext, right: PlanContext): boolean {
+function samePlan(left: StoredPlanContext, right: StoredPlanContext): boolean {
   return (
     left.agentId === right.agentId &&
     left.workspaceId === right.workspaceId &&
     left.callId === right.callId &&
-    left.permissionRequestId === right.permissionRequestId &&
+    (!left.permissionRequestId ||
+      !right.permissionRequestId ||
+      left.permissionRequestId === right.permissionRequestId) &&
     left.text === right.text
   );
 }
@@ -388,7 +393,14 @@ function planCandidates(plan: Workflow["plans"][string]): string[] {
 
 export class WorkflowController {
   private queue: Promise<unknown> = Promise.resolve();
+  private jobs = new Map<string, Promise<void>>();
+  private rescheduled = new Set<string>();
+  private disposed = false;
   constructor(private readonly port: WorkflowPort) {}
+
+  dispose() {
+    this.disposed = true;
+  }
 
   async planRequested(context: PlanContext, automaticReview = true) {
     const automatic = await this.serial(async () => {
@@ -422,136 +434,269 @@ export class WorkflowController {
       // Permission events include ordinary tools, which never select the approved plan.
       if (!plan) return;
       plan.approved = true;
+      plan.handoffRequested = false;
       workflow.activePlanId = plan.context.callId;
       await this.port.write(state);
       await this.reconcile(state, workflow);
     });
   }
 
-  prepareHandoff(context: PlanContext) {
+  prepareHandoff(context: StoredPlanContext) {
     return this.serial(async () => {
-      const agent = await this.pending(context, false);
+      const agent = await this.available(context);
       const state = await this.port.read();
       const workflow = await this.workflow(state, agent);
       const previous = workflow.plans[context.callId];
       if (previous && !samePlan(previous.context, context))
         throw new Error("Plan calls are append-only.");
       workflow.plans[context.callId] ??= { context };
+      const plan = workflow.plans[context.callId];
+      if (context.permissionRequestId)
+        plan.context.permissionRequestId = context.permissionRequestId;
+      if (plan.review || plan.approved)
+        throw new Error("This plan is already reviewed or approved.");
       workflow.preparedPlanId = context.callId;
+      if (!plan.routing) {
+        await this.refreshPlannerTranscript(state, workflow);
+        plan.routing = { attempt: 1, phase: "running", promptStarted: false };
+      }
       await this.port.write(state);
+      this.schedule(workflow.id, context.callId);
       return { recommendation: workflow.recommendation };
     });
   }
 
-  private static readonly classifierModel = "gpt-5.6-sol";
-  private static readonly classifierEffort = "medium";
+  enqueueHandoff(context: PlanContext) {
+    return this.serial(async () => {
+      const state = await this.port.read();
+      const agent = await this.port.agent(context.agentId);
+      const workflow = await this.workflow(state, agent);
+      const previous = workflow.plans[context.callId];
+      if (previous && !samePlan(previous.context, context))
+        throw new Error("This plan context does not match the recorded plan.");
+      if (previous?.handoff && previous.handoff.phase !== "closed")
+        return { handoffRequested: true };
+      if (previous?.handoff?.phase === "closed")
+        isResumingClosedHandoff(
+          workflow,
+          previous,
+          latestPlanItem(await this.port.timeline(context.agentId)),
+        );
+      else await this.available(context);
+      if (previous?.review || previous?.approved)
+        throw new Error("This plan is already reviewed or approved.");
+      const plan = previous ?? (workflow.plans[context.callId] = { context });
+      plan.context = context;
+      plan.handoffRequested = true;
+      workflow.preparedPlanId = context.callId;
+      if (!plan.routing || plan.routing.phase === "failed")
+        plan.routing = {
+          attempt: (plan.routing?.attempt ?? 0) + 1,
+          phase: "running",
+          promptStarted: false,
+        };
+      else if (plan.routing.phase === "complete") delete plan.routing.error;
+      await this.port.write(state);
+      this.schedule(workflow.id, context.callId);
+      return { handoffRequested: true };
+    });
+  }
+
+  private static readonly classifierModel = "gpt-5.6-luna";
+  private static readonly classifierEffort = "low";
   private static readonly waitTimeoutMs = 120_000;
 
   /**
    * Classifies the final plan with one technical classifier turn and returns a
    * persisted, policy-validated decision. Never uses client-supplied model data.
    */
-  private async routeExecution(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-  ): Promise<ExecutionDecision> {
-    const routing = (plan.routing ??= { attempt: 0, phase: "failed" });
-    if (routing.phase === "complete" && routing.decision) return routing.decision;
-    if ((routing.phase === "running" || routing.phase === "outcome_unknown") && routing.agentId) {
-      return this.classifierResult(state, plan, routing, routing.agentId);
+  private schedule(workflowId: string, callId: string) {
+    const key = `${workflowId}:${callId}`;
+    if (this.disposed) return;
+    if (this.jobs.has(key)) {
+      this.rescheduled.add(key);
+      return;
     }
-    if (routing.phase === "failed" || routing.phase === "outcome_unknown") routing.attempt += 1;
-    const cwd = (await this.port.workspace(workflow.workspaceId)).cwd;
-    const model = (await this.port.models("codex", cwd)).find(
-      (entry) => entry.id === WorkflowController.classifierModel,
-    );
-    if (!model?.thinkingOptions?.some((option) => option.id === "medium"))
-      throw new Error(
-        "The codex classifier model is unavailable. Update the host's codex provider and retry.",
-      );
-    const launch: WorkflowLaunch = {
-      workspaceId: workflow.workspaceId,
-      parent: plan.context.agentId,
-      idempotencyKey: `workflow:${workflow.id}:handoff:${plan.context.callId}:classifier:${routing.attempt}`,
-      config: {
-        provider: `codex/${WorkflowController.classifierModel}`,
-        modeId: "auto",
-        thinkingOptionId: WorkflowController.classifierEffort,
-        writePolicy: "read_only",
-      },
-      outputSchema: executionOutputSchema,
-      labels: {
-        "paseo.workflow.id": workflow.id,
-        "paseo.workflow.plan": plan.context.callId,
-        "paseo.workflow.role": "execution-router",
-      },
-    };
-    const agentId = await this.port.create(launch);
-    routing.phase = "running";
-    routing.agentId = agentId;
-    delete routing.error;
-    await this.port.write(state);
-    // The daemon rejects an idempotent creation that embeds an initial prompt.
-    try {
-      await this.port.send(
-        agentId,
-        executionRoutingPrompt(briefing(workflow, plan.context.text)),
-        `workflow:${workflow.id}:handoff:${plan.context.callId}:classifier:${routing.attempt}:prompt`,
-      );
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("agent_request_not_accepted")) {
-        routing.phase = "failed";
-        routing.error = "The classifier did not accept its prompt.";
-        await this.port.write(state);
-      } else {
-        routing.phase = "outcome_unknown";
-        routing.error = "The classifier prompt delivery outcome_unknown. Retryable.";
-        await this.port.write(state);
-      }
-      throw error;
-    }
-    return this.classifierResult(state, plan, routing, agentId);
+    const job = this.runRouting(workflowId, callId)
+      .catch(() => undefined)
+      .finally(() => {
+        this.jobs.delete(key);
+        if (this.rescheduled.delete(key)) this.schedule(workflowId, callId);
+      });
+    this.jobs.set(key, job);
   }
 
-  private async classifierResult(
-    state: WorkflowState,
-    plan: Workflow["plans"][string],
-    routing: Routing,
+  private async routingSnapshot(workflowId: string, callId: string) {
+    return this.serial(async () => {
+      if (this.disposed) return undefined;
+      const workflow = (await this.port.read()).workflows[workflowId];
+      const plan = workflow?.plans[callId];
+      return workflow && plan ? { workflow, plan } : undefined;
+    });
+  }
+
+  private async updateRouting(
+    workflowId: string,
+    callId: string,
+    attempt: number,
+    update: Partial<Routing>,
+  ) {
+    return this.serial(async () => {
+      if (this.disposed) return false;
+      const state = await this.port.read();
+      const routing = state.workflows[workflowId]?.plans[callId]?.routing;
+      if (!routing || routing.attempt !== attempt) return false;
+      Object.assign(routing, update);
+      if ("error" in update && update.error === undefined) delete routing.error;
+      await this.port.write(state);
+      return true;
+    });
+  }
+
+  private async runRouting(workflowId: string, callId: string) {
+    const snapshot = await this.routingSnapshot(workflowId, callId);
+    if (!snapshot) return;
+    const { workflow, plan } = snapshot;
+    const routing = plan.routing;
+    if (!routing || routing.phase === "failed") return;
+    const update = (change: Partial<Routing>) =>
+      this.updateRouting(workflowId, callId, routing.attempt, change);
+    if (routing.phase !== "complete") {
+      let agentId = routing.agentId;
+      let stage = "checking";
+      try {
+        if (!agentId) {
+          const cwd = (await this.port.workspace(workflow.workspaceId)).cwd;
+          const model = (await this.port.models("codex", cwd)).find(
+            (entry) => entry.id === WorkflowController.classifierModel,
+          );
+          if (
+            !model?.thinkingOptions?.some(
+              (option) => option.id === WorkflowController.classifierEffort,
+            )
+          )
+            throw new Error(
+              "The codex classifier model is unavailable. Update the host's codex provider and retry.",
+            );
+          if (this.disposed) return;
+          stage = "creating";
+          agentId = await this.port.create({
+            workspaceId: workflow.workspaceId,
+            parent: plan.context.agentId,
+            idempotencyKey: `workflow:${workflowId}:handoff:${callId}:classifier:${routing.attempt}`,
+            config: {
+              provider: `codex/${WorkflowController.classifierModel}`,
+              modeId: "auto",
+              thinkingOptionId: WorkflowController.classifierEffort,
+              writePolicy: "read_only",
+            },
+            outputSchema: executionOutputSchema,
+            labels: {
+              "paseo.workflow.id": workflowId,
+              "paseo.workflow.plan": callId,
+              "paseo.workflow.role": "execution-router",
+            },
+          });
+          if (!(await update({ agentId }))) return;
+        }
+        if (routing.promptStarted === false) {
+          // Reserve delivery durably before sending. Reload may wait for this turn, never resend it.
+          if (!(await update({ promptStarted: true }))) return;
+          stage = "sending";
+          await this.port.send(
+            agentId,
+            executionRoutingPrompt(briefing(workflow, plan.context.text)),
+            `workflow:${workflowId}:handoff:${callId}:classifier:${routing.attempt}:prompt`,
+          );
+        }
+        stage = "waiting";
+        const result = await this.port.wait(agentId, WorkflowController.waitTimeoutMs);
+        stage = result.status;
+        const text = await this.classifierText(
+          agentId,
+          `workflow:${workflowId}:handoff:${callId}:classifier:${routing.attempt}:prompt`,
+          Boolean(routing.agentId),
+          result,
+        );
+        stage = "parsing";
+        const decision = parseExecutionDecision(text);
+        const cwd = (await this.port.workspace(workflow.workspaceId)).cwd;
+        await this.executionModel(decision, cwd);
+        if (!(await update({ phase: "complete", decision, error: undefined }))) return;
+        await this.port.archive(agentId).catch(() => undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const unknown =
+          !["checking", "parsing", "error"].includes(stage) &&
+          !message.includes("agent_request_not_accepted");
+        await update({
+          phase: unknown ? "outcome_unknown" : "failed",
+          error: `${message} The plan stays open for a retry.`,
+        });
+        if (agentId && !unknown) await this.port.archive(agentId);
+        return;
+      }
+    }
+    await this.finishQueuedHandoff(workflowId, callId);
+  }
+
+  private async classifierText(
     agentId: string,
-  ): Promise<ExecutionDecision> {
-    routing.phase = "running";
-    routing.agentId = agentId;
-    await this.port.write(state);
-    const result = await this.port.wait(agentId, WorkflowController.waitTimeoutMs);
-    if (result.status === "timeout") {
-      routing.phase = "outcome_unknown";
-      routing.error =
-        "The classification turn did not finish in time. Retry to wait for the same classifier again.";
-      await this.port.write(state);
-      throw new Error(routing.error);
+    promptId: string,
+    recovered: boolean,
+    result: Awaited<ReturnType<WorkflowPort["wait"]>>,
+  ) {
+    if (result.status === "timeout")
+      throw new Error(
+        "The classification turn did not finish in time. Inspect the existing classifier; its prompt will not be resent.",
+      );
+    if (result.status !== "idle") throw new Error(result.error ?? "The classifier failed.");
+    if (recovered) {
+      const turn = await this.port.turn(agentId, undefined, promptId);
+      if (!turn)
+        throw new Error(
+          "Classifier delivery/completion outcome_unknown. Inspect its existing conversation; automatic replay is disabled.",
+        );
+      return turn.items
+        .filter((item) => item.type === "assistant_message")
+        .map((item) => item.text)
+        .join("");
     }
-    if (result.status !== "idle") {
-      routing.phase = "failed";
-      routing.error = result.error ?? "The classifier failed.";
-      await this.port.write(state);
-      throw new Error(`The classifier failed: ${routing.error} The plan stays open for a retry.`);
-    }
+    return result.lastMessage ?? "";
+  }
+
+  private async finishQueuedHandoff(workflowId: string, callId: string) {
+    const current = await this.routingSnapshot(workflowId, callId);
+    if (
+      !current?.plan.handoffRequested ||
+      (current.plan.handoff && current.plan.handoff.phase !== "closed") ||
+      this.disposed
+    )
+      return;
     try {
-      routing.decision = parseExecutionDecision(result.lastMessage ?? "");
+      await this.handoff(actionContext(current.plan.context));
     } catch (error) {
-      routing.phase = "failed";
-      routing.error =
-        error instanceof Error ? error.message : "The classifier returned an unreadable decision.";
-      await this.port.write(state);
-      await this.port.archive(agentId);
-      throw new Error(`${routing.error} The plan stays open for a retry.`, { cause: error });
+      await this.serial(async () => {
+        if (this.disposed) return;
+        const state = await this.port.read();
+        const pending = state.workflows[workflowId]?.plans[callId];
+        if (!pending) return;
+        pending.handoffRequested = false;
+        if (pending.routing)
+          pending.routing.error = error instanceof Error ? error.message : String(error);
+        await this.port.write(state);
+      });
     }
-    routing.phase = "complete";
-    delete routing.error;
-    await this.port.write(state);
-    await this.port.archive(agentId);
-    return routing.decision;
+  }
+
+  private async executionModel(decision: ExecutionDecision, cwd: string) {
+    const model = (await this.port.models(decision.provider, cwd)).find(
+      (entry) => entry.id === decision.model,
+    );
+    if (!model?.thinkingOptions?.some((option) => option.id === decision.effort))
+      throw new Error(
+        `The provider does not expose ${decision.model}/${decision.effort}. Update the provider and retry.`,
+      );
   }
 
   status(agentId: string, workspaceId: string) {
@@ -570,30 +715,34 @@ export class WorkflowController {
         await this.port.write(state);
       }
       if (workflow) await this.reconcile(state, workflow);
-      const prepared = workflow?.preparedPlanId
-        ? workflow.plans[workflow.preparedPlanId]
-        : undefined;
-      return {
-        plan: prepared?.context.permissionRequestId ? actionContext(prepared.context) : null,
-        recommendation: workflow?.recommendation ?? null,
-        handoff: prepared?.handoff ?? null,
-        verification: Object.values(workflow?.plans ?? {})
-          .filter((plan) => plan.verification)
-          .map((plan) => ({
-            planId: plan.context.callId,
-            phase: "verification_required" as const,
-            reason: plan.verification!,
-          })),
-        reviews: Object.values(workflow?.plans ?? {})
-          .filter((plan) => plan.final)
-          .map((plan) => ({
-            planId: plan.context.callId,
-            phase: plan.final!.phase,
-            reason: plan.final!.reason ?? null,
-            managerId: plan.final!.managerId,
-          })),
-      };
+      return this.statusView(workflow);
     });
+  }
+
+  private statusView(workflow: Workflow | undefined) {
+    const prepared = workflow?.preparedPlanId ? workflow.plans[workflow.preparedPlanId] : undefined;
+    return {
+      plan: prepared?.context.permissionRequestId ? actionContext(prepared.context) : null,
+      recommendation: workflow?.recommendation ?? null,
+      routing: prepared?.routing ?? null,
+      handoffRequested: prepared?.handoffRequested ?? false,
+      handoff: prepared?.handoff ?? null,
+      verification: Object.values(workflow?.plans ?? {})
+        .filter((plan) => plan.verification)
+        .map((plan) => ({
+          planId: plan.context.callId,
+          phase: "verification_required" as const,
+          reason: plan.verification!,
+        })),
+      reviews: Object.values(workflow?.plans ?? {})
+        .filter((plan) => plan.final)
+        .map((plan) => ({
+          planId: plan.context.callId,
+          phase: plan.final!.phase,
+          reason: plan.final!.reason ?? null,
+          managerId: plan.final!.managerId,
+        })),
+    };
   }
   handoff(context: PlanContext) {
     return this.serial(async () => {
@@ -610,10 +759,18 @@ export class WorkflowController {
       const resumingClosed = isResumingClosedHandoff(workflow, previous, latestPlan);
       await this.refreshPlannerTranscript(state, workflow);
       const plan = previous ?? (workflow.plans[context.callId] = { context });
-      if (plan.handoff?.phase !== "closed") await this.pending(context, false);
-      // Classification runs before the source permission closes: a failure keeps it actionable.
-      const decision = await this.routeExecution(state, workflow, plan);
+      if (plan.handoff?.phase !== "closed") await this.available(context);
+      if (plan.review || plan.approved)
+        throw new Error("This plan is already reviewed or approved.");
+      const decision = plan.routing?.phase === "complete" ? plan.routing.decision : undefined;
+      if (!decision)
+        throw new Error(
+          "Executor preparation is required. Use workflow.handoff.prepare and workflow.handoff.enqueue; this request never waits for classification.",
+        );
+      await this.executionModel(decision, (await this.port.workspace(workflow.workspaceId)).cwd);
       if (plan.handoff?.phase !== "closed") {
+        await this.available(context);
+        plan.context = context;
         plan.handoff = { phase: "closing" };
         await this.port.write(state);
         await this.port.respond(context.agentId, context.permissionRequestId, {
@@ -727,7 +884,12 @@ export class WorkflowController {
     return this.serial(async () => {
       if (!turnId) return;
       const state = await this.port.read();
-      await this.consumeTurn(state, await this.port.agent(agentId), turnId);
+      const agent = await this.port.agent(agentId);
+      if (agent.labels["paseo.workflow.role"] === "execution-router") {
+        this.schedule(agent.labels["paseo.workflow.id"], agent.labels["paseo.workflow.plan"]);
+        return;
+      }
+      await this.consumeTurn(state, agent, turnId);
     });
   }
 
@@ -797,6 +959,25 @@ export class WorkflowController {
     const latest = latestPlanItem(timeline);
     const decisions = new Map(canonicalPlanItems(timeline).map((item) => [item.callId, item]));
     let changed = recoverApprovedPlan(workflow, latest);
+    for (const plan of Object.values(workflow.plans)) {
+      if (
+        plan.handoffRequested &&
+        !plan.handoff &&
+        (plan.approved ||
+          plan.review ||
+          latest?.callId !== plan.context.callId ||
+          latest.detail.type !== "plan" ||
+          latest.detail.text !== plan.context.text ||
+          planResolution(latest) ||
+          latest.metadata?.approved !== undefined)
+      ) {
+        plan.handoffRequested = false;
+        if (plan.routing)
+          plan.routing.error =
+            "Pending handoff canceled: the plan was replaced, resolved or reviewed.";
+        changed = true;
+      }
+    }
     for (const item of decisions.values()) {
       const plan = workflow.plans[item.callId];
       if (!plan || item.detail.type !== "plan" || plan.context.text !== item.detail.text) continue;
@@ -820,6 +1001,15 @@ export class WorkflowController {
     if (activePlan?.approved && !activePlan.final) candidates.add(workflow.plannerId);
     for (const plan of Object.values(workflow.plans)) {
       await this.resumePlan(state, workflow, plan, latestPlan);
+      if (
+        plan.routing &&
+        (plan.routing.phase === "running" ||
+          plan.routing.phase === "outcome_unknown" ||
+          (plan.routing.phase === "complete" &&
+            plan.handoffRequested &&
+            (!plan.handoff || plan.handoff.phase === "closed")))
+      )
+        this.schedule(workflow.id, plan.context.callId);
       for (const id of planCandidates(plan)) candidates.add(id);
     }
     for (const agentId of candidates) {
@@ -842,13 +1032,7 @@ export class WorkflowController {
       !plan.handoff.agentId &&
       isClosureDecision(workflow, plan, latestPlan, "handoff")
     ) {
-      let decision: ExecutionDecision | undefined;
-      if (plan.routing?.decision) {
-        // The persisted decision is the only server-validated executor configuration.
-        decision = plan.routing.decision;
-      } else {
-        decision = await this.routeExecution(state, workflow, plan);
-      }
+      const decision = plan.routing?.decision;
       if (decision) await this.startHandoff(state, workflow, plan, decision, true);
     }
     if (plan.review?.phase === "complete")
@@ -1332,6 +1516,35 @@ export class WorkflowController {
     return agent;
   }
 
+  private async available(context: StoredPlanContext): Promise<WorkflowAgent> {
+    const agent = context.permissionRequestId
+      ? await this.pending(actionContext(context), false)
+      : await this.port.agent(context.agentId);
+    if (agent.workspaceId !== context.workspaceId)
+      throw new Error("This plan belongs to another workspace.");
+    const latest = latestPlanItem(await this.port.timeline(context.agentId));
+    if (
+      !latest ||
+      latest.callId !== context.callId ||
+      latest.detail.type !== "plan" ||
+      latest.detail.text !== context.text
+    )
+      throw new Error("This plan was superseded or its text changed. Open the current plan.");
+    if (
+      latest.error ||
+      planResolution(latest) ||
+      latest.metadata?.approved !== undefined ||
+      latest.metadata?.reviewClaim
+    )
+      throw new Error("This plan is already resolved or being reviewed.");
+    if (
+      !context.permissionRequestId &&
+      (latest.status !== "completed" || agent.status !== "idle" || !context.text.trim())
+    )
+      throw new Error("Wait for the complete actionable plan before preparing handoff.");
+    return agent;
+  }
+
   private async workflow(state: WorkflowState, agent: WorkflowAgent): Promise<Workflow> {
     const id = agent.labels["paseo.workflow.id"] ?? agent.id;
     const existing = state.workflows[id];
@@ -1396,6 +1609,7 @@ export class WorkflowController {
       )
         throw new Error(`The ${source} plan review has already been used.`);
       const plan = previous ?? (workflow.plans[context.callId] = { context });
+      plan.handoffRequested = false;
       if (plan.review?.phase !== "closed") {
         await this.pending(context);
         await this.port.claimReview(context, true);

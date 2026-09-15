@@ -18,12 +18,14 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 const context = z.object({ action: z.string(), callId: z.string(), text: z.string(), permissionRequestId: z.string(), agentId: z.string(), workspaceId: z.string() });
 export const actionRpc = defineRpc({ name: "plan.action", input: context, output: context });
+const availability = context.extend({ permissionRequestId: z.string().optional() });
+export const availabilityRpc = defineRpc({ name: "plan.available", input: availability, output: availability });
 `,
   );
   await writeFile(
     path.join(directory, "index.server.ts"),
     `
-import { actionRpc } from "./shared/action";
+import { actionRpc, availabilityRpc } from "./shared/action";
 export default function contribute(server) {
   let reviews = 0;
   server.handle(actionRpc, async (input) => {
@@ -33,6 +35,7 @@ export default function contribute(server) {
     }
     return input;
   });
+  server.handle(availabilityRpc, async (input) => input);
   return () => {};
 }
 `,
@@ -40,10 +43,14 @@ export default function contribute(server) {
   await writeFile(
     path.join(directory, "index.client.ts"),
     `
-import { actionRpc } from "./shared/action";
+import { actionRpc, availabilityRpc } from "./shared/action";
 export default function contribute(client) {
   for (const [id, title, order] of [["review", "Revue", 10], ["handoff", "Hand off", 20]]) {
-    client.addPlanAction({ id, title, order, async onPress({ rpc, plan, agent, workspace }) {
+    client.addPlanAction({ id, title, order, async onAvailable({ rpc, plan, agent, workspace }) {
+      if (id === "review") throw new Error("Ignored availability failure");
+      const result = await rpc(availabilityRpc, { ...plan, action: "available", agentId: agent.id, workspaceId: workspace.id });
+      sessionStorage.setItem("plan-action-available", JSON.stringify(result));
+    }, async onPress({ rpc, plan, agent, workspace }) {
       const result = await rpc(actionRpc, { ...plan, action: id, agentId: agent.id, workspaceId: workspace.id });
       sessionStorage.setItem("plan-action-result", JSON.stringify(result));
     } });

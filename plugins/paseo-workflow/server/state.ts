@@ -70,6 +70,7 @@ export const workflowSettings = defineSettings({
             z.object({
               context: storedPlanContext,
               approved: z.boolean().optional(),
+              handoffRequested: z.boolean().optional(),
               verification: z.string().optional(),
               final: finalReview.optional(),
               review: z
@@ -95,6 +96,7 @@ export const workflowSettings = defineSettings({
                   phase: z.enum(["running", "complete", "failed", "outcome_unknown"]),
                   agentId: z.string().optional(),
                   decision: executionDecision.optional(),
+                  promptStarted: z.boolean().optional(),
                   error: z.string().optional(),
                 })
                 .optional(),

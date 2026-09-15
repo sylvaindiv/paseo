@@ -189,11 +189,19 @@ export interface PluginAgentCommandContext extends PluginCommandCapabilities {
 }
 
 export interface PluginPlanActionContext extends PluginAgentCommandContext {
+  signal: AbortSignal;
   plan: {
     callId: string;
     text: string;
     turnId?: string;
     permissionRequestId: string;
+  };
+}
+
+export interface PluginPlanActionAvailableContext extends PluginAgentCommandContext {
+  signal: AbortSignal;
+  plan: Omit<PluginPlanActionContext["plan"], "permissionRequestId"> & {
+    permissionRequestId?: string;
   };
 }
 
@@ -204,6 +212,7 @@ export interface PluginPlanActionContribution {
   order?: number;
   query?: { launchProfileId?: string };
   disabledReason?: string;
+  onAvailable?(context: PluginPlanActionAvailableContext): void | Promise<void>;
   onPress(context: PluginPlanActionContext): void | Promise<void>;
 }
 
