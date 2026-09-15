@@ -31,6 +31,10 @@ function createFixture() {
   const bin = join(root, "bin");
   const npmLog = join(root, "npm.log");
   const failBuild = join(root, "fail-build");
+  const daemonLog = join(root, "daemon.log");
+  const daemonStatus = join(root, "daemon-status.json");
+  const failDaemonRestart = join(root, "fail-daemon-restart");
+  const paseoHome = join(root, "paseo-home");
 
   mkdirSync(source);
   git(source, "init", "-b", "paseo-local");
@@ -48,9 +52,10 @@ function createFixture() {
   const fakeNpm = join(bin, "npm");
   writeFileSync(
     fakeNpm,
-    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PASEO_TEST_NPM_LOG"\nprintf "npm:%s\\n" "$*"\nif [ "$*" = "run build" ] && [ -e "$PASEO_TEST_FAIL_BUILD" ]; then exit 42; fi\n',
+    '#!/bin/sh\ncase "$*" in\n  "run --silent cli -- daemon status --home $PASEO_TEST_PASEO_HOME --json")\n    printf "%s\\n" "$*" >> "$PASEO_TEST_DAEMON_LOG"\n    cat "$PASEO_TEST_DAEMON_STATUS"\n    exit 0\n    ;;\n  "run --silent cli -- daemon restart --home $PASEO_TEST_PASEO_HOME --json")\n    printf "%s\\n" "$*" >> "$PASEO_TEST_DAEMON_LOG"\n    if [ -e "$PASEO_TEST_FAIL_DAEMON_RESTART" ]; then echo "restart failed" >&2; exit 43; fi\n    printf "%s\\n" "{\\"action\\":\\"restarted\\",\\"acknowledged\\":true}"\n    exit 0\n    ;;\nesac\nprintf "%s\\n" "$*" >> "$PASEO_TEST_NPM_LOG"\nprintf "npm:%s\\n" "$*"\nif [ "$*" = "run build" ] && [ -e "$PASEO_TEST_FAIL_BUILD" ]; then exit 42; fi\n',
   );
   chmodSync(fakeNpm, 0o755);
+  writeFileSync(daemonStatus, '{"localDaemon":"stopped","desktopManaged":false}\n');
 
   return {
     root,
@@ -60,12 +65,21 @@ function createFixture() {
     checkout,
     npmLog,
     failBuild,
+    daemonLog,
+    daemonStatus,
+    failDaemonRestart,
+    paseoHome,
     env: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
       PASEO_LOCAL_BUILDER_HOME: state,
       PASEO_TEST_NPM_LOG: npmLog,
       PASEO_TEST_FAIL_BUILD: failBuild,
+      PASEO_TEST_DAEMON_LOG: daemonLog,
+      PASEO_TEST_DAEMON_STATUS: daemonStatus,
+      PASEO_TEST_FAIL_DAEMON_RESTART: failDaemonRestart,
+      PASEO_TEST_PASEO_HOME: paseoHome,
+      PASEO_LOCAL_BUILDER_PASEO_HOME: paseoHome,
     },
   };
 }
@@ -127,6 +141,52 @@ describe.runIf(process.platform === "darwin")("Paseo Local automatic build", () 
     expect(result.stdout).toContain("npm:run build");
     expect(readFileSync(fixture.npmLog, "utf8")).toBe("ci\nrun build\n");
     expect(readFileSync(join(fixture.state, "last-successful-commit"), "utf8")).toBe(`${commit}\n`);
+  });
+
+  it("restarts a running desktop daemon once after a successful build", () => {
+    const fixture = createFixture();
+    const commit = git(fixture.checkout, "rev-parse", "HEAD");
+    writeFileSync(fixture.daemonStatus, '{"localDaemon":"running","desktopManaged":true}\n');
+
+    const first = run(fixture);
+
+    expect(first.stderr).toBe("");
+    expect(first.status).toBe(0);
+    expect(readFileSync(fixture.daemonLog, "utf8")).toBe(
+      `run --silent cli -- daemon status --home ${fixture.paseoHome} --json\n` +
+        `run --silent cli -- daemon restart --home ${fixture.paseoHome} --json\n`,
+    );
+    expect(readFileSync(join(fixture.state, "last-successful-daemon-restart-commit"), "utf8")).toBe(
+      `${commit}\n`,
+    );
+
+    writeFileSync(fixture.daemonLog, "");
+    expect(run(fixture).status).toBe(0);
+    expect(readFileSync(fixture.daemonLog, "utf8")).toBe("");
+  });
+
+  it("retries only the daemon restart when its post-build restart fails", () => {
+    const fixture = createFixture();
+    const commit = git(fixture.checkout, "rev-parse", "HEAD");
+    writeFileSync(fixture.daemonStatus, '{"localDaemon":"running","desktopManaged":true}\n');
+    writeFileSync(fixture.failDaemonRestart, "fail\n");
+
+    const failed = run(fixture);
+
+    expect(failed.status).toBe(1);
+    expect(readFileSync(join(fixture.state, "last-successful-commit"), "utf8")).toBe(`${commit}\n`);
+    expect(existsSync(join(fixture.state, "last-successful-daemon-restart-commit"))).toBe(false);
+    expect(readFileSync(fixture.npmLog, "utf8")).toBe("ci\nrun build\n");
+
+    rmSync(fixture.failDaemonRestart);
+    const retried = run(fixture);
+
+    expect(retried.stderr).toBe("");
+    expect(retried.status).toBe(0);
+    expect(readFileSync(fixture.npmLog, "utf8")).toBe("ci\nrun build\n");
+    expect(readFileSync(join(fixture.state, "last-successful-daemon-restart-commit"), "utf8")).toBe(
+      `${commit}\n`,
+    );
   });
 
   it("does not rebuild a commit that already succeeded", () => {
