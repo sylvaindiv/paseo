@@ -31,6 +31,8 @@ function paths(env) {
     checkout: join(state, "checkout"),
     lock: join(state, "build.lock"),
     marker: join(state, "last-successful-commit"),
+    restartMarker: join(state, "last-successful-daemon-restart-commit"),
+    paseoHome: resolve(env.PASEO_LOCAL_BUILDER_PASEO_HOME ?? join(homedir(), ".paseo")),
     launchAgents,
     plist: join(launchAgents, `${label}.plist`),
     log: resolve(
@@ -61,6 +63,12 @@ function executeStreaming(command, args, options) {
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`);
+}
+
+function writeMarker(marker, commit) {
+  const temporaryMarker = `${marker}.${process.pid}.tmp`;
+  writeFileSync(temporaryMarker, `${commit}\n`);
+  renameSync(temporaryMarker, marker);
 }
 
 function xml(value) {
@@ -262,21 +270,44 @@ function verifyLaunchd(env) {
 }
 
 function runLocked(env) {
-  const { checkout, marker } = paths(env);
+  const { checkout, marker, paseoHome, restartMarker } = paths(env);
   const commit = syncCheckout(checkout, env);
   const successfulCommit = existsSync(marker) ? readFileSync(marker, "utf8").trim() : "";
-  if (successfulCommit === commit) {
+  if (successfulCommit !== commit) {
+    log(`Building ${commit}`);
+    executeStreaming("npm", ["ci"], { cwd: checkout, env });
+    executeStreaming("npm", ["run", "build"], { cwd: checkout, env });
+    writeMarker(marker, commit);
+    log(`Built ${commit}`);
+  } else {
     log(`Already built ${commit}`);
-    return 0;
   }
 
-  log(`Building ${commit}`);
-  executeStreaming("npm", ["ci"], { cwd: checkout, env });
-  executeStreaming("npm", ["run", "build"], { cwd: checkout, env });
-  const temporaryMarker = `${marker}.${process.pid}.tmp`;
-  writeFileSync(temporaryMarker, `${commit}\n`);
-  renameSync(temporaryMarker, marker);
-  log(`Built ${commit}`);
+  const restartedCommit = existsSync(restartMarker)
+    ? readFileSync(restartMarker, "utf8").trim()
+    : "";
+  if (restartedCommit === commit) return 0;
+
+  const cliArgs = ["run", "--silent", "cli", "--"];
+  const daemon = JSON.parse(
+    execute("npm", [...cliArgs, "daemon", "status", "--home", paseoHome, "--json"], {
+      cwd: checkout,
+      env,
+    }),
+  );
+  if (daemon.localDaemon === "running" && daemon.desktopManaged === true) {
+    const restart = JSON.parse(
+      execute("npm", [...cliArgs, "daemon", "restart", "--home", paseoHome, "--json"], {
+        cwd: checkout,
+        env,
+      }),
+    );
+    if (restart.action !== "restarted" || restart.acknowledged !== true) {
+      throw new Error("Paseo Local daemon restart was not acknowledged");
+    }
+    log("Restarted Paseo Local daemon");
+  }
+  writeMarker(restartMarker, commit);
   return 0;
 }
 

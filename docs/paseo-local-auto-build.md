@@ -4,7 +4,13 @@ Use the macOS LaunchAgent to rebuild `Paseo Local.app` after `origin/paseo-local
 
 Each run fetches the exact `paseo-local` ref, acquires a process lock, fast-forwards the clean checkout, and compares the remote commit with `last-successful-commit`. A changed commit runs `npm ci` followed by `npm run build`. The success marker is replaced atomically only after the build installs the app, so a failed build is retried at the next interval.
 
-The job does not open, close, or restart Paseo Local. Reopen the app yourself when you are ready to use a new build; the running app and daemon on port 6767 are left untouched.
+After installation, the job restarts a running desktop-managed daemon from `~/.paseo` so its code
+and plugins match the new app. A separate marker makes this happen once per built commit. A failed
+restart is retried at the next interval without rebuilding the app. A stopped or independently
+managed daemon is left untouched.
+
+The job does not open or close Paseo Local. Reopen the app to use the new renderer. The automatic
+daemon restart interrupts provider processes and background work still resident in them.
 
 ## Commands
 
