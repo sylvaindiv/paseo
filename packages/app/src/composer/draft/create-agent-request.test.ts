@@ -34,3 +34,23 @@ it("creates and sends a workspace draft idempotently", async () => {
     attachments: [{ type: "text", mimeType: "text/plain", text: "Calendar constraints" }],
   });
 });
+
+it("routes Auto through creation without changing the first message", async () => {
+  const createAgent = vi.fn().mockResolvedValue({ id: "router-agent" });
+  const sendMessage = vi.fn().mockResolvedValue(undefined);
+
+  await requestWorkspaceDraftAgent({ createAgent, sendMessage } as unknown as DaemonClient, {
+    workspaceId: "workspace",
+    modelRouting: "jev",
+    config: { provider: "codex", cwd: "/workspace" },
+    text: "Build a calendar",
+    clientMessageId: "message",
+  });
+
+  expect(createAgent).toHaveBeenCalledWith(
+    expect.objectContaining({ modelRouting: { strategy: "jev", prompt: "Build a calendar" } }),
+  );
+  expect(sendMessage).toHaveBeenCalledExactlyOnceWith("router-agent", "Build a calendar", {
+    messageId: "message",
+  });
+});

@@ -25,6 +25,30 @@ test("agent-create hooks receive launch provenance and can change config and env
   });
 });
 
+test("agent-create hooks can only acknowledge unchanged model routing", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  const input = {
+    config: { provider: "codex", cwd: "/project" },
+    modelRouting: { strategy: "jev" as const, prompt: "Route this" },
+  };
+  hooks.before("agent.create", ({ request }) => ({
+    ...request,
+    modelRouting: { ...request.modelRouting!, resolved: true },
+  }));
+  expect(await hooks.invoke("create", "before", "agent.create", input, paseo)).toMatchObject({
+    modelRouting: { strategy: "jev", prompt: "Route this", resolved: true },
+  });
+
+  const mutatingHooks = new PluginHookHandlers(() => {});
+  mutatingHooks.before("agent.create", ({ request }) => ({
+    ...request,
+    modelRouting: { ...request.modelRouting!, prompt: "Changed" },
+  }));
+  await expect(
+    mutatingHooks.invoke("create", "before", "agent.create", input, paseo),
+  ).rejects.toThrow("cannot change model routing context");
+});
+
 test.each(["read_write", undefined])(
   "creation hooks cannot undo a previous read-only tightening (%s)",
   async (policy) => {

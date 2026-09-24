@@ -834,7 +834,10 @@ function buildACPAutoAcceptFeature(config: AgentSessionConfig): AgentFeature {
 function resolveACPCreateConfig(
   input: ResolveAgentCreateConfigInput,
 ): ResolveAgentCreateConfigResult {
-  const isUnattendedCreate = input.unattended || input.parent?.isUnattended === true;
+  const defaultsAutoAccept =
+    input.parent === null && !input.availableModes?.some((mode) => mode.isUnattended);
+  const isUnattendedCreate =
+    input.unattended || input.parent?.isUnattended === true || defaultsAutoAccept;
   const featureValues =
     isUnattendedCreate && input.featureValues?.[ACP_AUTO_ACCEPT_FEATURE_ID] === undefined
       ? { ...input.featureValues, [ACP_AUTO_ACCEPT_FEATURE_ID]: true }

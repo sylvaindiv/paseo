@@ -27,11 +27,29 @@ the role profiles' provider, model, mode and effort in Agent profiles.
 The workflow uses the existing plan actions and an agent panel for review status. Any live,
 unresolved structured plan — from the Workflow Router, the Workflow Planner, or an ordinary
 conversation — can be handed off with one action. Handoff classifies the exact final plan through a
-background read-only Luna/low turn as soon as the plan becomes actionable. The validated decision
+JEV classification request as soon as the plan becomes actionable. Set `TYPESAFE_API_KEY` (or
+`JEV-API-KEY`) in the daemon environment or in `$PASEO_HOME/paseo-workflow.env`; the plugin reads
+that file again on each retry. The validated decision
 is persisted before any executor starts, so status and other workflow actions stay responsive while
 classification runs. Pressing Handoff records the request immediately; the executor starts once the
 decision is ready, with direct provider, model and effort settings and no saved executor profile.
 Repeated preparation, clicks, reconnects and plugin reloads reuse the same classifier and executor.
+Handoff preserves the exact plan and its authorization limits. It does not authorize staging,
+committing, pushing or deployment. Local synchronization follows the approved plan; an execution
+without a commit is valid when no commit was authorized. The briefing uses projected conversation
+messages and includes question-tool records verbatim, including any recorded answers. A completed
+asynchronous question tool does not by itself prove that the user answered.
+
+New Codex conversations default to **Auto · JEV** on hosts that support initial routing, unless
+you saved a manual selection or explicitly chose a model or profile. Changing Plan mode preserves
+Auto; choosing a model or effort switches to manual. The workflow
+plugin classifies that request before a provider session opens, preserves Plan mode, and applies one
+of its existing Codex model and effort routes. The live conversation's existing controls show
+the selected model and effort. The plugin receives the prompt and workspace intention, not
+repository files or attachment contents. A missing plugin or key, an invalid decision, or an
+unavailable model rejects creation and leaves the draft available for retry or manual selection.
+A manual model selection never contacts JEV. Auto only affects this first creation; handoff keeps
+classifying the completed plan.
 A replaced, resolved or reviewed plan cancels a queued transfer. Failure keeps the plan actionable,
 shows the routing error and never selects a silent fallback. The early Router recommendation is
 retained only as context. Plan review remains limited to workflow Planner conversations. Workflow
@@ -70,8 +88,10 @@ cannot be established; inspect the existing agent before retrying. A timeout is 
 the operation failed before acceptance.
 
 Audits compare against the merge base of the remote default ref (`origin/HEAD`); a missing target
-requires verification instead of guessing a branch. Commit progression uses the separate launch
-HEAD. An approved turn without a functional commit exposes `verification_required`.
+requires verification instead of guessing a branch. Reviewable changes since the separate launch
+HEAD can be committed or uncommitted. No tracked delta exposes `verification_required` without
+requesting a commit. Uncommitted or pre-existing changes remain subject to manual attribution;
+auditing them does not authorize automatic corrections or a commit.
 
 Automatic corrections require a clean initial workspace and clean functional-commit boundary.
 The host rechecks the exact audited HEAD, diff and clean status before requesting any correction.

@@ -106,6 +106,11 @@ import {
   type AgentDeepLinkTarget,
 } from "@getpaseo/protocol/agent-deep-link";
 import { AgentNavigationInbox, parseAgentDeepLinkFromArgv } from "./agent-navigation.js";
+import {
+  findAgentSessionJumpInArgv,
+  isAgentSessionJump,
+  resolveAgentSessionJump,
+} from "./agent-session-jump.js";
 import { readDesktopBuildInfo } from "./desktop-build-info.js";
 
 const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
@@ -359,6 +364,8 @@ let pendingOpenProjectPath = parseOpenProjectPathFromArgv({
   isDefaultApp: process.defaultApp,
 });
 let pendingAgentNavigation = parseAgentDeepLinkFromArgv(process.argv);
+let pendingAgentSessionJump = findAgentSessionJumpInArgv(process.argv);
+let agentSessionJumpSequence = 0;
 
 // Each window pulls its own pending open-project path on mount, keyed by
 // webContents id, so deep-linked windows (second-instance launches, the
@@ -831,12 +838,7 @@ desktopWindowOwner = createDesktopWindowOwner<AgentDeepLinkTarget>({
 // App lifecycle
 // ---------------------------------------------------------------------------
 
-function receiveAgentDeepLink(input: string): void {
-  const target = parseAgentDeepLink(input);
-  if (!target) {
-    return;
-  }
-
+function receiveAgentNavigation(target: AgentDeepLinkTarget): void {
   if (bootstrapIsComplete) {
     void desktopWindowOwner
       .openOrFocusAgent(target)
@@ -855,6 +857,28 @@ function receiveAgentDeepLink(input: string): void {
       .catch((error) => log.error("[window] failed to route queued agent link", error));
     return undefined;
   });
+}
+
+function receiveAgentDeepLink(input: string): void {
+  const target = parseAgentDeepLink(input);
+  if (target) {
+    agentSessionJumpSequence += 1;
+    receiveAgentNavigation(target);
+    return;
+  }
+  if (!isAgentSessionJump(input)) return;
+
+  const sequence = ++agentSessionJumpSequence;
+  void resolveAgentSessionJump(input)
+    .then((sessionTarget) => {
+      if (!sessionTarget || sequence !== agentSessionJumpSequence) return undefined;
+      receiveAgentNavigation(sessionTarget);
+      return undefined;
+    })
+    .catch((error) => {
+      log.error("[window] failed to resolve agent session link", error);
+      return undefined;
+    });
 }
 
 app.on("open-url", (event, url) => {
@@ -877,9 +901,16 @@ function setupSingleInstanceLock(): boolean {
   app.on("second-instance", (_event, commandLine) => {
     const agentTarget = parseAgentDeepLinkFromArgv(commandLine);
     if (agentTarget) {
+      agentSessionJumpSequence += 1;
       void bootstrapComplete
-        .then(() => desktopWindowOwner.openOrFocusAgent(agentTarget))
+        .then(() => receiveAgentNavigation(agentTarget))
         .catch((error) => log.error("[window] failed to route second-instance agent link", error));
+      return;
+    }
+
+    const sessionJump = findAgentSessionJumpInArgv(commandLine);
+    if (sessionJump) {
+      void bootstrapComplete.then(() => receiveAgentDeepLink(sessionJump));
       return;
     }
 
@@ -986,7 +1017,9 @@ async function bootstrap(): Promise<void> {
 
   // The first window of the session restores and persists saved geometry.
   const initialAgentNavigation = pendingAgentNavigation;
+  const initialAgentSessionJump = pendingAgentSessionJump;
   pendingAgentNavigation = null;
+  pendingAgentSessionJump = null;
   await desktopWindowOwner.openPrimary({
     initialRoute: initialAgentNavigation ? buildAgentDeepLinkRoute(initialAgentNavigation) : null,
     pendingProjectPath: pendingOpenProjectPath,
@@ -1003,6 +1036,9 @@ async function bootstrap(): Promise<void> {
     pendingAgentNavigation = null;
     await desktopWindowOwner.openOrFocusAgent(target);
   }
+  if (initialAgentSessionJump) {
+    receiveAgentDeepLink(initialAgentSessionJump);
+  }
 
   app.on("activate", () => {
     void desktopWindowOwner.restoreWhenActivated().catch((error) => {
@@ -1012,7 +1048,9 @@ async function bootstrap(): Promise<void> {
 }
 
 void runDesktopStartup({
-  hasPendingGuiLaunchRequest: Boolean(pendingOpenProjectPath || pendingAgentNavigation),
+  hasPendingGuiLaunchRequest: Boolean(
+    pendingOpenProjectPath || pendingAgentNavigation || pendingAgentSessionJump,
+  ),
   runCliPassthroughIfRequested,
   inheritLoginShellEnv,
   bootstrapGui: bootstrap,

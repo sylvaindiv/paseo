@@ -107,12 +107,9 @@ export const baseColors = {
   },
 } as const;
 
-// Diff colors — the +/- inside a diff view, where the color *is* the signal and has to
-// survive being scanned line by line, so it stays saturated. Light uses muted tones, dark
+// Diff colors — the +/- inside a diff view or stat, where the color *is* the signal and has
+// to survive being scanned line by line, so it stays saturated. Light uses muted tones, dark
 // uses the brighter palette values.
-//
-// A diff *stat* — the "+12 −3" footnote next to a title — is not this. It is a status
-// signal, so it uses statusSuccess/statusDanger below rather than a tier of its own.
 const lightDiffColors = {
   diffAddition: "#15803d", // green-700 — readable on white without screaming
   diffDeletion: "#b91c1c", // red-700
@@ -125,7 +122,7 @@ const darkDiffColors = {
 
 // Status colors — semantic signals for success/danger/warning/merged. There is exactly one
 // token per signal, and every status surface uses it: PR state icons, CI check icons and
-// pies, diff stats, file-change icons, status badges, usage bars. Status *dots* are the
+// pies, file-change icons, status badges, usage bars. Status *dots* are the
 // exception and have their own band below. A surface does not otherwise get a quieter or
 // louder variant of a status color because of where it sits — if a dense list feels loud,
 // that is a density or weight problem, not a color problem.
@@ -256,6 +253,12 @@ export function buildLightSemanticColors(tint: LightThemeConfig) {
     surfaceSidebarHover: tint.surface1,
     surfaceSidebarSelected: tint.surface3,
     surfaceWorkspace: tint.surface0,
+    userMessageBackground: "#FAF7F5",
+    composerInputBackground: "#FAFAF9",
+    composerInputBorder: "#E7E5E4",
+    composerPlanBackground: "#F5EFED",
+    composerPlanStripe: "#EBDDD8",
+    composerPlanBorder: "#DCA480",
     interactionHighlight: "rgba(0, 0, 0, 0.06)",
 
     foreground: tint.foreground,
@@ -312,7 +315,7 @@ const lightSemanticColors = buildLightSemanticColors({
   surface3: "#e4e4e7",
   surface4: "#d4d4d8",
   surfaceDiffEmpty: "#f6f6f6",
-  surfaceSidebar: "#f4f4f5",
+  surfaceSidebar: "#f4f4f4",
   foreground: "#1a1a1e",
   foregroundMuted: "#71717a",
   foregroundExtraMuted: "#a1a1aa",
@@ -386,6 +389,12 @@ export function buildDarkSemanticColors(tint: DarkThemeConfig) {
     surfaceSidebarHover: tint.surface1,
     surfaceSidebarSelected: tint.surface2,
     surfaceWorkspace: tint.surface1,
+    userMessageBackground: tint.surface3,
+    composerInputBackground: tint.surface1,
+    composerInputBorder: tint.borderAccent,
+    composerPlanBackground: "#2B2522",
+    composerPlanStripe: "#413732",
+    composerPlanBorder: "#5A463C",
     interactionHighlight: "rgba(255, 255, 255, 0.08)",
 
     foreground,
@@ -594,6 +603,7 @@ export const BORDER_RADIUS = {
   base: 4,
   md: 6,
   lg: 8,
+  composerControl: 10,
   xl: 12,
   "2xl": 16,
   full: 9999,

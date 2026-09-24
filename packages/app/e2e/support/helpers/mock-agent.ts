@@ -7,6 +7,12 @@ export interface MockAgentWorkspace {
   agentId: string;
   workspaceId: string;
   cwd: string;
+  /** The name the sidebar row shows for this workspace (branch or directory basename). */
+  workspaceName: string;
+  /** Opaque cross-host key of the project the workspace belongs to. */
+  projectKey: string;
+  /** Project label the UI shows. */
+  projectDisplayName: string;
   client: SeedDaemonClient;
   cleanup(): Promise<void>;
 }
@@ -52,6 +58,9 @@ export async function seedMockAgentWorkspace(
       agentId: agent.id,
       workspaceId: workspace.workspaceId,
       cwd: workspace.repoPath,
+      workspaceName: workspace.workspaceName,
+      projectKey: workspace.projectKey,
+      projectDisplayName: workspace.projectDisplayName,
       client: workspace.client,
       cleanup: workspace.cleanup,
     };

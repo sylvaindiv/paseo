@@ -194,6 +194,20 @@ const MutableRelayConfigSchema = z
   })
   .passthrough();
 
+export const WorkspaceGitWorkflowConfigSchema = z
+  .object({
+    reviewProfileId: z.string().optional(),
+    deliveryProfileId: z.string().optional(),
+    reviewModel: MutableStructuredGenerationProviderSchema.nullable().optional(),
+    commitModel: MutableStructuredGenerationProviderSchema.nullable().optional(),
+    prModel: MutableStructuredGenerationProviderSchema.nullable().optional(),
+    reviewPrompt: z.string().optional(),
+    createPrPrompt: z.string().optional(),
+    commitAndPushPrompt: z.string().optional(),
+  })
+  .strict();
+export type WorkspaceGitWorkflowConfig = z.infer<typeof WorkspaceGitWorkflowConfigSchema>;
+
 export const PluginIdSchema = z.string().regex(/^[a-z][a-z0-9-]*$/);
 // Semver validation belongs at the manifest/runtime boundary, not on the wire.
 export const PluginRequirementsSchema = z.object({ paseo: z.string().optional() });
@@ -251,6 +265,7 @@ export const MutableDaemonConfigSchema = z
     appendSystemPrompt: z.string().default(""),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
+    workspaceGitWorkflow: WorkspaceGitWorkflowConfigSchema.optional(),
     skills: z.object({ selection: AgentSkillSelectionSchema.optional() }).strict().optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
@@ -273,6 +288,7 @@ export const MutableDaemonConfigPatchSchema = z
     appendSystemPrompt: z.string().optional(),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
+    workspaceGitWorkflow: WorkspaceGitWorkflowConfigSchema.partial().optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
   })
@@ -310,6 +326,7 @@ const AgentModeSchema: z.ZodType<AgentMode> = z.object({
   description: z.string().optional(),
   icon: z.string().optional(),
   colorTier: z.string().optional(),
+  isUnattended: z.boolean().optional(),
 });
 
 const ProviderStatusSchema: z.ZodType<ProviderStatus> = z.enum([
@@ -1726,6 +1743,11 @@ export const CreateAgentWorktreeTargetSchema = z.discriminatedUnion("mode", [
 
 export type CreateAgentWorktreeTarget = z.infer<typeof CreateAgentWorktreeTargetSchema>;
 
+export const InitialModelRoutingSchema = z.object({
+  strategy: z.literal("jev"),
+  prompt: z.string(),
+});
+
 export const CreateAgentRequestMessageSchema = z.object({
   type: z.literal("create_agent_request"),
   launchProfileId: z.string().optional(),
@@ -1739,6 +1761,7 @@ export const CreateAgentRequestMessageSchema = z.object({
   callerAgentId: z.string().optional(),
   worktreeName: z.string().optional(),
   initialPrompt: z.string().optional(),
+  modelRouting: InitialModelRoutingSchema.optional(),
   clientMessageId: z.string().optional(),
   outputSchema: z.record(z.string(), z.unknown()).optional(),
   images: z.array(ImageAttachmentSchema).optional(),
@@ -3563,8 +3586,12 @@ export const ServerInfoStatusPayloadSchema = z
         agentWritePolicy: z.boolean().optional(),
         // COMPAT(agentProfileWorkflows): added in v0.8.0; remove gate after 2027-09-13.
         agentProfileWorkflows: z.boolean().optional(),
+        // COMPAT(workspaceGitWorkflow): added in v0.8.0; remove gate after 2027-09-22.
+        workspaceGitWorkflow: z.boolean().optional(),
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
+        // COMPAT(initialModelRouting): added in v0.8.0; remove gate after 2027-09-22.
+        initialModelRouting: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),

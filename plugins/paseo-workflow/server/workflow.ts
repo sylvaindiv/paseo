@@ -7,12 +7,7 @@ import {
   correctionDecision,
   type FinalReview,
 } from "../shared/final-review";
-import {
-  executionOutputSchema,
-  executionRoutingPrompt,
-  parseExecutionDecision,
-  type ExecutionDecision,
-} from "./execution-routing";
+import { type ExecutionDecision } from "./execution-routing";
 import type {
   AgentPermissionRequest,
   AgentPermissionResponse,
@@ -122,18 +117,10 @@ export interface WorkflowPort {
     provider: string,
     cwd: string,
   ): Promise<Array<{ id: string; thinkingOptions?: Array<{ id: string }> }>>;
-  wait(
-    agentId: string,
-    timeoutMs: number,
-  ): Promise<{
-    status: string;
-    error?: string | null;
-    lastMessage?: string | null;
-  }>;
-  archive(agentId: string): Promise<void>;
+  classify(briefing: string, signal: AbortSignal): Promise<ExecutionDecision>;
   agent(id: string): Promise<WorkflowAgent>;
   workspace(id: string): Promise<{ cwd: string; intent?: string | null }>;
-  timeline(id: string): Promise<AgentTimelineItem[]>;
+  timeline(id: string, projection?: "canonical" | "projected"): Promise<AgentTimelineItem[]>;
   turn(
     id: string,
     turnId?: string,
@@ -394,12 +381,15 @@ function planCandidates(plan: Workflow["plans"][string]): string[] {
 export class WorkflowController {
   private queue: Promise<unknown> = Promise.resolve();
   private jobs = new Map<string, Promise<void>>();
+  private routingControllers = new Set<AbortController>();
+  private runningRoutingAttempts = new Set<string>();
   private rescheduled = new Set<string>();
   private disposed = false;
   constructor(private readonly port: WorkflowPort) {}
 
   dispose() {
     this.disposed = true;
+    for (const controller of this.routingControllers) controller.abort();
   }
 
   async planRequested(context: PlanContext, automaticReview = true) {
@@ -502,14 +492,7 @@ export class WorkflowController {
     });
   }
 
-  private static readonly classifierModel = "gpt-5.6-luna";
-  private static readonly classifierEffort = "low";
-  private static readonly waitTimeoutMs = 120_000;
-
-  /**
-   * Classifies the final plan with one technical classifier turn and returns a
-   * persisted, policy-validated decision. Never uses client-supplied model data.
-   */
+  /** Classifies the final plan and persists the fixed execution route. */
   private schedule(workflowId: string, callId: string) {
     const key = `${workflowId}:${callId}`;
     if (this.disposed) return;
@@ -559,110 +542,64 @@ export class WorkflowController {
     const { workflow, plan } = snapshot;
     const routing = plan.routing;
     if (!routing || routing.phase === "failed") return;
+    if (routing.phase === "outcome_unknown") return;
     const update = (change: Partial<Routing>) =>
       this.updateRouting(workflowId, callId, routing.attempt, change);
     if (routing.phase !== "complete") {
-      let agentId = routing.agentId;
-      let stage = "checking";
-      try {
-        if (!agentId) {
-          const cwd = (await this.port.workspace(workflow.workspaceId)).cwd;
-          const model = (await this.port.models("codex", cwd)).find(
-            (entry) => entry.id === WorkflowController.classifierModel,
-          );
-          if (
-            !model?.thinkingOptions?.some(
-              (option) => option.id === WorkflowController.classifierEffort,
-            )
-          )
-            throw new Error(
-              "The codex classifier model is unavailable. Update the host's codex provider and retry.",
-            );
-          if (this.disposed) return;
-          stage = "creating";
-          agentId = await this.port.create({
-            workspaceId: workflow.workspaceId,
-            parent: plan.context.agentId,
-            idempotencyKey: `workflow:${workflowId}:handoff:${callId}:classifier:${routing.attempt}`,
-            config: {
-              provider: `codex/${WorkflowController.classifierModel}`,
-              modeId: "auto",
-              thinkingOptionId: WorkflowController.classifierEffort,
-              writePolicy: "read_only",
-            },
-            outputSchema: executionOutputSchema,
-            labels: {
-              "paseo.workflow.id": workflowId,
-              "paseo.workflow.plan": callId,
-              "paseo.workflow.role": "execution-router",
-            },
-          });
-          if (!(await update({ agentId }))) return;
-        }
-        if (routing.promptStarted === false) {
-          // Reserve delivery durably before sending. Reload may wait for this turn, never resend it.
-          if (!(await update({ promptStarted: true }))) return;
-          stage = "sending";
-          await this.port.send(
-            agentId,
-            executionRoutingPrompt(briefing(workflow, plan.context.text)),
-            `workflow:${workflowId}:handoff:${callId}:classifier:${routing.attempt}:prompt`,
-          );
-        }
-        stage = "waiting";
-        const result = await this.port.wait(agentId, WorkflowController.waitTimeoutMs);
-        stage = result.status;
-        const text = await this.classifierText(
-          agentId,
-          `workflow:${workflowId}:handoff:${callId}:classifier:${routing.attempt}:prompt`,
-          Boolean(routing.agentId),
-          result,
+      if (routing.promptStarted) {
+        await this.failRouting(
+          workflowId,
+          callId,
+          routing.attempt,
+          "La classification JEV a été interrompue. Relancez le handoff explicitement.",
         );
-        stage = "parsing";
-        const decision = parseExecutionDecision(text);
+        return;
+      }
+      try {
+        if (!(await update({ promptStarted: true }))) return;
+        const controller = new AbortController();
+        const attemptKey = `${workflowId}:${callId}:${routing.attempt}`;
+        this.routingControllers.add(controller);
+        this.runningRoutingAttempts.add(attemptKey);
+        let decision: ExecutionDecision;
+        try {
+          decision = await this.port.classify(
+            briefing(workflow, plan.context.text),
+            controller.signal,
+          );
+        } finally {
+          this.routingControllers.delete(controller);
+          this.runningRoutingAttempts.delete(attemptKey);
+        }
         const cwd = (await this.port.workspace(workflow.workspaceId)).cwd;
         await this.executionModel(decision, cwd);
         if (!(await update({ phase: "complete", decision, error: undefined }))) return;
-        await this.port.archive(agentId).catch(() => undefined);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const unknown =
-          !["checking", "parsing", "error"].includes(stage) &&
-          !message.includes("agent_request_not_accepted");
-        await update({
-          phase: unknown ? "outcome_unknown" : "failed",
-          error: `${message} The plan stays open for a retry.`,
-        });
-        if (agentId && !unknown) await this.port.archive(agentId);
+        await this.failRouting(
+          workflowId,
+          callId,
+          routing.attempt,
+          `${message} Le plan reste disponible pour une relance explicite.`,
+        );
         return;
       }
     }
     await this.finishQueuedHandoff(workflowId, callId);
   }
 
-  private async classifierText(
-    agentId: string,
-    promptId: string,
-    recovered: boolean,
-    result: Awaited<ReturnType<WorkflowPort["wait"]>>,
-  ) {
-    if (result.status === "timeout")
-      throw new Error(
-        "The classification turn did not finish in time. Inspect the existing classifier; its prompt will not be resent.",
-      );
-    if (result.status !== "idle") throw new Error(result.error ?? "The classifier failed.");
-    if (recovered) {
-      const turn = await this.port.turn(agentId, undefined, promptId);
-      if (!turn)
-        throw new Error(
-          "Classifier delivery/completion outcome_unknown. Inspect its existing conversation; automatic replay is disabled.",
-        );
-      return turn.items
-        .filter((item) => item.type === "assistant_message")
-        .map((item) => item.text)
-        .join("");
-    }
-    return result.lastMessage ?? "";
+  private async failRouting(workflowId: string, callId: string, attempt: number, error: string) {
+    return this.serial(async () => {
+      if (this.disposed) return false;
+      const state = await this.port.read();
+      const plan = state.workflows[workflowId]?.plans[callId];
+      if (!plan?.routing || plan.routing.attempt !== attempt) return false;
+      plan.routing.phase = "failed";
+      plan.routing.error = error;
+      plan.handoffRequested = false;
+      await this.port.write(state);
+      return true;
+    });
   }
 
   private async finishQueuedHandoff(workflowId: string, callId: string) {
@@ -831,7 +768,7 @@ export class WorkflowController {
     try {
       await this.port.send(
         executorId,
-        `/paseo-handoff\nPASEO_WORKFLOW_HANDOFF ${JSON.stringify({ mode: "receiver", workflowId: workflow.id, planId: plan.context.callId, role: `executor-${decision.category}` })}\nExecute the approved plan in this workspace without creating another agent. Preserve every pre-existing dirty file and concurrent edit; stage only your own files/hunks. Run targeted validation before the functional commit. Never push, merge, deploy, delete unrelated data, or cause external effects.\n${briefing(workflow, plan.context.text)}`,
+        `/paseo-handoff\nPASEO_WORKFLOW_HANDOFF ${JSON.stringify({ mode: "receiver", workflowId: workflow.id, planId: plan.context.callId, role: `executor-${decision.category}` })}\nExecute the approved plan in this workspace without creating another agent. The approved plan and explicit user authorization take precedence over generic workflow instructions. Handoff grants no additional authorization to stage, commit, push, merge, deploy, or cause external effects. Local synchronization explicitly required by the approved plan is allowed within its stated limits. Preserve every pre-existing dirty file and concurrent edit. Run targeted validation and report the result. Stage or commit only when explicitly authorized, including only your own files/hunks after successful checks; otherwise leave the validated changes local and uncommitted. Never delete unrelated data.\n${briefing(workflow, plan.context.text)}`,
         `workflow:${workflow.id}:handoff:${plan.context.callId}:prompt`,
       );
     } catch (error) {
@@ -1000,11 +937,11 @@ export class WorkflowController {
     const activePlan = workflow.plans[workflow.activePlanId ?? ""];
     if (activePlan?.approved && !activePlan.final) candidates.add(workflow.plannerId);
     for (const plan of Object.values(workflow.plans)) {
+      await this.reconcileRouting(state, workflow, plan);
       await this.resumePlan(state, workflow, plan, latestPlan);
       if (
         plan.routing &&
         (plan.routing.phase === "running" ||
-          plan.routing.phase === "outcome_unknown" ||
           (plan.routing.phase === "complete" &&
             plan.handoffRequested &&
             (!plan.handoff || plan.handoff.phase === "closed")))
@@ -1015,6 +952,27 @@ export class WorkflowController {
     for (const agentId of candidates) {
       await this.consumeTurn(state, await this.port.agent(agentId));
     }
+  }
+
+  private async reconcileRouting(
+    state: WorkflowState,
+    workflow: Workflow,
+    plan: Workflow["plans"][string],
+  ) {
+    const routing = plan.routing;
+    if (!routing) return;
+    const legacy = routing.agentId && routing.phase !== "complete";
+    const interrupted =
+      routing.phase === "running" &&
+      routing.promptStarted &&
+      !this.runningRoutingAttempts.has(`${workflow.id}:${plan.context.callId}:${routing.attempt}`);
+    if (!legacy && !interrupted) return;
+    routing.phase = "failed";
+    routing.error = legacy
+      ? "Ancien classificateur Codex interrompu. Relancez le handoff explicitement."
+      : "La classification JEV a été interrompue. Relancez le handoff explicitement.";
+    plan.handoffRequested = false;
+    await this.port.write(state);
   }
 
   private async resumePlan(
@@ -1136,13 +1094,9 @@ export class WorkflowController {
       );
     const snapshot = await this.port.diff(workspace.cwd, workflow.git.targetBase);
     const progress = await this.port.diff(workspace.cwd, startHead);
-    if (
-      snapshot.head === startHead ||
-      !(await this.port.commitCount(workspace.cwd, startHead)) ||
-      !progress.text.trim()
-    )
+    if (!progress.text.trim())
       return verify(
-        "No functional commit with an attributable delta was confirmed after workflow start. Complete targeted checks and commit your own changes, or request manual verification.",
+        "No reviewable tracked delta was confirmed after workflow start. Report the local result and validation evidence for manual verification; do not create a commit to satisfy the workflow.",
       );
     const manager = await this.profile("final-review");
     await this.refreshPlannerTranscript(state, workflow);
@@ -1159,7 +1113,7 @@ export class WorkflowController {
     });
     await this.port.send(
       managerId,
-      `Compare intention, request, plan, base and diff. Do not edit, commit or delegate yet. Classify SIMPLE (local change), STRUCTURAL (architecture/contracts), or SENSITIVE (security, permissions, secrets, payments or external effects). Return only JSON {"classification":"SIMPLE|STRUCTURAL|SENSITIVE"}.\n${briefing(workflow, plan.context.text)}\nFunctional HEAD: ${snapshot.head}\nDiff:\n${snapshot.text}`,
+      `Compare intention, request, plan, base and diff. The approved plan and explicit user authorization take precedence over generic workflow instructions; review grants no additional authorization to edit or commit. A validated uncommitted local result is valid when no commit was authorized. Do not edit, commit or delegate yet. Classify SIMPLE (local change), STRUCTURAL (architecture/contracts), or SENSITIVE (security, permissions, secrets, payments or external effects). Return only JSON {"classification":"SIMPLE|STRUCTURAL|SENSITIVE"}.\n${briefing(workflow, plan.context.text)}\nReviewed HEAD: ${snapshot.head}\nDiff (may include uncommitted changes):\n${snapshot.text}`,
       `workflow:${workflow.id}:final:${plan.context.callId}:classify`,
     );
     plan.final = {
@@ -1258,7 +1212,7 @@ export class WorkflowController {
         final.phase = "deciding";
         await this.port.send(
           final.managerId,
-          `Evaluate these findings. Do not edit or commit yet. Return only JSON {"correct":true|false,"validationCommands":["exact targeted command"]}. Authorize correction only for certain, local, verifiable defects with no external effect; all other findings need user direction. Never modify pre-existing dirty files.\n${JSON.stringify({ findings, protectedFiles: final.dirtyFiles })}`,
+          `Evaluate these findings. Do not edit or commit yet. Return only JSON {"correct":true|false,"validationCommands":["exact targeted command"]}. Return correct:false if correction is outside the approved plan or explicit user authorization. Authorize correction only for certain, local, verifiable defects with no external effect; all other findings need user direction. Never modify pre-existing dirty files.\n${JSON.stringify({ findings, protectedFiles: final.dirtyFiles })}`,
           `workflow:${workflow.id}:${plan.context.callId}:correction-decision`,
         );
       }
@@ -1417,7 +1371,7 @@ export class WorkflowController {
     } else {
       await this.port.send(
         final.managerId,
-        "Create the correction commit for exactly the verified delta. Stage explicit files/hunks only; preserve concurrent and unrelated edits. Recheck HEAD and diff before committing and stop if they changed. Never push, merge or deploy. Report the commit and checks.",
+        "Create the correction commit for exactly the verified delta only if the approved plan or explicit user authorization permits that commit. Otherwise leave the validated delta uncommitted and report the local result; workflow review does not authorize a commit. Stage explicit files/hunks only when committing is authorized; preserve concurrent and unrelated edits. Recheck HEAD and diff before committing and stop if they changed. Never push, merge or deploy. Report the result and checks.",
         `workflow:${workflow.id}:${plan.context.callId}:correction-commit`,
       );
       final.phase = "committing";
@@ -1429,16 +1383,26 @@ export class WorkflowController {
   private async commitFinished(state: WorkflowState, workflow: Workflow, final: FinalReview) {
     const workspace = await this.port.workspace(workflow.workspaceId);
     const snapshot = await this.port.diff(workspace.cwd, final.head);
+    const allowedFiles = new Set(
+      Object.values(final.audits).flatMap((audit) =>
+        audit.result!.findings.flatMap((finding) => finding.files),
+      ),
+    );
+    const finalized =
+      snapshot.head === final.head
+        ? snapshot.dirtyFiles.every((file) => allowedFiles.has(file))
+        : snapshot.dirtyFiles.length === 0 &&
+          (await this.port.commitCount(workspace.cwd, final.head)) === 1;
     if (
-      snapshot.head !== final.head &&
       snapshot.text === final.correctionDiff &&
-      snapshot.dirtyFiles.length === 0 &&
-      (await this.port.commitCount(workspace.cwd, final.head)) === 1
+      snapshot.untrackedFiles.length === 0 &&
+      finalized
     ) {
       final.phase = "complete";
     } else {
       final.phase = "verification_required";
-      final.reason = "The correction commit could not be confirmed against the verified delta.";
+      final.reason =
+        "The local correction result could not be confirmed against the verified delta.";
     }
     await this.port.write(state);
     return;
@@ -1572,14 +1536,23 @@ export class WorkflowController {
   }
 
   private async refreshPlannerTranscript(state: WorkflowState, workflow: Workflow) {
-    const timeline = await this.port.timeline(workflow.plannerId);
-    // Carry all verbatim exchanges, not inferred structured constraints. Omit our injected briefings.
+    const timeline = await this.port.timeline(workflow.plannerId, "projected");
+    // Reuse the host's message/chunk projection; preserve exchanges without inferring authority.
     const transcript: NonNullable<Workflow["plannerTranscript"]> = [];
     for (const item of timeline) {
       if (item.type === "user_message" && !item.clientMessageId?.startsWith("workflow:"))
         transcript.push({ role: "user", text: item.text });
       if (item.type === "assistant_message")
         transcript.push({ role: "assistant", text: item.text });
+      if (
+        item.type === "tool_call" &&
+        (item.name === "request_user_input" || item.name === "request_user_input_async") &&
+        item.detail.type === "plain_text"
+      )
+        transcript.push({
+          role: "assistant",
+          text: `[${item.name} (${item.status})]\n${item.detail.text}`,
+        });
     }
     workflow.plannerTranscript = transcript;
     await this.port.write(state);

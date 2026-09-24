@@ -5,6 +5,7 @@ import type { WorkspaceDraftTabSetup } from "@/workspace-tabs/model";
 
 export interface PendingWorkspaceDraftSubmission {
   launchProfileId?: string;
+  modelRouting?: "manual" | "jev";
   serverId: string;
   workspaceId: string;
   draftId: string;

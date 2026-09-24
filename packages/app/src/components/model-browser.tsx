@@ -193,6 +193,7 @@ interface ModelBrowserProps {
   rootBrowseContent?: React.ReactNode;
   /** Hide the pinned Profiles section while still using rows for model matching. */
   showProfilesSection?: boolean;
+  autoRouting?: { selected: boolean; onSelect: () => void };
 }
 
 interface ModelBrowserContentProps extends Omit<ModelBrowserProps, "state" | "scrolling"> {
@@ -1255,6 +1256,7 @@ function ModelSearchEmptyState() {
 }
 
 function ProviderModelBrowserContent({
+  header,
   serverId,
   view,
   provider,
@@ -1273,6 +1275,7 @@ function ProviderModelBrowserContent({
   isRetryingProvider,
   scrolling,
 }: {
+  header?: React.ReactElement;
   serverId: string | null;
   view: Extract<ModelBrowserView, { kind: "provider" }>;
   provider: ProviderSelectorProvider | null;
@@ -1318,6 +1321,13 @@ function ProviderModelBrowserContent({
       showProfilesSection,
     ],
   );
+  const listHeader =
+    normalizedQuery.length === 0 && (header || profileHeader) ? (
+      <>
+        {header}
+        {profileHeader}
+      </>
+    ) : undefined;
 
   if (!provider) return <ModelSearchEmptyState />;
   const selection = provider.modelSelection;
@@ -1342,7 +1352,7 @@ function ProviderModelBrowserContent({
     );
   }
   if (visibleRows.length === 0) {
-    return profileHeader ?? <ModelSearchEmptyState />;
+    return listHeader ?? <ModelSearchEmptyState />;
   }
   return (
     <ModelRowList
@@ -1351,7 +1361,7 @@ function ProviderModelBrowserContent({
       selectedProvider={selectedProvider}
       selectedModel={selectedModel}
       onSelect={onSelect}
-      header={profileHeader}
+      header={listHeader}
       scrolling={scrolling}
       profiledLookup={profiledLookup}
       onCreateProfile={onCreateProfile}
@@ -1382,6 +1392,7 @@ function ModelBrowserContent({
   searchAllOnFocus,
   rootBrowseContent,
   showProfilesSection = true,
+  autoRouting,
 }: ModelBrowserContentProps) {
   const { t } = useTranslation();
   const normalizedQuery = useMemo(() => normalizeSearchQuery(searchQuery), [searchQuery]);
@@ -1406,10 +1417,26 @@ function ModelBrowserContent({
     [isSearchFocused, normalizedQuery, providers, searchAllOnFocus],
   );
   const hasResults = profiles !== null || providers.length > 0 || rootBrowseContent != null;
+  const autoRoutingGlyph = useMemo(
+    () => <ThemedCheck size={ICON_SIZE.sm} uniProps={foregroundMutedMapping} />,
+    [],
+  );
+  const autoRoutingRow = autoRouting ? (
+    <ModelBrowserRow
+      label={t("modelSelector.autoJev")}
+      description={t("modelSelector.autoJevDescription")}
+      leadingSlot={autoRoutingGlyph}
+      selected={autoRouting.selected}
+      selectionIndicator
+      onPress={autoRouting.onSelect}
+      testID="model-routing-jev"
+    />
+  ) : null;
 
   if (view.kind === "provider") {
     return (
       <ProviderModelBrowserContent
+        header={view.providerId === "codex" ? (autoRoutingRow ?? undefined) : undefined}
         serverId={serverId}
         view={view}
         provider={selectedViewProvider}
@@ -1462,6 +1489,7 @@ function ModelBrowserContent({
 
   const allProvidersContent = (
     <View>
+      {autoRoutingRow}
       {showProfilesSection && profiles ? (
         <AgentProfilesPickerContent
           rows={profiles.rows}
@@ -1520,6 +1548,7 @@ export function ModelBrowser({
   searchAllOnFocus = false,
   rootBrowseContent,
   showProfilesSection,
+  autoRouting,
 }: ModelBrowserProps) {
   return (
     <ModelBrowserContent
@@ -1527,7 +1556,7 @@ export function ModelBrowser({
       view={state.view}
       providers={state.providers}
       selectedProvider={state.selectedProvider}
-      selectedModel={state.selectedModel}
+      selectedModel={autoRouting?.selected ? "" : state.selectedModel}
       searchQuery={state.searchQuery}
       isSearchFocused={state.isSearchFocused}
       profiles={state.profiles}
@@ -1543,6 +1572,7 @@ export function ModelBrowser({
       searchAllOnFocus={searchAllOnFocus}
       rootBrowseContent={rootBrowseContent}
       showProfilesSection={showProfilesSection}
+      autoRouting={autoRouting}
     />
   );
 }

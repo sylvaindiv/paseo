@@ -214,6 +214,62 @@ describe("workspace-layout-store helpers", () => {
     expect(persistedIds.has(restoredNewTab?.tabId ?? "")).toBe(false);
   });
 
+  it("repairs a persisted Explorer-only layout before tab reconciliation", async () => {
+    const workspaceKey = createWorkspaceKey();
+    const explorerDraftIds = ["draft-1", "draft-2"];
+    await AsyncStorage.setItem(
+      "workspace-layout-state",
+      JSON.stringify({
+        state: {
+          layoutByWorkspace: {
+            [workspaceKey]: {
+              root: createPane({
+                id: "explorer",
+                tabIds: explorerDraftIds,
+                hidden: true,
+              }),
+              focusedPaneId: null,
+            },
+          },
+          splitSizesByWorkspace: {},
+          explorerSidebarWidthByWorkspace: {},
+          explorerPaneIdByWorkspace: { [workspaceKey]: "explorer" },
+          sidePaneIdByWorkspace: {},
+        },
+        version: 2,
+      }),
+    );
+    const restored = createWorkspaceLayoutStore(createDeterministicWorkspaceLayoutIds());
+
+    await restored.persist.rehydrate();
+
+    const restoredState = restored.getState();
+    const restoredLayout = restoredState.layoutByWorkspace[workspaceKey];
+    const ordinaryPanes = collectAllPanes(restoredLayout.root).filter(
+      (pane) => pane.id !== "explorer",
+    );
+    expect(ordinaryPanes).toHaveLength(1);
+    expect(findPaneById(restoredLayout.root, "explorer")?.tabIds).toEqual(explorerDraftIds);
+
+    const emptySnapshot = {
+      agentsHydrated: true,
+      terminalsHydrated: true,
+      activeAgentIds: [],
+      autoOpenAgentIds: [],
+      knownAgentIds: [],
+      knownTerminalIds: [],
+      standaloneTerminalIds: [],
+      hasActivePendingDraftCreate: false,
+    };
+    restoredState.reconcileTabs(workspaceKey, emptySnapshot);
+    restoredState.reconcileTabs(workspaceKey, emptySnapshot);
+    const stableLayout = restored.getState().layoutByWorkspace[workspaceKey];
+    restoredState.reconcileTabs(workspaceKey, emptySnapshot);
+
+    expect(restored.getState().layoutByWorkspace[workspaceKey]).toBe(stableLayout);
+    expect(findPaneById(stableLayout.root, "explorer")?.tabIds).toEqual(explorerDraftIds);
+  });
+
   it("finds panes and tabs across nested groups", () => {
     const root: SplitNode = {
       kind: "group",

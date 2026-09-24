@@ -22,6 +22,7 @@ import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useShallow } from "zustand/shallow";
+import { isPlanModeActive } from "@/agent-controls/policy";
 import {
   ArrowUp,
   Square,
@@ -255,16 +256,34 @@ function buildRealtimeVoiceButtonStyle(
   );
 }
 
+const EMPTY_COMPOSER_AGENT_STATE = {
+  status: null,
+  contextWindowMaxTokens: null,
+  contextWindowUsedTokens: null,
+  totalCostUsd: null,
+  model: null,
+  provider: null,
+  currentModeId: null,
+  availableModes: [],
+  features: [],
+};
+
 function buildAgentStateSelector(serverId: string, agentId: string) {
   return (state: ReturnType<typeof useSessionStore.getState>) => {
     const agent = state.sessions[serverId]?.agents?.get(agentId) ?? null;
+    if (!agent) {
+      return EMPTY_COMPOSER_AGENT_STATE;
+    }
     return {
-      status: agent?.status ?? null,
-      contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
-      contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
-      totalCostUsd: agent?.lastUsage?.totalCostUsd ?? null,
-      model: agent?.model ?? null,
-      provider: agent?.provider ?? null,
+      status: agent.status,
+      contextWindowMaxTokens: agent.lastUsage?.contextWindowMaxTokens ?? null,
+      contextWindowUsedTokens: agent.lastUsage?.contextWindowUsedTokens ?? null,
+      totalCostUsd: agent.lastUsage?.totalCostUsd ?? null,
+      model: agent.model ?? null,
+      provider: agent.provider,
+      currentModeId: agent.currentModeId,
+      availableModes: agent.availableModes,
+      features: agent.features,
     };
   };
 }
@@ -1524,6 +1543,19 @@ function ComposerContentImpl({
     hasPendingPermission,
   );
   const hasAgent = agentState.status !== null;
+  const isPlanning =
+    inputMode === "chat" &&
+    (agentControls
+      ? isPlanModeActive({
+          features: agentControls.features,
+          modes: agentControls.modeOptions,
+          selectedModeId: agentControls.selectedMode,
+        })
+      : isPlanModeActive({
+          features: agentState.features,
+          modes: agentState.availableModes,
+          selectedModeId: agentState.currentModeId,
+        }));
 
   const queueWriter = useMemo<QueueWriter>(
     () => ({
@@ -2372,6 +2404,7 @@ function ComposerContentImpl({
                   onFocusChange={handleFocusChange}
                   onHeightChange={onComposerHeightChange}
                   inputWrapperStyle={inputWrapperStyle}
+                  isPlanning={isPlanning}
                   attachmentSlot={attachmentTray}
                   inputMode={inputMode}
                   readOnly={readOnly}
@@ -2450,9 +2483,9 @@ const styles = StyleSheet.create((theme: Theme) => ({
     gap: theme.spacing[3],
   },
   cancelButton: {
-    width: 28,
-    height: 28,
-    borderRadius: theme.borderRadius.full,
+    width: { xs: 28, md: 24 },
+    height: { xs: 28, md: 24 },
+    borderRadius: theme.borderRadius.composerControl,
     backgroundColor: theme.colors.palette.red[600],
     alignItems: "center",
     justifyContent: "center",
@@ -2464,16 +2497,16 @@ const styles = StyleSheet.create((theme: Theme) => ({
     gap: theme.spacing[1],
   },
   contextWindowMeterSlot: {
-    width: 28,
-    height: 28,
+    width: { xs: 28, md: 24 },
+    height: { xs: 28, md: 24 },
     flexShrink: 0,
     alignItems: "center",
     justifyContent: "center",
   },
   realtimeVoiceButton: {
-    width: 28,
-    height: 28,
-    borderRadius: theme.borderRadius.full,
+    width: { xs: 28, md: 24 },
+    height: { xs: 28, md: 24 },
+    borderRadius: theme.borderRadius.composerControl,
     alignItems: "center",
     justifyContent: "center",
   },

@@ -178,6 +178,7 @@ const MAX_TREE_DEPTH = 5;
 
 const WorkspaceDraftTabSetupStorageSchema = z.strictObject({
   launchProfileId: z.string().optional(),
+  modelRouting: z.enum(["manual", "jev"]).optional(),
   provider: z.string(),
   cwd: z.string(),
   modeId: z.string().nullable(),
@@ -606,12 +607,17 @@ function ensurePersistedExplorerSidebarPane(input: {
 }): { layout: WorkspaceLayout; paneId: string } | null {
   const existingPaneId = resolveExplorerSidebarPaneId(input.layout, input.registeredPaneId);
   if (existingPaneId) {
+    const layout = collectAllPanes(input.layout.root).some((pane) => pane.id !== existingPaneId)
+      ? input.layout
+      : (splitPaneEmptyInLayout({
+          layout: input.layout,
+          targetPaneId: existingPaneId,
+          position: "left",
+          createNodeId: input.ids.createNodeId,
+          maxTreeDepth: MAX_TREE_DEPTH,
+        })?.layout ?? input.layout);
     return {
-      layout: keepWorkspaceFocusOutOfExplorerSidebar(
-        input.layout,
-        existingPaneId,
-        input.layout.focusedPaneId,
-      ),
+      layout: keepWorkspaceFocusOutOfExplorerSidebar(layout, existingPaneId, layout.focusedPaneId),
       paneId: existingPaneId,
     };
   }

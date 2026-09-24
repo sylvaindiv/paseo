@@ -128,7 +128,6 @@ import {
 } from "./agent/timeline-projection.js";
 import { buildAgentForkContextAttachment } from "./agent/activity-curator.js";
 import { buildAgentPrompt } from "./agent/prompt-attachments.js";
-import type { StructuredGenerationDaemonConfig } from "./agent/structured-generation-providers.js";
 import {
   getAgentStreamEventTurnId,
   type AgentPersistenceHandle,
@@ -926,7 +925,7 @@ export class Session {
         generation: createAgentStructuredTextGeneration({
           agentManager: this.agentManager,
           providerSnapshotManager,
-          readDaemonConfig: () => this.readStructuredGenerationDaemonConfig(),
+          readDaemonConfig: () => this.daemonConfigStore.get(),
           getFocusedSelection: (cwd) => this.getFocusedAgentSelectionForCwd(cwd),
         }),
       }),
@@ -1498,12 +1497,6 @@ export class Session {
       model: agent.runtimeInfo?.model ?? agent.config.model ?? null,
       thinkingOptionId:
         agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId ?? null,
-    };
-  }
-
-  private readStructuredGenerationDaemonConfig(): StructuredGenerationDaemonConfig {
-    return {
-      metadataGeneration: this.daemonConfigStore.get().metadataGeneration,
     };
   }
 
@@ -4008,6 +4001,7 @@ export class Session {
       config,
       worktreeName,
       initialPrompt,
+      modelRouting,
       clientMessageId,
       outputSchema,
       git,
@@ -4034,7 +4028,7 @@ export class Session {
         throw new Error(`Working directory does not exist or is not a directory: ${requestedCwd}`);
       }
       const trimmedPrompt = initialPrompt?.trim();
-      const { provisionalTitle } = resolveCreateAgentTitles({
+      const { explicitTitle, provisionalTitle } = resolveCreateAgentTitles({
         configTitle: config.title,
         initialPrompt: trimmedPrompt,
       });
@@ -4078,6 +4072,7 @@ export class Session {
           launchProfileId: resolvedIntent.intent.launchProfileId,
           worktreeName,
           initialPrompt,
+          modelRouting,
           clientMessageId,
           outputSchema,
           images,
@@ -4086,6 +4081,7 @@ export class Session {
           labels: resolvedIntent.intent.labels,
           env,
           provisionalTitle,
+          titleIsProvisional: explicitTitle === null,
           firstAgentContext,
           buildSessionConfig: (sessionConfig, gitOptions, legacyWorktreeName, ctx) =>
             this.buildAgentSessionConfig(sessionConfig, gitOptions, legacyWorktreeName, ctx),

@@ -4,6 +4,7 @@ import type { Locator, Page, TestInfo } from "@playwright/test";
 import { expect, test } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
+import { getServerId } from "../support/helpers/server-id";
 import {
   closeSidebarDisplayPreferences,
   openMobileAgentSidebar,
@@ -27,9 +28,10 @@ async function seedChangedWorkspace() {
     await expect
       .poll(async () => {
         const { entries } = await workspace.client.fetchWorkspaces();
-        return entries.find((entry) => entry.id === workspace.workspaceId)?.diffStat?.additions;
+        const diffStat = entries.find((entry) => entry.id === workspace.workspaceId)?.diffStat;
+        return diffStat ? [diffStat.additions, diffStat.deletions] : null;
       })
-      .toBe(12345);
+      .toEqual([12345, 1]);
     return workspace;
   } catch (error) {
     await workspace.cleanup();
@@ -103,17 +105,29 @@ async function moveWorkspaceToStatusGrouping(page: Page) {
 }
 
 async function openDesktopWorkspaceList(page: Page) {
+  await page.emulateMedia({ colorScheme: "dark" });
   await gotoAppShell(page);
   const row = workspaceRow(page);
   await expect(row).toBeVisible();
+  const additions = row.getByText("+12.3k", { exact: true });
+  const deletions = row.getByText("-1", { exact: true });
+  await expect(additions).toBeVisible();
+  await expect(deletions).toBeVisible();
+  await expect(additions).toHaveCSS("color", "rgb(74, 222, 128)");
+  await expect(deletions).toHaveCSS("color", "rgb(239, 68, 68)");
   await page.mouse.move(0, 0);
-  await expect(row.getByText("+12.3k", { exact: true })).toBeVisible();
   return titleWidth(row);
 }
 
 async function expectHoverKeepsTitleWidth(page: Page, width: number, testInfo: TestInfo) {
   const row = workspaceRow(page);
+  const archiveButton = page.getByTestId(
+    `sidebar-workspace-archive-${getServerId()}:${workspace.workspaceId}`,
+  );
+  await expect(archiveButton).toBeHidden();
   await row.hover();
+  await expect(archiveButton).toHaveAccessibleName("Archive");
+  await expect(archiveButton).toBeVisible();
   await expect(row.getByLabel("Workspace actions", { exact: true })).toBeVisible();
   expect(await titleWidth(row)).toBeCloseTo(width, 0);
   await page.screenshot({ path: testInfo.outputPath("desktop-hover.png") });

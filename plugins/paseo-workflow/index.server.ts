@@ -36,7 +36,9 @@ export default function contribute(server: PluginServerContext) {
     type: "workflow.status.get.response" as const,
     ...(await workflow(paseo).status(input.agentId, input.workspaceId)),
   }));
-  server.before("agent.create", ({ request }, { paseo }) => prepareAgent(request, paseo));
+  server.before("agent.create", ({ request }, { paseo, signal }) =>
+    prepareAgent(request, paseo, signal),
+  );
   server.on("agent.permission_requested", async ({ agent, request }, { paseo }) => {
     if (
       agent.launchProfileId !== profileId("planner") ||

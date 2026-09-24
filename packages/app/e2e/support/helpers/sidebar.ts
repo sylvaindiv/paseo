@@ -143,6 +143,17 @@ export async function clickArchiveWorkspaceMenuItem(
   await archiveItem.click();
 }
 
+export async function clickArchiveWorkspaceButton(page: Page, workspaceId: string): Promise<void> {
+  const workspaceKey = `${getServerId()}:${workspaceId}`;
+  const row = page.getByTestId(`sidebar-workspace-row-${workspaceKey}`);
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await row.hover();
+
+  const archiveButton = page.getByTestId(`sidebar-workspace-archive-${workspaceKey}`);
+  await expect(archiveButton).toBeVisible({ timeout: 10_000 });
+  await archiveButton.click();
+}
+
 export async function pinWorkspaceFromSidebar(page: Page, workspaceId: string): Promise<void> {
   const serverId = await openWorkspaceSidebarKebab(page, workspaceId);
   const pinItem = page.getByTestId(`sidebar-workspace-menu-pin-${serverId}:${workspaceId}`);
@@ -154,7 +165,7 @@ export async function archiveWorkspaceFromSidebar(page: Page, workspaceId: strin
   // A clean workspace archives with no prompt. Managed worktree backing may raise
   // a browser confirm for unsynced work, so accept it when present.
   page.once("dialog", (dialog) => void dialog.accept());
-  await clickArchiveWorkspaceMenuItem(page, workspaceId);
+  await clickArchiveWorkspaceButton(page, workspaceId);
 }
 
 export async function expectWorkspaceAbsentFromSidebar(

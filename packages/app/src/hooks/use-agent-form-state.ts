@@ -14,6 +14,7 @@ import {
 import { filterSelectableModels } from "@/provider-selection/model-catalog";
 import { OptimisticFormPreferences } from "@/create-agent-preferences/optimistic-preferences";
 import { applyAgentProfilePreferences } from "@/create-agent-preferences/preferences";
+import { useHostFeature } from "@/runtime/host-features";
 import { useProvidersSnapshot } from "./use-providers-snapshot";
 import {
   useFormPreferences,
@@ -49,6 +50,9 @@ export interface UseAgentFormStateOptions {
 }
 
 export interface UseAgentFormStateResult {
+  modelRouting: "manual" | "jev";
+  supportsInitialModelRouting: boolean;
+  setModelRoutingFromUser: (modelRouting: "manual" | "jev") => void;
   selectedLaunchProfileId?: string;
   selectedServerId: string | null;
   selectedProvider: AgentProvider | null;
@@ -135,6 +139,7 @@ async function persistProviderPreferences(input: {
       preferences: current,
       provider,
       updates: {
+        modelRouting: formState.modelRouting,
         model: modelId || undefined,
         mode: formState.modeId || undefined,
         ...(modelId && formState.thinkingOptionId
@@ -173,10 +178,14 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
   );
 
   const [{ form: formState, userModified, resolution }, dispatch] = useReducer(resolveAgentForm, {
-    form: { provider: null, modeId: "", model: "", thinkingOptionId: "" },
+    form: { modelRouting: "manual", provider: null, modeId: "", model: "", thinkingOptionId: "" },
     userModified: INITIAL_USER_MODIFIED,
     resolution: INITIAL_AGENT_FORM_RESOLUTION,
   });
+  const supportsInitialModelRouting = useHostFeature(
+    serverId,
+    "initialModelRouting" as Parameters<typeof useHostFeature>[1],
+  );
 
   const {
     entries: snapshotEntries,
@@ -259,6 +268,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       isCreateFlow,
       isPreferencesLoading,
       hasSnapshot: snapshotEntries !== undefined,
+      supportsInitialModelRouting,
       initialValues,
       preferences,
       providerModelsByProvider: snapshotProviderModelsByProvider,
@@ -270,6 +280,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     isCreateFlow,
     isPreferencesLoading,
     snapshotEntries,
+    supportsInitialModelRouting,
     initialValues,
     preferences,
     snapshotProviderModelsByProvider,
@@ -300,6 +311,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
           preferences: current,
           provider,
           updates: {
+            modelRouting: "manual",
             model: nextModelId || undefined,
           },
         }),
@@ -311,6 +323,23 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
   const clearProviderSelectionFromUser = useCallback(() => {
     dispatch({ type: "CLEAR_PROVIDER_SELECTION_FROM_USER" });
   }, []);
+
+  const setModelRoutingFromUser = useCallback(
+    (modelRouting: "manual" | "jev") => {
+      const provider = formState.provider;
+      dispatch({ type: "SET_MODEL_ROUTING_FROM_USER", modelRouting });
+      if (provider) {
+        void updateCurrentPreferences((current) =>
+          mergeSelectedComposerPreferences({
+            preferences: current,
+            provider,
+            updates: { modelRouting },
+          }),
+        );
+      }
+    },
+    [formState.provider, updateCurrentPreferences],
+  );
 
   const applyProfileFromUser = useCallback(
     (profile: MaterializedAgentProfile) => {
@@ -406,6 +435,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
             preferences: current,
             provider,
             updates: {
+              modelRouting: "manual",
               model: nextModelId || undefined,
             },
           }),
@@ -425,6 +455,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
             preferences: current,
             provider,
             updates: {
+              modelRouting: "manual",
               thinkingByModel: {
                 [modelId]: thinkingOptionId,
               },
@@ -476,6 +507,9 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
   return useMemo(
     () => ({
       selectedServerId: serverId,
+      modelRouting: formState.modelRouting ?? "manual",
+      supportsInitialModelRouting,
+      setModelRoutingFromUser,
       selectedProvider: formState.provider,
       selectedMode: formState.modeId,
       setModeFromUser,
@@ -508,6 +542,9 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     }),
     [
       serverId,
+      formState.modelRouting,
+      supportsInitialModelRouting,
+      setModelRoutingFromUser,
       formState.launchProfileId,
       formState.provider,
       formState.modeId,

@@ -103,6 +103,7 @@ import {
   SidebarWorkspaceRowFrame,
   SidebarWorkspaceRowContent,
   SidebarWorkspaceShortcutBadge,
+  isSidebarWorkspaceTitleBold,
   resolveTrailingActionVisibility,
   SidebarWorkspaceTrailingActionBase,
   SidebarWorkspaceTrailingActionOverlay,
@@ -243,6 +244,12 @@ interface ProjectHeaderRowProps {
   displayName: string;
   icon?: ProjectIconRenderData;
   statusBucket: SidebarStateBucket | null;
+  /**
+   * Whether a displayed workspace under this project awaits the user, so the header title is
+   * bold like the row that carries it. Derived by `ProjectBlock` from the child rows, because
+   * the header's own aggregate status only covers the collapsed case.
+   */
+  isTitleBold: boolean;
   selected?: boolean;
   chevron: "expand" | "collapse" | null;
   onPress: () => void;
@@ -854,6 +861,7 @@ function ProjectHeaderRow({
   displayName,
   icon = EMPTY_PROJECT_ICON,
   statusBucket,
+  isTitleBold,
   selected = false,
   chevron,
   onPress,
@@ -958,7 +966,10 @@ function ProjectHeaderRow({
         />
 
         <View style={styles.projectTitleGroup}>
-          <Text style={styles.projectTitle} numberOfLines={1}>
+          <Text
+            style={isTitleBold ? styles.projectTitleBold : styles.projectTitle}
+            numberOfLines={1}
+          >
             {displayName}
           </Text>
         </View>
@@ -1617,6 +1628,20 @@ function ProjectBlock({
     enabled: collapsed,
   });
 
+  // The header title is bold only when a workspace row it displays is bold. That is a fact about
+  // the child rows, not the project's aggregate status: an expanded project with a running child
+  // keeps a normal title, and a collapsed one still knows its children are awaiting. Pinned
+  // children are already absent from `project.workspaces`, so pinning one away drops its weight
+  // from the header while the pinned row keeps its own.
+  const isTitleBold = useMemo(
+    () =>
+      project.workspaces.some((workspace) => {
+        const entry = workspaceEntriesByKey.get(workspace.workspaceKey);
+        return entry ? isSidebarWorkspaceTitleBold(entry.statusBucket) : false;
+      }),
+    [project.workspaces, workspaceEntriesByKey],
+  );
+
   const active = isProjectSelectedByRoute({
     selection: activeWorkspaceSelection,
     project,
@@ -1801,6 +1826,7 @@ function ProjectBlock({
         displayName={displayName}
         icon={icon}
         statusBucket={aggregateStatusBucket}
+        isTitleBold={isTitleBold}
         selected={false}
         chevron={rowModel.chevron}
         onPress={handleToggleCollapsed}
@@ -2610,9 +2636,12 @@ const styles = StyleSheet.create((theme) => ({
   projectTitle: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
-    fontWeight: "400",
+    fontWeight: theme.fontWeight.normal,
     minWidth: 0,
     flexShrink: 1,
+  },
+  projectTitleBold: {
+    fontWeight: theme.fontWeight.bold,
   },
   projectActionButton: {
     flexDirection: "row",

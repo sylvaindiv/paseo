@@ -1860,6 +1860,39 @@ describe("ACPAgentClient catalog discovery without a model resolver", () => {
 });
 
 describe("ACPAgentClient config features", () => {
+  test("defaults new ACP conversations to Auto Accept but preserves native permission modes", () => {
+    const client = new ACPAgentClient({
+      provider: "generic-acp",
+      logger: createTestLogger(),
+      defaultCommand: ["generic-acp", "acp"],
+    });
+    const input = {
+      provider: "generic-acp",
+      requestedMode: undefined,
+      featureValues: undefined,
+      parent: null,
+      unattended: false,
+      availableModes: [],
+    };
+    expect(client.resolveCreateConfig(input)).toEqual({
+      modeId: undefined,
+      featureValues: { auto_accept: true },
+    });
+    expect(client.resolveCreateConfig({ ...input, featureValues: { auto_accept: false } })).toEqual(
+      { modeId: undefined, featureValues: { auto_accept: false } },
+    );
+    expect(
+      client.resolveCreateConfig({
+        ...input,
+        requestedMode: "ask",
+        availableModes: [
+          { id: "ask", label: "Ask" },
+          { id: "full", label: "Full", isUnattended: true },
+        ],
+      }),
+    ).toEqual({ modeId: "ask", featureValues: undefined });
+  });
+
   test("enables Auto Accept for unattended ACP creation", () => {
     const client = new ACPAgentClient({
       provider: "generic-acp",
