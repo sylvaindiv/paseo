@@ -4601,6 +4601,121 @@ test("reloadAgentSession preserves current title when config title is unset", as
   expect(afterReload?.config?.title).toBeUndefined();
 });
 
+test("generates a provisional conversation title from the first accepted prompt once", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-generated-title-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const generateAgentTitle = vi.fn(async () => "Generated conversation title");
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    generateAgentTitle,
+    logger,
+  });
+
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+      initialTitle: "First request preview",
+      titleIsProvisional: true,
+    });
+
+    await manager.runAgent(agent.id, "First request", { clientMessageId: "first-message" });
+    await manager.flush();
+
+    expect(generateAgentTitle).toHaveBeenCalledTimes(1);
+    expect(await storage.get(agent.id)).toMatchObject({ title: "Generated conversation title" });
+
+    await manager.runAgent(agent.id, "Second request", { clientMessageId: "second-message" });
+    await manager.flush();
+    expect(generateAgentTitle).toHaveBeenCalledTimes(1);
+  } finally {
+    manager.prepareForShutdown();
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    await manager.flushForShutdown();
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("manual title rename wins over in-flight generated title", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-generated-title-rename-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const generation = deferred<string | null>();
+  let generationStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    generationStarted = resolve;
+  });
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    generateAgentTitle: () => {
+      generationStarted();
+      return generation.promise;
+    },
+    logger,
+  });
+
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+      initialTitle: "First request preview",
+      titleIsProvisional: true,
+    });
+
+    await manager.runAgent(agent.id, "First request", { clientMessageId: "first-message" });
+    await started;
+    await manager.setTitle(agent.id, "Manual title");
+    generation.resolve("Generated title");
+    await manager.flush();
+
+    expect(await storage.get(agent.id)).toMatchObject({ title: "Manual title" });
+  } finally {
+    manager.prepareForShutdown();
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    await manager.flushForShutdown();
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("keeps the provisional title when title generation fails or title is explicit", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-generated-title-failure-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const generateAgentTitle = vi.fn(async () => null);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    generateAgentTitle,
+    logger,
+  });
+
+  try {
+    const provisional = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+      initialTitle: "First request preview",
+      titleIsProvisional: true,
+    });
+    await manager.runAgent(provisional.id, "First request", { clientMessageId: "provisional" });
+    await manager.flush();
+    expect(await storage.get(provisional.id)).toMatchObject({ title: "First request preview" });
+
+    const explicit = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+      initialTitle: "Chosen title",
+    });
+    await manager.runAgent(explicit.id, "First request", { clientMessageId: "explicit" });
+    await manager.flush();
+    expect(generateAgentTitle).toHaveBeenCalledTimes(1);
+    expect(await storage.get(explicit.id)).toMatchObject({ title: "Chosen title" });
+  } finally {
+    manager.prepareForShutdown();
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    await manager.flushForShutdown();
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("setTitle bumps updatedAt and persists title in the same snapshot write", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-set-title-updated-at-"));
   const storagePath = join(workdir, "agents");

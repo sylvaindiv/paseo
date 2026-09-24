@@ -169,7 +169,7 @@ test("agent creation hooks change the provider and environment before the sessio
       `
 export default function contribute(server) {
   server.before("agent.create", ({ request }) => {
-    return { ...request, config: { ...request.config, provider: "codex" }, env: { ...request.env, HOOK_CREATE: "created" } };
+    return { ...request, config: { ...request.config, provider: "codex" }, env: { ...request.env, HOOK_CREATE: "created" }, ...(request.modelRouting ? { modelRouting: { ...request.modelRouting, resolved: true } } : {}) };
   });
   server.before("agent.session_open", ({ request }) => {
     console.log(JSON.stringify({ hook: "agent.session_open", request }));
@@ -190,6 +190,7 @@ export default function contribute(server) {
       provider: "claude",
       cwd: directory,
       title: "Hook test",
+      modelRouting: { strategy: "jev", prompt: "Route this" },
     });
     expect(agent.provider).toBe("codex");
     await expect
@@ -211,6 +212,27 @@ export default function contribute(server) {
         { hook: "agent.created", event: { agent: { id: agent.id, provider: "codex" } } },
       ]);
     await client.archiveAgent(agent.id);
+  } finally {
+    await client.close();
+    await daemon.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test("initial model routing without a plugin does not open a session", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "paseo-routing-guard-"));
+  const daemon = await createTestPaseoDaemon({ daemonVersion: "0.8.0" });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws`, appVersion: "0.8.0" });
+  try {
+    await client.connect();
+    await expect(
+      client.createAgent({
+        provider: "codex",
+        cwd: directory,
+        modelRouting: { strategy: "jev", prompt: "Route this" },
+      }),
+    ).rejects.toThrow("Initial model routing must complete before creating an agent");
+    expect(daemon.daemon.agentManager.listAgents()).toHaveLength(0);
   } finally {
     await client.close();
     await daemon.close();

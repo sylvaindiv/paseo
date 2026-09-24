@@ -475,11 +475,11 @@ type PluginTurnOutcome =
 
 ### Before hooks
 
-| Name                 | Request fields                                                          | Editable                                |
-| -------------------- | ----------------------------------------------------------------------- | --------------------------------------- |
-| `agent.create`       | `config`, optional `env`                                                | Public agent config except `cwd`; `env` |
-| `agent.session_open` | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | Only `env`                              |
-| `workspace.create`   | `source`, optional `title`, `firstAgentContext`                         | Entire explicit creation request        |
+| Name                 | Request fields                                                          | Editable                                                         |
+| -------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `agent.create`       | `config`, optional `env`, `modelRouting`                                | Public agent config except `cwd`; `env`; routing acknowledgement |
+| `agent.session_open` | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | Only `env`                                                       |
+| `workspace.create`   | `source`, optional `title`, `firstAgentContext`                         | Entire explicit creation request                                 |
 
 **`agent.create.config`** uses `AgentSessionConfig`:
 
@@ -496,6 +496,11 @@ type PluginTurnOutcome =
 
 The host validates the effective write policy against the final provider before spawning and
 persists it with the agent. Session-open hooks cannot change it on resume.
+
+`modelRouting` is present only when the client asks the host to route its first model selection.
+It contains an opaque strategy and prompt. A hook must preserve both values and may only return
+`resolved: true` after it has applied the selection. The host rejects an unacknowledged request
+before opening a provider session; do not use it as an initial prompt or persist it.
 
 **`agent.session_open` request example:**
 

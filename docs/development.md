@@ -55,6 +55,12 @@ build to run the new bundle. It uses the production `~/.paseo` home and daemon p
 keeps separate Electron preferences and never downloads published Paseo updates. Do not run it
 at the same time as another Paseo app that manages port 6767.
 
+Vibe Island can open a Paseo Local conversation with `paseo-local://focus?session=<id>&cwd=<cwd>`.
+The desktop resolves the provider session from local agent persistence; `cwd` only narrows a
+session match. Configure the provider environment with `__CFBundleIdentifier=sh.paseo.desktop.local`
+and `TERM_PROGRAM=Paseo`, reload the `~/.paseo` daemon configuration, then restart Vibe Island after
+installing the Local build. An unknown or ambiguous session leaves the current conversation selected.
+
 ### PASEO_HOME
 
 `PASEO_HOME` is the directory that holds runtime state (agents, worktrees, workspace config, sockets, daemon log). Resolution rules:

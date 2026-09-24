@@ -378,6 +378,7 @@ export interface CreateAgentRequestOptions extends AgentConfigOverrides {
   workspaceId?: string;
   callerAgentId?: string;
   initialPrompt?: string;
+  modelRouting?: CreateAgentRequestMessage["modelRouting"];
   idempotencyKey?: string;
   clientMessageId?: string;
   outputSchema?: Record<string, unknown>;
@@ -2656,7 +2657,7 @@ export class DaemonClient {
   // ============================================================================
 
   async createAgent(options: CreateAgentRequestOptions): Promise<AgentSnapshotPayload> {
-    if (options.idempotencyKey !== undefined) this.requireAgentRequestReceipts();
+    this.requireCreateAgentSupport(options);
     const requestId = this.createRequestId(options.requestId);
     const config = resolveAgentConfig(options);
     this.requireWritePolicySupport(config.writePolicy);
@@ -2672,6 +2673,7 @@ export class DaemonClient {
         : {}),
       ...(options.callerAgentId !== undefined ? { callerAgentId: options.callerAgentId } : {}),
       ...(options.initialPrompt ? { initialPrompt: options.initialPrompt } : {}),
+      modelRouting: options.modelRouting,
       idempotencyKey: options.idempotencyKey,
       ...(options.clientMessageId ? { clientMessageId: options.clientMessageId } : {}),
       ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
@@ -2728,6 +2730,18 @@ export class DaemonClient {
     // COMPAT(agentRequestReceipts): added in v0.7.3; remove gate after 2027-03-05.
     if (this.lastServerInfoMessage?.features?.agentRequestReceipts !== true) {
       throw new Error("Update the host to use retry-safe agent creation.");
+    }
+  }
+
+  private requireCreateAgentSupport(options: CreateAgentRequestOptions): void {
+    if (options.idempotencyKey !== undefined) this.requireAgentRequestReceipts();
+    if (options.modelRouting !== undefined) this.requireInitialModelRoutingSupport();
+  }
+
+  private requireInitialModelRoutingSupport(): void {
+    // COMPAT(initialModelRouting): added in v0.8.0; remove gate after 2027-09-22.
+    if (this.lastServerInfoMessage?.features?.initialModelRouting !== true) {
+      throw new Error("Update the host to use initial model routing.");
     }
   }
 
@@ -6583,6 +6597,7 @@ function resolveAgentConfig(options: CreateAgentRequestOptions): AgentSessionCon
     workspaceId: _workspaceId,
     launchProfileId: _launchProfileId,
     initialPrompt: _initialPrompt,
+    modelRouting: _modelRouting,
     images: _images,
     git: _git,
     worktreeName: _worktreeName,

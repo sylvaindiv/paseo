@@ -256,6 +256,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     modelId: effectiveModelId,
     thinkingOptionId: effectiveThinkingOptionId,
     initialFeatureValues: composerOptions?.initialFeatureValues,
+    hasPermissionModes: formState.modeOptions.some((mode) => mode.isUnattended),
   });
 
   const applyDraftAgentProfile = useCallback(

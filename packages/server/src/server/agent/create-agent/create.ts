@@ -11,6 +11,7 @@ import type {
   CreatePaseoWorktreeWorkflowResult,
 } from "../../worktree-session.js";
 import type { AgentAttachment, FirstAgentContext, GitSetupOptions } from "../../messages.js";
+import type { CreateAgentRequestMessage } from "@getpaseo/protocol/messages";
 import type { AgentManager, CreateAgentOptions, ManagedAgent } from "../agent-manager.js";
 import type { AgentPromptInput, AgentRunOptions, AgentSessionConfig } from "../agent-sdk-types.js";
 import type { AgentStorage } from "../agent-storage.js";
@@ -62,6 +63,7 @@ export interface CreateAgentFromSessionInput {
   workspaceId: string;
   worktreeName?: string;
   initialPrompt?: string;
+  modelRouting?: CreateAgentRequestMessage["modelRouting"];
   clientMessageId?: string;
   outputSchema?: Record<string, unknown>;
   images?: Array<{ data: string; mimeType: string }>;
@@ -70,6 +72,7 @@ export interface CreateAgentFromSessionInput {
   labels: Record<string, string>;
   env?: Record<string, string>;
   provisionalTitle: string | null;
+  titleIsProvisional?: boolean;
   firstAgentContext: FirstAgentContext;
   buildSessionConfig: (
     config: AgentSessionConfig,
@@ -300,8 +303,10 @@ async function resolveSessionCreateAgent(
     createOptions: {
       labels: input.labels,
       initialPrompt: trimmedPrompt,
+      modelRouting: input.modelRouting,
       env: input.env,
       initialTitle: input.provisionalTitle,
+      titleIsProvisional: input.titleIsProvisional,
       // A legacy git/worktreeName worktree creates a fresh workspace, so the
       // agent belongs to that workspace, not the source one. createdWorkspaceId
       // is the freshly created worktree's workspace.

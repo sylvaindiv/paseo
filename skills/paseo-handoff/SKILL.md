@@ -14,16 +14,25 @@ Transfer the current task â€” context, decisions, failed attempts, constraints â
 
 You are the **receiver/executor** when your initial prompt contains
 `PASEO_WORKFLOW_HANDOFF` with `mode: "receiver"`, a `workflowId`, a `planId`, and
-`role: "executor-standard"` or `"executor-advanced"`; or your current agent labels
+an executor role: `executor-trivial`, `executor-bounded`, `executor-diagnostic`,
+`executor-complex`, `executor-critical`, or legacy `executor-standard` / `executor-advanced`;
+or your current agent labels
 contain the matching `paseo.workflow.id`, `paseo.workflow.plan`, and executor role.
 If both are available they must match; stop and report a mismatch.
 
 As receiver, execute the supplied plan **here**, in this agent and workspace:
 
 1. Read the intention, request, plan, git base and dirty-state rules.
-2. Implement the plan, preserving pre-existing and concurrent changes.
-3. Run targeted checks, review the resulting diff, and stage only your own files/hunks.
-4. Make the functional commit only after those checks succeed, then wait for final review.
+2. Follow the approved plan and its explicit authorization limits; they take precedence
+   over generic workflow instructions. Preserve pre-existing and concurrent changes.
+3. Run targeted checks, review the resulting diff, and report the local result and any blockers.
+4. Stage, commit, push, merge, deploy, synchronize local branches, or cause external effects
+   only when explicitly authorized by the user or the approved plan. The handoff itself grants
+   none of these permissions. When staging or committing is authorized, include only your own
+   files/hunks after successful validation.
+
+A validated local result without a commit is valid when no commit was authorized.
+Do not create a commit to satisfy a workflow gate; report that gate as a workflow limitation.
 
 Do not create another agent, select a receiving profile, or perform the initiator
 steps below. The handoff has already happened. Deadline pressure does not change

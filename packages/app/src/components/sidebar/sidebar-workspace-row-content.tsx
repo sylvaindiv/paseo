@@ -42,6 +42,15 @@ const ThemedMonitor = withUnistyles(Monitor);
 const ThemedFolder = withUnistyles(Folder);
 const ThemedFolderGit2 = withUnistyles(FolderGit2);
 
+/**
+ * The two states whose workspace row carries a bold title: a reply to read and a permission to
+ * grant. The project header mirrors the row, so the predicate lives beside the style that
+ * applies it rather than being copied into the list, where the two would drift.
+ */
+export function isSidebarWorkspaceTitleBold(bucket: SidebarStateBucket): boolean {
+  return bucket === "attention" || bucket === "needs_input";
+}
+
 export function SidebarWorkspaceRowFrame({
   workspace,
   isDragging = false,
@@ -130,10 +139,11 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   const workspaceBranchTextStyle = useMemo(
     () => [
       styles.workspaceBranchText,
+      isSidebarWorkspaceTitleBold(workspace.statusBucket) && styles.workspaceBranchTextUnread,
       isHovered && styles.workspaceBranchTextHovered,
       isCreating && styles.workspaceBranchTextCreating,
     ],
-    [isHovered, isCreating],
+    [workspace.statusBucket, isHovered, isCreating],
   );
 
   return (
@@ -518,7 +528,7 @@ const styles = StyleSheet.create((theme) => ({
   workspaceBranchText: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
-    fontWeight: "400",
+    fontWeight: theme.fontWeight.normal,
     lineHeight: 20,
     opacity: 0.76,
     flex: 1,
@@ -526,6 +536,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   workspaceBranchTextCreating: {
     opacity: 0.92,
+  },
+  workspaceBranchTextUnread: {
+    fontWeight: theme.fontWeight.bold,
   },
   workspaceBranchTextHovered: {
     opacity: 1,

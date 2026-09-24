@@ -211,7 +211,10 @@ import { createGitMutationService } from "./session/git-mutation/git-mutation-se
 import { workspaceIdsOnCheckout } from "./workspace-directory.js";
 import { configureGitProcessPolicy } from "../utils/run-git-command.js";
 import { resolveGitProcessPolicy } from "../utils/git-process-scheduler.js";
-import { resolveFirstAgentPromptTitle } from "./agent/create-agent-title.js";
+import {
+  generateCreateAgentTitle,
+  resolveFirstAgentPromptTitle,
+} from "./agent/create-agent-title.js";
 import {
   createAgentCommand,
   type CreateAgentCommandDependencies,
@@ -405,6 +408,7 @@ export interface PaseoDaemonConfig {
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
   agentProfiles?: AgentProfile[];
+  workspaceGitWorkflow?: import("@getpaseo/protocol/messages").WorkspaceGitWorkflowConfig;
   skillSelection?: AgentSkillSelection;
   pluginsEnabled?: boolean;
   plugins?: Record<string, PluginSource>;
@@ -561,8 +565,17 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
   if (config.agentProfiles !== undefined) {
     initialConfig.agentProfiles = config.agentProfiles;
   }
-
+  applyWorkspaceGitWorkflowConfig(initialConfig, config.workspaceGitWorkflow);
   return initialConfig;
+}
+
+function applyWorkspaceGitWorkflowConfig(
+  initialConfig: MutableDaemonConfig,
+  workspaceGitWorkflow: MutableDaemonConfig["workspaceGitWorkflow"],
+): void {
+  if (workspaceGitWorkflow !== undefined) {
+    initialConfig.workspaceGitWorkflow = workspaceGitWorkflow;
+  }
 }
 
 export async function createPaseoDaemon(
@@ -927,6 +940,16 @@ export async function createPaseoDaemon(
     providerDefinitions: initialAgentManagerState.providerDefinitions,
     registry: agentStorage,
     appendSystemPrompt: config.appendSystemPrompt,
+    generateAgentTitle: ({ agentManager: manager, cwd, prompt, currentSelection }) =>
+      generateCreateAgentTitle({
+        agentManager: manager,
+        cwd,
+        prompt,
+        currentSelection,
+        providerSnapshotManager,
+        daemonConfig: { metadataGeneration: daemonConfigStore.get().metadataGeneration },
+        logger,
+      }),
     onWorkspaceStateMayHaveChanged: ({ cwd }) => {
       workspaceGitService.onWorkspaceStateMayHaveChanged(cwd);
     },

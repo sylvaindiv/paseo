@@ -1,7 +1,11 @@
 import { expect, test, type Page } from "../support/fixtures";
 import type { FormPreferences } from "@/create-agent-preferences/preferences";
+import { gotoAppShell } from "../support/helpers/app";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
+import { submitMessage } from "../support/helpers/composer";
+import { clickNewChat, gotoWorkspace } from "../support/helpers/launcher";
 import { openAgentRoute } from "../support/helpers/mock-agent";
+import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
 import {
   openGlobalNewWorkspaceComposer,
   selectNewWorkspaceProject,
@@ -71,9 +75,9 @@ async function seedCodexDefaultPreferences(page: Page): Promise<void> {
           provider: "codex",
           providerPreferences: {
             codex: {
-              model: "gpt-5.4-mini",
+              model: "gpt-6-astra",
               mode: "auto",
-              thinkingByModel: { "gpt-5.4-mini": "low" },
+              thinkingByModel: { "gpt-6-astra": "high" },
             },
             mock: { model: "ten-second-stream" },
           },
@@ -92,6 +96,115 @@ async function cycleNewWorkspaceMode(page: Page, presses: number): Promise<void>
   await composer.click();
   for (let i = 0; i < presses; i++) {
     await page.keyboard.press("Shift+Tab");
+  }
+}
+
+interface ComposerBox {
+  height: number;
+  top: number;
+}
+
+// The plan decoration is a decorative layer. If it ever joins the layout, the
+// composer surface grows a whole stripe band (120px → 282px) and every control
+// below it moves. Measure the surface, the text field, and the button row so the
+// regression can't hide behind one stable node.
+async function measureComposerGeometry(page: Page): Promise<Record<string, ComposerBox>> {
+  const targets = {
+    surface: page.getByTestId("message-input-surface"),
+    field: page.getByRole("textbox", { name: "Message agent..." }),
+    buttonRow: page.getByTestId("workspace-create-submit"),
+  } as const;
+
+  const entries = await Promise.all(
+    Object.entries(targets).map(async ([name, locator]) => {
+      const box = await locator.boundingBox();
+      if (!box) throw new Error(`Composer geometry missing for ${name}`);
+      return [name, { height: box.height, top: box.y }] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
+}
+
+async function expectAutoModelSelection(page: Page): Promise<void> {
+  const selector = page.getByTestId("combined-model-selector").filter({ visible: true });
+  await expect(selector).toBeVisible();
+  await expect(selector.getByText("Auto · JEV", { exact: true })).toBeVisible();
+  await expect(selector).toHaveAttribute("aria-label", /Auto · JEV/);
+  await expect(page.getByTestId("agent-thinking-selector")).toHaveCount(0);
+}
+
+function expectSameGeometry(
+  before: Record<string, ComposerBox>,
+  after: Record<string, ComposerBox>,
+): void {
+  for (const name of Object.keys(before)) {
+    expect(
+      Math.abs(after[name].height - before[name].height),
+      `${name} height`,
+    ).toBeLessThanOrEqual(1);
+    expect(Math.abs(after[name].top - before[name].top), `${name} top`).toBeLessThanOrEqual(1);
+  }
+}
+
+async function expectComposerDensity(page: Page, controlSize: number): Promise<void> {
+  const field = page.getByRole("textbox", { name: "Message agent..." });
+  const model = page.getByTestId("combined-model-selector").filter({ visible: true });
+  const attach = page.getByTestId("message-input-attach-button");
+  const submit = page.getByTestId("workspace-create-submit");
+  const [fieldBox, modelBox, attachBox, submitBox] = await Promise.all([
+    field.boundingBox(),
+    model.boundingBox(),
+    attach.boundingBox(),
+    submit.boundingBox(),
+  ]);
+
+  expect(fieldBox?.height).toBe(67);
+  expect(modelBox?.height).toBe(controlSize);
+  expect(attachBox?.height).toBe(controlSize);
+  expect(submitBox?.height).toBe(controlSize);
+  await expect(page.getByTestId("message-input-surface")).toHaveCSS(
+    "background-color",
+    "rgb(250, 250, 249)",
+  );
+  await expect(page.getByTestId("message-input-surface")).toHaveCSS(
+    "border-color",
+    "rgb(231, 229, 228)",
+  );
+  await expect(model.getByText("Auto · JEV", { exact: true })).toHaveCSS("font-size", "12px");
+  await expect(model).toHaveCSS("border-radius", "10px");
+  await expect(submit).toHaveCSS("background-color", "rgb(26, 26, 30)");
+}
+
+// The plan toggle lives in the toolbar on desktop, and behind the model sheet on
+// compact widths. Both surfaces flip the same draft feature.
+async function setNewWorkspacePlanMode(
+  page: Page,
+  options: { enabled: boolean; compact: boolean },
+): Promise<void> {
+  const { enabled, compact } = options;
+  const stripe = page.getByTestId("message-input-plan-stripe");
+  const planToggle = page.getByTestId("agent-feature-plan_mode");
+
+  if (!compact) {
+    await expect(planToggle).toBeVisible({ timeout: 30_000 });
+    await planToggle.click();
+  } else {
+    // The toggle sits in the model sheet. If the sheet is already open (the
+    // previous toggle left it up), reuse it instead of re-opening.
+    if (!(await planToggle.isVisible().catch(() => false))) {
+      await page.getByTestId("combined-model-selector").click();
+    }
+    await expect(planToggle).toBeVisible({ timeout: 30_000 });
+    await planToggle.click();
+    await page
+      .getByRole("button", { name: enabled ? "On" : "Off", exact: true })
+      .click({ timeout: 10_000 });
+  }
+
+  if (enabled) {
+    await expect(stripe).toBeVisible({ timeout: 10_000 });
+  } else {
+    await expect(stripe).toHaveCount(0);
   }
 }
 
@@ -144,4 +257,149 @@ test.describe("New Workspace mode cycle safety", () => {
       await seeded.cleanup();
     }
   });
+});
+
+test("Auto routing failure preserves the draft for retry and manual selection", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const seeded = await seedWorkspace({ repoPrefix: "auto-routing-retry-" });
+  await seedCodexDefaultPreferences(page);
+  const createRequests: Record<string, unknown>[] = [];
+  await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((message) => {
+      const request = getSessionMessage(message);
+      // The harness has real Codex discovery but no workflow plugin. Only
+      // guarded Auto creation may reach it; never send a real provider prompt.
+      expect(request?.type).not.toBe("send_agent_message_request");
+      if (request?.type === "create_agent_request") {
+        expect(request.modelRouting).toMatchObject({ strategy: "jev" });
+        createRequests.push(request);
+      }
+      server.send(message);
+    });
+    server.onMessage((message) => ws.send(message));
+  });
+
+  try {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await gotoWorkspace(page, seeded.workspaceId);
+    await clickNewChat(page);
+    await expectAutoModelSelection(page);
+    const selector = page.getByTestId("combined-model-selector").filter({ visible: true });
+    await selector.click();
+    await expect(page.getByTestId("model-row-codex-gpt-6-astra")).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    const draft = "Keep this request intact when Auto routing fails.";
+    const field = page.getByRole("textbox", { name: "Message agent..." });
+    const error = page.getByRole("alert").filter({
+      hasText: "Initial model routing must complete before creating an agent",
+    });
+    const retry = page.getByRole("button", { name: "Retry", exact: true });
+    await submitMessage(page, draft);
+
+    for (const attempt of [1, 2]) {
+      await expect.poll(() => createRequests.length).toBe(attempt);
+      await expect(error).toBeVisible({ timeout: 30_000 });
+      await expect(field).toHaveValue(draft);
+      await expect(retry).toBeVisible();
+      await expect(retry).toBeEnabled();
+      await expectAutoModelSelection(page);
+      const agents = await seeded.client.fetchAgents();
+      expect(
+        agents.entries.filter(({ agent }) => agent.workspaceId === seeded.workspaceId),
+      ).toEqual([]);
+      if (attempt === 1) await retry.click();
+    }
+
+    await selector.click();
+    await page.getByTestId("model-row-codex-gpt-6-astra").click();
+    await expect(selector).not.toContainText("Auto · JEV");
+    await expect(selector).toContainText("GPT-6-Astra");
+    await expect(selector).not.toHaveAttribute("aria-label", /Auto · JEV/);
+    await expect(page.getByTestId("agent-thinking-selector")).toBeVisible();
+    await expect(field).toHaveValue(draft);
+    await expect
+      .poll(() =>
+        page.evaluate((key) => {
+          const preferences = JSON.parse(localStorage.getItem(key) ?? "{}");
+          return preferences.providerPreferences?.codex?.modelRouting;
+        }, CREATE_AGENT_PREFERENCES_KEY),
+      )
+      .toBe("manual");
+    expect(createRequests).toHaveLength(2);
+  } finally {
+    await seeded.cleanup();
+  }
+});
+
+// Plan mode paints a decorative stripe layer behind the composer. That layer
+// must stay out of the layout: the reference implementation put the SVG in flow
+// and the composer grew from 120px to 282px. This guards the geometry contract
+// the plan background was designed to preserve.
+test.describe("Plan background preserves composer geometry", () => {
+  test.describe.configure({ timeout: 240_000 });
+
+  const viewports = [
+    { name: "desktop width", viewport: { width: 1280, height: 900 }, compact: false },
+    { name: "mobile width", viewport: { width: 390, height: 844 }, compact: true },
+  ] as const;
+
+  for (const { name, viewport, compact } of viewports) {
+    test(`keeps composer geometry at ${name}`, async ({ page }) => {
+      // Set up the draft at desktop width: the sidebar hydrates and the project
+      // picker is reachable there. Then switch to the measured viewport.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const seeded = await seedWorkspace({ repoPrefix: "plan-background-" });
+      await seedCodexDefaultPreferences(page);
+
+      try {
+        await gotoAppShell(page);
+        await waitForSidebarHydration(page);
+        await openGlobalNewWorkspaceComposer(page);
+        await selectNewWorkspaceProject(page, {
+          projectKey: seeded.projectKey,
+          projectDisplayName: seeded.projectDisplayName,
+        });
+        await page.setViewportSize(viewport);
+
+        const surface = page.getByTestId("message-input-surface");
+        await expect(surface).toBeVisible({ timeout: 30_000 });
+        const stripe = page.getByTestId("message-input-plan-stripe");
+        await expect(stripe).toHaveCount(0);
+        await expectAutoModelSelection(page);
+        await expectComposerDensity(page, compact ? 28 : 24);
+
+        // The field is usable, and multiline text keeps its own height. Do this
+        // before any plan toggle: the compact plan toggle opens the model sheet,
+        // which would sit over the composer.
+        const field = page.getByRole("textbox", { name: "Message agent..." });
+        await field.click();
+        await field.type("x");
+        await expect(field).toHaveValue("x");
+        const draft = "first line\nsecond line";
+        await field.fill(draft);
+        await expect(field).toHaveValue(draft);
+        const multilineWithoutPlan = await measureComposerGeometry(page);
+
+        // Turning plan on paints the decoration without moving anything.
+        await setNewWorkspacePlanMode(page, { enabled: true, compact });
+        await expect(surface).toHaveCSS("background-color", "rgb(245, 239, 237)");
+        await expect(surface).toHaveCSS("border-color", "rgb(220, 164, 128)");
+        expectSameGeometry(multilineWithoutPlan, await measureComposerGeometry(page));
+        await expect(field).toHaveValue(draft);
+        await expectAutoModelSelection(page);
+
+        // Turning it off restores the plain surface with the draft intact.
+        await setNewWorkspacePlanMode(page, { enabled: false, compact });
+        expectSameGeometry(multilineWithoutPlan, await measureComposerGeometry(page));
+        await expect(field).toHaveValue(draft);
+        await expectAutoModelSelection(page);
+      } finally {
+        await seeded.cleanup();
+      }
+    });
+  }
 });

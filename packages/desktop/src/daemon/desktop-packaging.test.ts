@@ -127,13 +127,13 @@ describe("desktop packaging", () => {
     expect(config).toContain("- paseo");
   });
 
-  it("does not claim Paseo agent links for the local macOS app", () => {
+  it("registers only Paseo Local session links for the local macOS app", () => {
     const config = readFileSync(join(packageRoot, "electron-builder.local.yml"), "utf8");
     const afterPack = readFileSync(join(packageRoot, "scripts", "after-pack-local.js"), "utf8");
 
     expect(config).toContain("afterPack: ./scripts/after-pack-local.js");
-    expect(afterPack).toContain('"-remove"');
-    expect(afterPack).toContain('"CFBundleURLTypes"');
+    expect(config).toContain("- paseo-local");
+    expect(afterPack).toContain("Delete :CFBundleURLTypes:0");
   });
 
   // electron-builder packs production dependencies declared in package.json into

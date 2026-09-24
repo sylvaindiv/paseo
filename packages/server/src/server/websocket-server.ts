@@ -1649,7 +1649,10 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(agentWritePolicy): added in v0.8.0; remove gate after 2027-09-13.
         agentWritePolicy: true,
         agentProfileWorkflows: true,
+        workspaceGitWorkflow: true,
         agentRequestReceipts: true,
+        // COMPAT(initialModelRouting): added in v0.8.0; remove gate after 2027-09-22.
+        initialModelRouting: true,
         hubAgentRpc: true,
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
         directorySync: true,

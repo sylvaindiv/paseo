@@ -66,6 +66,7 @@ const DRAFT_CAPABILITIES: AgentCapabilityFlags = {
 
 interface AutoSubmitConfig {
   launchProfileId?: string;
+  modelRouting?: "manual" | "jev";
   provider: string;
   modeId: string | null;
   model: string | null;
@@ -76,6 +77,7 @@ interface AutoSubmitConfig {
 function resolveAutoSubmitConfig(
   pending: {
     launchProfileId?: string;
+    modelRouting?: "manual" | "jev";
     provider: string;
     modeId?: string | null;
     model?: string | null;
@@ -86,6 +88,7 @@ function resolveAutoSubmitConfig(
   if (!pending) return null;
   return {
     launchProfileId: pending.launchProfileId,
+    modelRouting: pending.modelRouting,
     provider: pending.provider,
     modeId: pending.modeId ?? null,
     model: pending.model ?? null,
@@ -140,6 +143,7 @@ function resolveDraftModeId(input: {
 
 async function submitDraftCreateRequest(input: {
   launchProfileId?: string;
+  modelRouting?: "manual" | "jev";
   attempt: { clientMessageId: string };
   text: string;
   images?: UserMessageImageAttachment[];
@@ -156,6 +160,7 @@ async function submitDraftCreateRequest(input: {
     effectiveModelId: string | null;
     effectiveThinkingOptionId: string | null;
     featureValues: Record<string, unknown> | undefined;
+    modelRouting: "manual" | "jev";
   };
   hostDisconnectedMessage: string;
   selectModelMessage: string;
@@ -201,6 +206,7 @@ async function submitDraftCreateRequest(input: {
   const attachmentsArray = Array.isArray(attachments) ? attachments : undefined;
   const result = await requestWorkspaceDraftAgent(client, {
     launchProfileId: input.launchProfileId,
+    modelRouting: input.autoSubmitConfig?.modelRouting ?? composerState.modelRouting,
     config,
     workspaceId,
     text,
@@ -278,6 +284,7 @@ function buildDraftInitialValues(input: {
   if (!input.initialSetup) return undefined;
   return {
     launchProfileId: input.initialSetup.launchProfileId,
+    modelRouting: input.initialSetup.modelRouting,
     provider: input.initialSetup.provider,
     modeId: input.initialSetup.modeId,
     model: input.initialSetup.model,
@@ -673,6 +680,8 @@ export function WorkspaceDraftAgentTab({
           isPaneFocused={isPaneFocused}
           onSubmitMessage={handleCreateFromInput}
           isSubmitLoading={isSubmitting}
+          submitLabel={formErrorMessage ? t("common.actions.retry") : undefined}
+          submitButtonAccessibilityLabel={formErrorMessage ? t("common.actions.retry") : undefined}
           blurOnSubmit={true}
           value={draftInput.text}
           onChangeText={draftInput.editText}

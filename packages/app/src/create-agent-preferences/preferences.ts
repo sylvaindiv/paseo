@@ -4,6 +4,7 @@ import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 const featureValuesSchema = z.record(z.string(), z.union([z.boolean(), z.string(), z.null()]));
 
 export interface ProviderPreferences {
+  modelRouting?: "manual" | "jev";
   model?: string;
   mode?: string;
   thinkingByModel?: Record<string, string>;
@@ -24,6 +25,7 @@ export interface FormPreferences {
 }
 
 const providerPreferencesSchema: z.ZodType<ProviderPreferences> = z.strictObject({
+  modelRouting: z.enum(["manual", "jev"]).optional(),
   model: z.string().optional(),
   mode: z.string().optional(),
   thinkingByModel: z.record(z.string(), z.string()).optional(),
@@ -125,6 +127,9 @@ function applyProviderPreferenceUpdates(
   if (updates.model !== undefined) {
     next.model = updates.model;
   }
+  if (updates.modelRouting !== undefined) {
+    next.modelRouting = updates.modelRouting;
+  }
   if (updates.mode === null) {
     delete next.mode;
   } else if (updates.mode !== undefined) {
@@ -214,6 +219,7 @@ export function applyAgentProfilePreferences(args: {
     preferences: next,
     provider: args.provider,
     updates: {
+      modelRouting: "manual",
       model: args.modelId || undefined,
       mode: args.modeId || null,
       ...(args.modelId && args.thinkingOptionId

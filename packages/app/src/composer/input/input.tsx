@@ -19,6 +19,7 @@ import {
   forwardRef,
 } from "react";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import Svg, { Defs, LinearGradient, Mask, Pattern, Rect, Stop } from "react-native-svg";
 import { useTranslation } from "react-i18next";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { ArrowUp, Mic, MicOff, CornerDownLeft, Plus, Square } from "lucide-react-native";
@@ -173,6 +174,8 @@ export interface MessageInputProps {
   textReplacement: TextReplacement;
   /** Replaces the submit icon with this label, still inside the composer's own toolbar row. */
   submitLabel?: string;
+  /** Uses the plan-mode surface without changing the composer's geometry. */
+  isPlanning?: boolean;
 }
 
 export interface MessageInputRef {
@@ -189,8 +192,8 @@ export interface MessageInputRef {
   getNativeElement?: () => HTMLElement | null;
 }
 
-const MIN_INPUT_HEIGHT_MOBILE = 30;
-const MIN_INPUT_HEIGHT_DESKTOP = 46;
+const MIN_INPUT_HEIGHT_MOBILE = 51;
+const MIN_INPUT_HEIGHT_DESKTOP = 67;
 const DEFAULT_MAX_INPUT_HEIGHT = 160;
 const MAX_INPUT_VIEWPORT_RATIO = 0.5;
 const MIN_INPUT_HEIGHT = isWeb ? MIN_INPUT_HEIGHT_DESKTOP : MIN_INPUT_HEIGHT_MOBILE;
@@ -1084,6 +1087,7 @@ interface ResolvedMessageInputProps {
   readOnly: boolean;
   textReplacement: TextReplacement;
   submitLabel: string | undefined;
+  isPlanning: boolean;
 }
 
 function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInputProps {
@@ -1131,6 +1135,7 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
     readOnly: props.readOnly ?? false,
     textReplacement: props.textReplacement,
     submitLabel: props.submitLabel,
+    isPlanning: props.isPlanning ?? false,
   };
 }
 
@@ -1138,6 +1143,30 @@ function extractErrorMessage(error: unknown): string | null {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return null;
+}
+
+function resolveInputWrapperStyle({
+  inputWrapperStyle,
+  isPlanning,
+  readOnly,
+  opacity,
+}: {
+  inputWrapperStyle: import("react-native").ViewStyle | undefined;
+  isPlanning: boolean;
+  readOnly: boolean;
+  opacity: number;
+}) {
+  return [
+    styles.inputWrapper,
+    isPlanning && styles.inputWrapperPlanning,
+    readOnly && styles.inputWrapperReadOnly,
+    inputWrapperStyle,
+    { opacity },
+  ];
+}
+
+function renderPlanningStripe(isPlanning: boolean) {
+  return isPlanning ? <ThemedPlanningStripe /> : null;
 }
 
 export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
@@ -1186,6 +1215,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       readOnly,
       textReplacement,
       submitLabel,
+      isPlanning,
     } = resolveMessageInputProps(props);
     const mode = resolveComposerInputMode(inputMode);
     const { t } = useTranslation();
@@ -1721,13 +1751,14 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     }, [handleStopRealtimeVoice]);
 
     const inputWrapperCombinedStyle = useMemo(
-      () => [
-        styles.inputWrapper,
-        readOnly && styles.inputWrapperReadOnly,
-        inputWrapperStyle,
-        { opacity: surfacePresentation.input.opacity },
-      ],
-      [inputWrapperStyle, readOnly, surfacePresentation.input.opacity],
+      () =>
+        resolveInputWrapperStyle({
+          inputWrapperStyle,
+          isPlanning,
+          readOnly,
+          opacity: surfacePresentation.input.opacity,
+        }),
+      [inputWrapperStyle, isPlanning, readOnly, surfacePresentation.input.opacity],
     );
     // `withUnistyles` maps this component's `style` into a `.hash > *` child
     // rule, which ties on specificity with react-native-web's own
@@ -1796,8 +1827,10 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         <View
           ref={inputWrapperRef}
           style={inputWrapperCombinedStyle}
+          testID="message-input-surface"
           pointerEvents={surfacePresentation.input.pointerEvents}
         >
+          {renderPlanningStripe(isPlanning)}
           {attachmentSlot}
           {/* Text input */}
           <RenderProfile id="ComposerTextSurface">
@@ -1908,22 +1941,76 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
   },
 );
 
+// The plan decoration is a decorative stripe band pinned to the top of the
+// composer surface. react-native-svg is a third-party view Unistyles never
+// rewrote, so a style handed to `Svg` is dropped on web — it would land in flow
+// and grow the composer by a whole band. The wrapper View owns the geometry;
+// the SVG only fills it.
+const PLANNING_STRIPE_PERIOD = 16;
+const PLANNING_STRIPE_BAND = 6;
+const PLANNING_STRIPE_HEIGHT = 80;
+const PLANNING_STRIPE_MID_HEIGHT = 32;
+
+function PlanningStripe({ color }: { color?: string }) {
+  const instanceId = useRef(`composer-plan-stripe-${Math.random().toString(36).slice(2)}`).current;
+  const patternId = `${instanceId}-pattern`;
+  const fadeId = `${instanceId}-fade`;
+  const maskId = `${instanceId}-mask`;
+  return (
+    <View
+      style={styles.planningStripe}
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      testID="message-input-plan-stripe"
+    >
+      <Svg width="100%" height="100%">
+        <Defs>
+          <Pattern
+            id={patternId}
+            width={PLANNING_STRIPE_PERIOD}
+            height={PLANNING_STRIPE_PERIOD}
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(-45)"
+          >
+            <Rect width={PLANNING_STRIPE_BAND} height={PLANNING_STRIPE_PERIOD} fill={color} />
+          </Pattern>
+          <LinearGradient id={fadeId} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#ffffff" stopOpacity={0.65} />
+            <Stop
+              offset={PLANNING_STRIPE_MID_HEIGHT / PLANNING_STRIPE_HEIGHT}
+              stopColor="#ffffff"
+              stopOpacity={0.2}
+            />
+            <Stop offset="1" stopColor="#ffffff" stopOpacity={0} />
+          </LinearGradient>
+          <Mask id={maskId}>
+            <Rect width="100%" height="100%" fill={`url(#${fadeId})`} />
+          </Mask>
+        </Defs>
+        <Rect width="100%" height="100%" fill={`url(#${patternId})`} mask={`url(#${maskId})`} />
+      </Svg>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create((theme: Theme) => ({
   container: {
     flexShrink: 1,
     position: "relative",
   },
   inputWrapper: {
+    overflow: "hidden",
     flexShrink: 1,
     flexDirection: "column",
     gap: theme.spacing[3],
-    backgroundColor: theme.colors.surface1,
+    backgroundColor: theme.colors.composerInputBackground,
     borderWidth: theme.borderWidth[1],
-    borderColor: theme.colors.borderAccent,
+    borderColor: theme.colors.composerInputBorder,
     borderRadius: theme.borderRadius["2xl"],
     paddingVertical: {
       xs: theme.spacing[2],
-      md: theme.spacing[4],
+      md: theme.spacing[3],
     },
     paddingHorizontal: {
       xs: theme.spacing[3],
@@ -1936,6 +2023,18 @@ const styles = StyleSheet.create((theme: Theme) => ({
           transitionTimingFunction: "ease-in-out",
         }
       : {}),
+  },
+  inputWrapperPlanning: {
+    backgroundColor: theme.colors.composerPlanBackground,
+    borderColor: theme.colors.composerPlanBorder,
+  },
+  planningStripe: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: PLANNING_STRIPE_HEIGHT,
+    overflow: "hidden",
   },
   // Dotted says "this surface is the same box, but there is nothing to type
   // into it" without swapping the border colour, which reads as an error state.
@@ -1982,7 +2081,7 @@ const styles = StyleSheet.create((theme: Theme) => ({
     flexDirection: "row",
     alignItems: "flex-end",
     justifyContent: "space-between",
-    marginHorizontal: -6,
+    marginHorizontal: -8,
   },
   leftButtonGroup: {
     minWidth: 0,
@@ -1999,22 +2098,22 @@ const styles = StyleSheet.create((theme: Theme) => ({
     gap: theme.spacing[1],
   },
   attachButton: {
-    width: 28,
-    height: 28,
-    borderRadius: theme.borderRadius.full,
+    width: { xs: 28, md: 24 },
+    height: { xs: 28, md: 24 },
+    borderRadius: theme.borderRadius.composerControl,
     alignItems: "center",
     justifyContent: "center",
   },
   attachButtonAnchor: {
-    width: 28,
-    height: 28,
+    width: { xs: 28, md: 24 },
+    height: { xs: 28, md: 24 },
     alignItems: "center",
     justifyContent: "center",
   },
   voiceButton: {
-    width: 28,
-    height: 28,
-    borderRadius: theme.borderRadius.full,
+    width: { xs: 28, md: 24 },
+    height: { xs: 28, md: 24 },
+    borderRadius: theme.borderRadius.composerControl,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2022,24 +2121,24 @@ const styles = StyleSheet.create((theme: Theme) => ({
     backgroundColor: theme.colors.destructive,
   },
   sendButton: {
-    width: 28,
-    height: 28,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.accent,
+    width: { xs: 28, md: 24 },
+    height: { xs: 28, md: 24 },
+    borderRadius: theme.borderRadius.composerControl,
+    backgroundColor: theme.colors.foreground,
     alignItems: "center",
     justifyContent: "center",
     marginLeft: theme.spacing[1],
   },
   sendButtonLabeled: {
     width: "auto",
-    minWidth: 28,
+    minWidth: { xs: 28, md: 24 },
     paddingHorizontal: theme.spacing[3],
-    borderRadius: theme.borderRadius.full,
+    borderRadius: theme.borderRadius.composerControl,
   },
   sendButtonLabel: {
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
-    color: theme.colors.accentForeground,
+    color: theme.colors.surface0,
   },
   iconButtonHovered: {
     backgroundColor: theme.colors.surface2,
@@ -2076,7 +2175,10 @@ const ThemedMicOff = withUnistyles(MicOff);
 const ThemedArrowUp = withUnistyles(ArrowUp);
 const ThemedCornerDownLeft = withUnistyles(CornerDownLeft);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const ThemedPlanningStripe = withUnistyles(PlanningStripe, (theme: Theme) => ({
+  color: theme.colors.composerPlanStripe,
+}));
 
 const iconForegroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const iconForegroundMutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const iconAccentForegroundMapping = (theme: Theme) => ({ color: theme.colors.accentForeground });
+const iconAccentForegroundMapping = (theme: Theme) => ({ color: theme.colors.surface0 });

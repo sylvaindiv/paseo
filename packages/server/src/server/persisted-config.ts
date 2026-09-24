@@ -11,6 +11,7 @@ import type { AgentProviderRuntimeSettingsMap } from "./agent/provider-launch-co
 import { ensurePrivateFile, writePrivateFileAtomicSync } from "./private-files.js";
 import {
   AgentProfileSchema,
+  WorkspaceGitWorkflowConfigSchema,
   AgentSkillSelectionSchema,
   PluginIdSchema,
   PluginSourceSchema,
@@ -266,6 +267,7 @@ export const PersistedConfigSchema = z
         appendSystemPrompt: z.string().optional(),
         terminalProfiles: z.array(TerminalProfileSchema).optional(),
         agentProfiles: z.array(AgentProfileSchema).optional(),
+        workspaceGitWorkflow: WorkspaceGitWorkflowConfigSchema.optional(),
         cors: z
           .object({
             allowedOrigins: z.array(z.string()).optional(),

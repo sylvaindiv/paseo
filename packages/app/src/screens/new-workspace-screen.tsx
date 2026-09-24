@@ -720,7 +720,7 @@ function useWorkspaceIsolation(input: {
   // the remembered default until the screen remounts.
   const { preferences, updatePreferences } = useFormPreferences();
   const [manualIsolation, setManualIsolation] = useState<"local" | "worktree" | null>(null);
-  const isolation = manualIsolation ?? preferences.isolation ?? "local";
+  const isolation = manualIsolation ?? preferences.isolation ?? "worktree";
   const canCreateWorktree = supportsMultiplicity && worktreeSupport !== "unsupported";
   const isWorktree = isolation === "worktree" && canCreateWorktree;
 
@@ -795,6 +795,7 @@ type NewWorkspaceComposerState = NonNullable<
 
 interface WorkspaceDraftSubmissionConfig {
   launchProfileId?: string;
+  modelRouting: "manual" | "jev";
   cwd: string;
   provider: AgentProvider;
   modeId: string | null;
@@ -911,6 +912,7 @@ function buildWorkspaceDraftSetupFromComposer(input: {
   composerState: NewWorkspaceComposerState;
 }): WorkspaceDraftTabSetup {
   return {
+    modelRouting: input.composerState.modelRouting,
     provider: input.provider,
     cwd: input.cwd,
     modeId: input.composerState.selectedMode || null,
@@ -946,6 +948,7 @@ function buildComposerInitialValues(input: {
   if (input.initialSetup) {
     return {
       launchProfileId: input.initialSetup.launchProfileId,
+      modelRouting: input.initialSetup.modelRouting,
       provider: input.initialSetup.provider,
       modeId: input.initialSetup.modeId,
       model: input.initialSetup.model,
@@ -1061,6 +1064,7 @@ function resolveWorkspaceDraftSubmissionConfig(input: {
   ) {
     return {
       launchProfileId: initialSetup.launchProfileId,
+      modelRouting: initialSetup.modelRouting ?? "manual",
       cwd: initialSetup.cwd,
       provider: initialSetup.provider,
       modeId: initialSetup.modeId,
@@ -1072,6 +1076,7 @@ function resolveWorkspaceDraftSubmissionConfig(input: {
   }
   return {
     launchProfileId: composerState.selectedLaunchProfileId,
+    modelRouting: composerState.modelRouting,
     cwd: workspaceDirectory,
     provider,
     modeId: composerState.selectedMode || null,
@@ -1121,6 +1126,7 @@ async function submitWorkspaceDraft(input: SubmitDraftInput): Promise<SubmitOutc
         requestWorkspaceDraftAgent(input.resolveClient(), {
           workspaceId,
           launchProfileId: submission.launchProfileId,
+          modelRouting: submission.modelRouting,
           config: buildWorkspaceDraftAgentConfig({
             provider: submission.provider,
             cwd: submission.cwd,
@@ -1153,6 +1159,7 @@ async function submitWorkspaceDraft(input: SubmitDraftInput): Promise<SubmitOutc
   });
   useWorkspaceDraftSubmissionStore.getState().setPending({
     launchProfileId: submission.launchProfileId,
+    modelRouting: submission.modelRouting,
     serverId,
     workspaceId,
     draftId,

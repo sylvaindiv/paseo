@@ -72,6 +72,11 @@ export interface PluginBeforeRequests {
     env?: Record<string, string>;
     readonly workspaceId?: string;
     readonly launchProfileId?: string;
+    modelRouting?: {
+      readonly strategy: "jev";
+      readonly prompt: string;
+      resolved?: true;
+    };
   };
   "agent.session_open": PluginSessionOpenRequest;
   "workspace.create": Omit<WorkspaceCreateRequest, "type" | "requestId">;

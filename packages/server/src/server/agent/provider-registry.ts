@@ -601,12 +601,13 @@ function createRegistryEntry(
 
   const decorateModes = (modes: AgentMode[]): AgentMode[] =>
     modes.map((mode) => {
-      if (mode.icon && mode.colorTier) return mode;
+      if (mode.icon && mode.colorTier && mode.isUnattended !== undefined) return mode;
       const definitionMode = resolved.definition.modes.find((d) => d.id === mode.id);
       if (!definitionMode) return mode;
       return Object.assign({}, mode, {
         icon: mode.icon ?? definitionMode.icon,
         colorTier: mode.colorTier ?? definitionMode.colorTier,
+        isUnattended: mode.isUnattended ?? definitionMode.isUnattended,
       });
     });
 

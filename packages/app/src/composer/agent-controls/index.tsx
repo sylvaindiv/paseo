@@ -102,6 +102,9 @@ type AgentControlSelector = "provider" | "mode" | "model" | "thinking" | `featur
 const EMPTY_AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [];
 
 interface ControlledAgentControlsProps {
+  modelRouting?: "manual" | "jev";
+  supportsInitialModelRouting?: boolean;
+  onSelectModelRouting?: (modelRouting: "manual" | "jev") => void;
   provider: string;
   providerOptions?: AgentControlOption[];
   selectedProviderId?: string;
@@ -133,6 +136,9 @@ interface ControlledAgentControlsProps {
 }
 
 export interface DraftAgentControlsProps {
+  modelRouting?: "manual" | "jev";
+  supportsInitialModelRouting?: boolean;
+  onSelectModelRouting?: (modelRouting: "manual" | "jev") => void;
   providerDefinitions: AgentProviderDefinition[];
   selectedProvider: AgentProvider | null;
   modeOptions: AgentMode[];
@@ -341,6 +347,17 @@ function makeBadgePressableStyle(
   ];
 }
 
+function isThinkingSelectable(input: {
+  onSelect: ControlledAgentControlsProps["onSelectThinkingOption"];
+  options: ControlledAgentControlsProps["thinkingOptions"];
+  modelRouting: "manual" | "jev";
+}): boolean {
+  return (
+    Boolean(input.onSelect && input.options && input.options.length > 0) &&
+    input.modelRouting !== "jev"
+  );
+}
+
 function pickSheetModel({
   nextProviderId,
   modelId,
@@ -500,6 +517,9 @@ function ControlledAgentControls({
   modeControl,
   modelSelectorServerId = null,
   isCompactLayout,
+  modelRouting = "manual",
+  supportsInitialModelRouting = false,
+  onSelectModelRouting,
 }: ControlledAgentControlsProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
@@ -521,9 +541,11 @@ function ControlledAgentControls({
     onSelectProvider && providerOptions && providerOptions.length > 0,
   );
   const canSelectModel = Boolean(onSelectModel);
-  const canSelectThinking = Boolean(
-    onSelectThinkingOption && thinkingOptions && thinkingOptions.length > 0,
-  );
+  const canSelectThinking = isThinkingSelectable({
+    onSelect: onSelectThinkingOption,
+    options: thinkingOptions,
+    modelRouting,
+  });
 
   const displayProvider = findOptionLabel(
     providerOptions,
@@ -531,8 +553,8 @@ function ControlledAgentControls({
     t("agentControls.provider.fallback"),
   );
   const formattedThinkingOptions = useMemo(
-    () => toThinkingControlOptions(thinkingOptions),
-    [thinkingOptions],
+    () => toThinkingControlOptions(modelRouting === "jev" ? undefined : thinkingOptions),
+    [modelRouting, thinkingOptions],
   );
   const displayThinking = findOptionLabel(
     formattedThinkingOptions,
@@ -735,6 +757,9 @@ function ControlledAgentControls({
         {!isCompact ? (
           <DesktopAgentControlsContent
             provider={provider}
+            modelRouting={modelRouting}
+            supportsInitialModelRouting={supportsInitialModelRouting}
+            onSelectModelRouting={onSelectModelRouting}
             providerOptions={providerOptions}
             selectedProviderId={selectedProviderId}
             modelOptions={modelOptions}
@@ -788,6 +813,9 @@ function ControlledAgentControls({
         ) : (
           <SheetAgentControlsContent
             provider={provider}
+            modelRouting={modelRouting}
+            supportsInitialModelRouting={supportsInitialModelRouting}
+            onSelectModelRouting={onSelectModelRouting}
             selectedModelId={selectedModelId}
             selectedThinkingOptionId={selectedThinkingOptionId}
             features={features}
@@ -829,6 +857,9 @@ function ControlledAgentControls({
 }
 
 interface DesktopAgentControlsContentProps {
+  modelRouting?: "manual" | "jev";
+  supportsInitialModelRouting?: boolean;
+  onSelectModelRouting?: (modelRouting: "manual" | "jev") => void;
   provider: string;
   providerOptions?: AgentControlOption[];
   selectedProviderId?: string;
@@ -893,6 +924,9 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
   const { t } = useTranslation();
   const {
     provider,
+    modelRouting,
+    supportsInitialModelRouting,
+    onSelectModelRouting,
     providerOptions,
     selectedProviderId,
     selectedModelId,
@@ -942,8 +976,18 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     handleCloseSheet,
     modelSelectorServerId,
   } = props;
+
+  const autoRouting = useMemo(
+    () =>
+      provider === "codex" &&
+      onSelectModelRouting &&
+      (supportsInitialModelRouting || modelRouting === "jev")
+        ? { selected: modelRouting === "jev", onSelect: () => onSelectModelRouting("jev") }
+        : undefined,
+    [modelRouting, onSelectModelRouting, provider, supportsInitialModelRouting],
+  );
   const modelToolbar = useMemo(
-    () => ({ glyphSize, showCaret: presentation.showCarets }),
+    () => ({ glyphSize, showCaret: presentation.showCarets, showGlyph: false }),
     [glyphSize, presentation.showCarets],
   );
   const featuresSheetHeader = useMemo<SheetHeader>(
@@ -1004,6 +1048,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
                 desktopPlacement="top-start"
                 desktopMinWidth={360}
                 toolbar={modelToolbar}
+                autoRouting={autoRouting}
               />
             </View>
           </TooltipTrigger>
@@ -1024,6 +1069,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
                 label={t("agentControls.thinking.title")}
                 value={displayThinking}
                 showToolbarLabel={presentation.showThinkingLabel}
+                showIcon={!presentation.showThinkingLabel}
                 showCaret={presentation.showCarets}
                 open={openSelector === "thinking"}
                 disabled={disabled || !canSelectThinking}
@@ -1105,6 +1151,9 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
 }
 
 interface SheetAgentControlsContentProps {
+  modelRouting?: "manual" | "jev";
+  supportsInitialModelRouting?: boolean;
+  onSelectModelRouting?: (modelRouting: "manual" | "jev") => void;
   provider: string;
   selectedModelId?: string;
   selectedThinkingOptionId?: string;
@@ -1150,6 +1199,9 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
   const { t } = useTranslation();
   const {
     provider,
+    modelRouting,
+    supportsInitialModelRouting,
+    onSelectModelRouting,
     selectedModelId,
     selectedThinkingOptionId,
     features,
@@ -1184,6 +1236,16 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
     modelSelectorServerId,
     canSwitchProvider,
   } = props;
+
+  const autoRouting = useMemo(
+    () =>
+      provider === "codex" &&
+      onSelectModelRouting &&
+      (supportsInitialModelRouting || modelRouting === "jev")
+        ? { selected: modelRouting === "jev", onSelect: () => onSelectModelRouting("jev") }
+        : undefined,
+    [modelRouting, onSelectModelRouting, provider, supportsInitialModelRouting],
+  );
 
   const thinkingAnchorRef = useRef<View | null>(null);
 
@@ -1270,6 +1332,7 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
       serverId={modelSelectorServerId}
       glyphSize={glyphSize}
       canSwitchProvider={canSwitchProvider}
+      autoRouting={autoRouting}
     >
       {sheetControls}
     </CompactModelSheet>
@@ -1808,6 +1871,9 @@ export const AgentControls = memo(function AgentControls({
 });
 
 export function DraftAgentControls({
+  modelRouting = "manual",
+  supportsInitialModelRouting = false,
+  onSelectModelRouting,
   providerDefinitions,
   selectedProvider,
   modeOptions,
@@ -1921,6 +1987,9 @@ export function DraftAgentControls({
         modeControl={modeControl}
         modelSelectorServerId={modelSelectorServerId}
         isCompactLayout={isCompactLayout}
+        modelRouting={modelRouting}
+        supportsInitialModelRouting={supportsInitialModelRouting}
+        onSelectModelRouting={onSelectModelRouting}
       />
     </>
   );
@@ -1937,13 +2006,13 @@ const styles = StyleSheet.create((theme) => ({
     overflow: "hidden",
   },
   modeBadge: {
-    height: 28,
+    height: { xs: 28, md: 24 },
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "transparent",
     gap: theme.spacing[1],
-    paddingHorizontal: theme.spacing[2],
-    borderRadius: theme.borderRadius["2xl"],
+    paddingHorizontal: theme.spacing[1],
+    borderRadius: theme.borderRadius.composerControl,
   },
   modelControl: {
     minWidth: 0,
@@ -1955,14 +2024,14 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0,
   },
   modeIconBadge: {
-    width: 28,
-    height: 28,
+    width: { xs: 28, md: 24 },
+    height: { xs: 28, md: 24 },
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 0,
     flexShrink: 0,
     backgroundColor: "transparent",
-    borderRadius: theme.borderRadius.full,
+    borderRadius: theme.borderRadius.composerControl,
   },
   modeBadgeHovered: {
     backgroundColor: theme.colors.surface2,
@@ -1977,7 +2046,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     flexShrink: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.base,
+    fontSize: { xs: theme.fontSize.base, md: theme.fontSize.sm },
     fontWeight: theme.fontWeight.normal,
   },
   tooltipText: {

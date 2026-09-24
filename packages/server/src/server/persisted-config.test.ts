@@ -46,6 +46,43 @@ describe("PersistedConfigSchema daemon append system prompt config", () => {
   });
 });
 
+describe("PersistedConfigSchema workspace Git workflow config", () => {
+  test("accepts independent manual models and explicit automatic selection", () => {
+    const workspaceGitWorkflow = {
+      reviewModel: { provider: "codex", model: "review-model", thinkingOptionId: "high" },
+      commitModel: { provider: "claude", model: "commit-model" },
+      prModel: null,
+    };
+    const parsed = PersistedConfigSchema.parse({ daemon: { workspaceGitWorkflow } });
+    expect(parsed.daemon?.workspaceGitWorkflow).toEqual(workspaceGitWorkflow);
+    expect(
+      PersistedConfigSchema.safeParse({
+        daemon: {
+          workspaceGitWorkflow: {
+            commitModel: { provider: "", model: "commit-model" },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  test("accepts optional workflow profiles and prompts", () => {
+    const parsed = PersistedConfigSchema.parse({
+      daemon: {
+        workspaceGitWorkflow: {
+          reviewProfileId: "review",
+          deliveryProfileId: "delivery",
+          reviewPrompt: "Review this workspace.",
+          createPrPrompt: "Create the PR.",
+          commitAndPushPrompt: "Commit and push the branch.",
+        },
+      },
+    });
+
+    expect(parsed.daemon?.workspaceGitWorkflow?.deliveryProfileId).toBe("delivery");
+  });
+});
+
 describe("PersistedConfigSchema daemon browser tools config", () => {
   test("accepts optional browser tools opt-in", () => {
     const parsed = PersistedConfigSchema.parse({

@@ -2,11 +2,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import { profiles } from "../shared/profiles";
-import { runtime } from "./runtime";
+import { prepareAgent, runtime } from "./runtime";
+import * as executionRouting from "./execution-routing";
 import { workflowSettings } from "./state";
+import type { WorkflowPort } from "./workflow";
 
 let directory: string;
 let base: string;
@@ -28,6 +30,89 @@ afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
+test.each([true, false])(
+  "initial routing passes plan_mode=%s and preserves the session mode",
+  async (planMode) => {
+    const decision = {
+      category: "bounded" as const,
+      provider: "codex" as const,
+      model: "gpt-5.6-sol",
+      effort: "medium" as const,
+      reason: "Test decision",
+    };
+    const classify = vi
+      .spyOn(executionRouting, "classifyInitialExecution")
+      .mockResolvedValue(decision);
+    try {
+      const request: Parameters<typeof prepareAgent>[0] = {
+        workspaceId: "workspace",
+        config: {
+          provider: "codex",
+          cwd: directory,
+          modeId: "default",
+          featureValues: { plan_mode: planMode, fast_mode: true },
+        },
+        modelRouting: { strategy: "jev", prompt: "Ajouter Auto" },
+      };
+      const api = {
+        workspaces: { ref: () => ({ refresh: async () => ({ intent: "Mobile app" }) }) },
+        providers: {
+          listModels: async () => ({
+            models: [{ id: decision.model, thinkingOptions: [{ id: decision.effort }] }],
+          }),
+        },
+      };
+      const signal = new AbortController().signal;
+      const result = await prepareAgent(
+        request,
+        api as unknown as Parameters<typeof prepareAgent>[1],
+        signal,
+      );
+      expect(classify).toHaveBeenCalledExactlyOnceWith(
+        {
+          prompt: "Ajouter Auto",
+          modeId: "default",
+          featureValues: request.config.featureValues,
+          workspaceIntent: "Mobile app",
+        },
+        signal,
+      );
+      expect(result.config).toEqual({
+        ...request.config,
+        model: decision.model,
+        thinkingOptionId: decision.effort,
+      });
+      expect(result.modelRouting).toEqual({ ...request.modelRouting, resolved: true });
+    } finally {
+      classify.mockRestore();
+    }
+  },
+);
+
+test("planner approval preserves the plan's authority and permits completion without a commit", async () => {
+  const api = {
+    config: { get: async () => ({ config: { agentProfiles: profiles } }) },
+    workspaces: { ref: () => ({ refresh: async () => ({ intent: "Keep control" }) }) },
+  };
+  const result = await prepareAgent(
+    {
+      workspaceId: "workspace",
+      launchProfileId: "paseo-workflow-planner",
+      config: { provider: "codex", cwd: directory, systemPrompt: "No commit." },
+    },
+    api as unknown as Parameters<typeof prepareAgent>[1],
+  );
+  expect(result.config.systemPrompt).toContain("No commit.");
+  expect(result.config.systemPrompt).toContain("does not expand authorization");
+  expect(result.config.systemPrompt).toContain("only when explicitly authorized");
+  expect(result.config.systemPrompt).toContain(
+    "A validated local result without a commit is valid",
+  );
+  expect(result.config.systemPrompt).not.toContain(
+    "create a functional commit after successful validation",
+  );
+});
+
 function row(seq: number, item: AgentTimelineItem, turnId = "turn") {
   return {
     provider: "claude",
@@ -40,6 +125,38 @@ function row(seq: number, item: AgentTimelineItem, turnId = "turn") {
     collapsed: [],
   };
 }
+
+test("transcript history requests projected pages while timeline and turn default to canonical", async () => {
+  const prompt = row(1, { type: "user_message", text: "Implement" });
+  const answer = row(2, { type: "assistant_message", text: "Complete answer" });
+  const refetch = vi.fn(async ({ cursor }: { cursor?: string }) =>
+    cursor
+      ? { entries: [prompt], hasOlder: false }
+      : { entries: [answer], hasOlder: true, startCursor: "older-page" },
+  );
+  const api = { agents: { ref: () => ({ timeline: { refetch } }) } };
+  const controller = runtime(
+    api as unknown as Parameters<typeof runtime>[0],
+    {} as Parameters<typeof runtime>[1],
+  );
+  const { port } = controller as unknown as { port: WorkflowPort };
+
+  expect(await port.timeline("planner", "projected")).toEqual([prompt.item, answer.item]);
+  expect(refetch.mock.calls.map(([request]) => request)).toEqual([
+    { limit: 200, projection: "projected" },
+    { direction: "before", cursor: "older-page", limit: 200, projection: "projected" },
+  ]);
+  refetch.mockClear();
+
+  expect(await port.timeline("planner")).toEqual([prompt.item, answer.item]);
+  expect(await port.turn("planner", "turn")).toEqual({ key: "turn:2", items: [answer.item] });
+  expect(refetch.mock.calls.map(([request]) => request)).toEqual([
+    { limit: 200, projection: "canonical" },
+    { direction: "before", cursor: "older-page", limit: 200, projection: "canonical" },
+    { limit: 200, projection: "canonical" },
+    { direction: "before", cursor: "older-page", limit: 200, projection: "canonical" },
+  ]);
+});
 
 test.each([
   ["assistant", true],

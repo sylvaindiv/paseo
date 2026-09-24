@@ -1,7 +1,9 @@
 import path from "node:path";
+import { createServer } from "node:http";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { settingsRpc } from "@getpaseo/plugin";
 import { expect, test, vi } from "vitest";
 import { profiles } from "../../../../../plugins/paseo-workflow/shared/profiles.js";
@@ -17,7 +19,6 @@ import type {
 import { AgentTurnNotAcceptedError } from "../agent/agent-sdk-types.js";
 import { workflowNativeHistory } from "../test-utils/native-provider-history.js";
 import { AgentRequests, AgentRequestRejectedError } from "../agent/requests/index.js";
-import type { StoredAgentRecord } from "../agent/agent-storage.js";
 
 function nextRoleFor(role: string) {
   return role === "router" ? "planner" : "final-review";
@@ -31,6 +32,73 @@ async function lifecycleFixture(
     nativeHistory?: "claude" | "codex";
   } = {},
 ) {
+  const jevDirectory = await mkdtemp(path.join(tmpdir(), "workflow-jev-"));
+  const requests: Array<{ authorization?: string; body: unknown }> = [];
+  const jev = { hold: undefined as Promise<void> | undefined, choice: "bounded" };
+  const server = createServer(async (request, response) => {
+    const body = await new Promise<string>((resolve, reject) => {
+      let text = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => (text += chunk));
+      request.on("end", () => resolve(text));
+      request.on("error", reject);
+    });
+    if (request.method !== "POST" || request.url !== "/v1/systemone") {
+      response.writeHead(404).end();
+      return;
+    }
+    requests.push({ authorization: request.headers.authorization, body: JSON.parse(body) });
+    await jev.hold;
+    response.writeHead(200, { "Content-Type": "application/json" }).end(
+      JSON.stringify({
+        model: "jev-1.13.0",
+        answers: {
+          execution: {
+            type: "choice",
+            choice: jev.choice,
+            probabilities: Object.fromEntries(
+              ["trivial", "bounded", "diagnostic", "complex", "critical"].map((category) => [
+                category,
+                category === jev.choice ? 1 : 0,
+              ]),
+            ),
+            confidence: 1,
+          },
+        },
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("JEV test server did not bind TCP.");
+  const preload = path.join(jevDirectory, "jev-fetch.mjs");
+  await writeFile(
+    preload,
+    `const target = "https://api.typesafe.ai/v1/systemone";\nconst endpoint = process.env.PASEO_WORKFLOW_TEST_JEV_URL;\nconst fetch = globalThis.fetch;\nglobalThis.fetch = (input, init) => {\n  const url = input instanceof Request ? input.url : String(input);\n  return fetch(url === target ? endpoint : input, init);\n};\n`,
+  );
+  const previousNodeOptions = process.env.NODE_OPTIONS;
+  const previousKey = process.env.TYPESAFE_API_KEY;
+  const previousEndpoint = process.env.PASEO_WORKFLOW_TEST_JEV_URL;
+  process.env.NODE_OPTIONS = [previousNodeOptions, `--import=${pathToFileURL(preload).href}`]
+    .filter(Boolean)
+    .join(" ");
+  process.env.TYPESAFE_API_KEY = "test-jev-key";
+  process.env.PASEO_WORKFLOW_TEST_JEV_URL = `http://127.0.0.1:${address.port}/v1/systemone`;
+  const closeJev = async () => {
+    if (previousNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previousNodeOptions;
+    if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = previousKey;
+    if (previousEndpoint === undefined) delete process.env.PASEO_WORKFLOW_TEST_JEV_URL;
+    else process.env.PASEO_WORKFLOW_TEST_JEV_URL = previousEndpoint;
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    await rm(jevDirectory, { recursive: true, force: true });
+  };
   const directory = await mkdtemp(path.join(tmpdir(), "workflow-lifecycle-"));
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
@@ -277,6 +345,7 @@ async function lifecycleFixture(
     toolEvidence,
     reusedTurnIds,
     providerHistory,
+    jev: { requests, hold: jev },
     restart: async (legacyAgentId?: string) => {
       if (!options.providerHistory) throw new Error("Restart fixture requires provider history");
       const persisted = (await client.getDaemonConfig()).config;
@@ -316,6 +385,7 @@ async function lifecycleFixture(
         await rm(daemon.staticDir, { recursive: true, force: true });
       }
       await rm(directory, { recursive: true, force: true });
+      await closeJev();
     },
   };
 }
@@ -506,21 +576,19 @@ test("an ordinary conversation prepares in the background and enqueues one execu
     await expect
       .poll(() => f.daemon.daemon.agentManager.getAgent(ordinary.id)?.lifecycle)
       .toBe("idle");
-    f.replies.set("router", [
-      '{"category":"bounded","provider":"codex","model":"gpt-5.6-sol","effort":"medium","reason":"Scoped fix"}',
-    ]);
     const plan = await pendingPlan(f, ordinary.id, "ordinary-plan");
-    f.holds.set(
-      "router",
-      new Promise<void>((resolve) => {
-        release = resolve;
-      }),
-    );
+    f.jev.hold.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     await Promise.all([
       f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.prepare.request", plan),
       f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.prepare.request", plan),
     ]);
-    await expect.poll(() => f.labelled("execution-router").length).toBe(1);
+    await expect.poll(() => f.jev.requests.length).toBe(1);
+    expect(f.jev.requests[0]).toMatchObject({
+      authorization: "Bearer test-jev-key",
+      body: { model: "jev-1.13.0", questions: { execution: { type: "choice" } } },
+    });
     expect(f.labelled("executor-bounded")).toHaveLength(0);
     await expect(
       f.client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
@@ -541,36 +609,23 @@ test("an ordinary conversation prepares in the background and enqueues one execu
         workspaceId: f.workspace.id,
       }),
     ).resolves.toMatchObject({ routing: { phase: "running" }, handoffRequested: true });
-    f.holds.delete("router");
     release();
     expect(f.agents("executor-standard")).toHaveLength(0);
-    let classifier!: StoredAgentRecord;
-    await expect
-      .poll(async () => {
-        classifier = (await f.daemon.daemon.agentStorage.list()).find(
-          (record) => record.labels["paseo.workflow.role"] === "execution-router",
-        )!;
-        return classifier?.archivedAt ?? null;
-      })
-      .toBeTruthy();
-    expect(classifier.launchProfileId).toBeUndefined();
-    expect(classifier.config.model).toBe("gpt-5.6-luna");
-    expect(classifier.config.thinkingOptionId).toBe("low");
-    expect(
-      f.prompts.filter((prompt) => prompt.text.startsWith("Classify the workflow plan")),
-    ).toHaveLength(1);
     await expect
       .poll(async () => ({
         count: f.labelled("executor-bounded").length,
         error: (await f.read()).values.workflows[plan.agentId]?.plans[plan.callId]?.routing?.error,
       }))
       .toEqual({ count: 1, error: undefined });
+    expect(f.jev.requests).toHaveLength(1);
     const executor = f.labelled("executor-bounded")[0]!;
     expect(executor.launchProfileId).toBeUndefined();
     expect(executor.config.model).toBe("gpt-5.6-sol");
     expect(executor.config.thinkingOptionId).toBe("medium");
     expect(executor.config.writePolicy).toBe("read_write");
-    expect(f.prompts.filter((prompt) => prompt.text.startsWith("/paseo-handoff"))).toHaveLength(1);
+    await expect
+      .poll(() => f.prompts.filter((prompt) => prompt.text.startsWith("/paseo-handoff")).length)
+      .toBe(1);
     await f.client.reloadPlugin("paseo-workflow");
     await f.client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
       agentId: ordinary.id,
@@ -590,7 +645,7 @@ test("an ordinary conversation prepares in the background and enqueues one execu
   }
 }, 60_000);
 
-test.each(["no-commit", "no-target"] as const)(
+test.each(["no-delta", "no-target"] as const)(
   "implementation completion exposes verification required (%s)",
   async (reason) => {
     const f = await lifecycleFixture({ target: reason !== "no-target" });
@@ -598,11 +653,13 @@ test.each(["no-commit", "no-target"] as const)(
       const plan = await pendingPlan(f);
       const instruction = f.daemon.daemon.agentManager.getAgent(plan.agentId)!.config.systemPrompt!;
       expect(instruction).toContain("After approval");
-      expect(instruction).toContain("functional commit");
+      expect(instruction).toContain("commit only when explicitly authorized");
       await f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.prepare.request", plan);
       await publishPlanApproval(f, plan);
-      await writeFile(path.join(f.directory, "feature.txt"), "implemented\n");
-      if (reason !== "no-commit") f.git("commit", "--quiet", "-am", "functional");
+      if (reason === "no-target") {
+        await writeFile(path.join(f.directory, "feature.txt"), "implemented\n");
+        f.git("commit", "--quiet", "-am", "functional");
+      }
       await f.client.sendMessage(plan.agentId, "Implementation finished");
       await expect
         .poll(async () =>
@@ -623,6 +680,86 @@ test.each(["no-commit", "no-target"] as const)(
   },
   60_000,
 );
+
+test("handoff delivers projected messages and recorded question answers through the real plugin", async () => {
+  const f = await lifecycleFixture();
+  try {
+    const plan = await pendingPlan(f);
+    const manager = f.daemon.daemon.agentManager;
+    for (const text of ["Je vérifie", " le hero", " existant."])
+      await manager.appendTimelineItem(plan.agentId, {
+        type: "assistant_message",
+        messageId: "streamed-answer",
+        text,
+      });
+    const question = "Contraste: Garder le blanc ?\nOptions: Oui, Non";
+    for (const status of ["running", "completed"] as const)
+      await manager.appendTimelineItem(plan.agentId, {
+        type: "tool_call",
+        callId: "contrast-question",
+        name: "request_user_input",
+        status,
+        error: null,
+        detail: {
+          type: "plain_text",
+          text: status === "completed" ? `${question}\n\nAnswers:\ncontrast: Oui` : question,
+        },
+      });
+    await preparedHandoffRpc(f, plan);
+    const prompt = f.prompts.find(({ text }) => text.startsWith("/paseo-handoff"))!.text;
+    const body = JSON.parse(prompt.slice(prompt.indexOf("\n{") + 1));
+    expect(body.plan).toBe(plan.text);
+    expect(
+      body.plannerTranscript.filter(({ text }: { text: string }) => text.includes("hero")),
+    ).toEqual([{ role: "assistant", text: "Je vérifie le hero existant." }]);
+    expect(
+      body.plannerTranscript.filter(({ text }: { text: string }) => text.includes("Contraste:")),
+    ).toEqual([
+      {
+        role: "assistant",
+        text: `[request_user_input (completed)]\n${question}\n\nAnswers:\ncontrast: Oui`,
+      },
+    ]);
+    expect(prompt).toContain("Handoff grants no additional authorization");
+  } finally {
+    await f.close();
+  }
+}, 60_000);
+
+test("uncommitted implementation reaches final audit without a workflow commit request", async () => {
+  const f = await lifecycleFixture();
+  f.replies.set("final-review", ['{"classification":"SIMPLE"}', "Local result reviewed."]);
+  f.replies.set("audit-economic", ['{"findings":[]}']);
+  try {
+    const startHead = f.git("rev-parse", "HEAD");
+    const plan = await pendingPlan(f);
+    await f.client.invokePluginRpc("paseo-workflow", "workflow.handoff.prepare.request", plan);
+    await publishPlanApproval(f, plan);
+    await writeFile(path.join(f.directory, "feature.txt"), "implemented locally\n");
+    await f.client.sendMessage(plan.agentId, "Validated locally; no commit authorized.");
+    await expect
+      .poll(async () =>
+        f.client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
+          agentId: plan.agentId,
+          workspaceId: plan.workspaceId,
+        }),
+      )
+      .toMatchObject({
+        verification: [],
+        reviews: [{ planId: plan.callId, phase: "verification_required" }],
+      });
+    expect(f.agents("final-review")).toHaveLength(1);
+    expect(f.agents("audit-economic")).toHaveLength(1);
+    expect(f.git("rev-parse", "HEAD")).toBe(startHead);
+    expect(f.git("diff", "--", "feature.txt")).toContain("implemented locally");
+    expect(f.prompts.some(({ text }) => text.includes("commit your own changes"))).toBe(false);
+    expect(f.prompts.some(({ text }) => text.startsWith("Create the correction commit"))).toBe(
+      false,
+    );
+  } finally {
+    await f.close();
+  }
+}, 60_000);
 
 test("final diff uses the remote target merge base while commit progression uses workflow start HEAD", async () => {
   const f = await lifecycleFixture();
@@ -652,7 +789,7 @@ test("final diff uses the remote target merge base while commit progression uses
   }
 }, 60_000);
 
-test.each(["router", "executor-standard"] as const)(
+test.each(["router", "executor-complex"] as const)(
   "status reconciles a completed %s during plugin downtime exactly once",
   async (role) => {
     const f = await lifecycleFixture();
@@ -682,9 +819,7 @@ test.each(["router", "executor-standard"] as const)(
       } else {
         const plan = await pendingPlan(f);
         ownerId = plan.agentId;
-        f.replies.set("router", [
-          '{"category":"complex","provider":"codex","model":"gpt-6-astra","effort":"high","reason":"Coordinated changes"}',
-        ]);
+        f.jev.hold.choice = "complex";
         f.effects.set("router", async (text) => {
           if (text.startsWith("/paseo-handoff")) {
             await writeFile(path.join(f.directory, "feature.txt"), "functional\n");
@@ -1341,7 +1476,7 @@ test("a completed structured proposal without native permission is ensured and a
     });
     expect(
       (await f.read()).values.workflows[plan.agentId]!.plans[plan.callId]!.verification,
-    ).toContain("functional commit");
+    ).toContain("No reviewable tracked delta");
   } finally {
     await f.close();
   }
@@ -2200,10 +2335,10 @@ test("a stale reviewer releases its claim without touching the next implementati
 
 test.each([
   ["router", true, "claude"],
-  ["executor-standard", true, "claude"],
+  ["executor-complex", true, "claude"],
   ["planner", true, "claude"],
   ["router", true, "codex"],
-  ["executor-standard", true, "codex"],
+  ["executor-complex", true, "codex"],
   ["planner", true, "codex"],
   ["router", false, "claude"],
 ] as const)(
@@ -2272,10 +2407,7 @@ test.each([
           });
           await f.client.respondToPermissionAndWait(ownerId, permission.id, { behavior: "allow" });
         } else {
-          f.replies.set("router", [
-            '{"category":"complex","provider":"codex","model":"gpt-6-astra","effort":"high","reason":"Coordinated changes"}',
-            "Implemented and committed",
-          ]);
+          f.jev.hold.choice = "complex";
           f.effects.set("router", async (text) => {
             if (text.startsWith("/paseo-handoff")) {
               await writeFile(path.join(f.directory, "feature.txt"), "implemented\n");

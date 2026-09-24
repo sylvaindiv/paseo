@@ -33,7 +33,17 @@ const beforeSchemas = {
     env: true,
     workspaceId: true,
     launchProfileId: true,
-  }).strict(),
+  })
+    .extend({
+      modelRouting: z
+        .object({
+          strategy: z.literal("jev"),
+          prompt: z.string(),
+          resolved: z.literal(true).optional(),
+        })
+        .optional(),
+    })
+    .strict(),
   "agent.session_open": z
     .object({
       agentId: z.string(),
@@ -172,8 +182,24 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
     if (previous.config.cwd !== next.config.cwd) {
       throw new Error("agent.create hooks cannot change the workspace directory");
     }
+    validateModelRouting(previous, next);
   }
   return result;
+}
+
+function validateModelRouting(
+  previous: PluginBeforeRequests["agent.create"],
+  next: PluginBeforeRequests["agent.create"],
+): void {
+  if (
+    previous.modelRouting?.strategy !== next.modelRouting?.strategy ||
+    previous.modelRouting?.prompt !== next.modelRouting?.prompt
+  ) {
+    throw new Error("agent.create hooks cannot change model routing context");
+  }
+  if (previous.modelRouting === undefined && next.modelRouting !== undefined) {
+    throw new Error("agent.create hooks cannot add model routing context");
+  }
 }
 
 type Handler = (input: unknown, context: PluginHookContext) => unknown;

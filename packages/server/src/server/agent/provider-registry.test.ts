@@ -1697,6 +1697,28 @@ describe("model merging", () => {
 });
 
 describe("fetchCatalog", () => {
+  test("preserves full-access metadata when enriching runtime modes", async () => {
+    const registry = buildProviderRegistry(logger);
+    const client = registry.codex.createClient(logger);
+    vi.spyOn(client, "fetchCatalog").mockResolvedValue({
+      models: [],
+      modes: [{ id: "full-access", label: "Full", icon: "ShieldOff", colorTier: "dangerous" }],
+    });
+    const catalog = await registry.codex.fetchCatalog(
+      { scope: "workspace", cwd: "/tmp/catalog", force: false },
+      client,
+    );
+    expect(catalog.modes).toEqual([
+      {
+        id: "full-access",
+        label: "Full",
+        icon: "ShieldOff",
+        colorTier: "dangerous",
+        isUnattended: true,
+      },
+    ]);
+  });
+
   test("returns merged models and modes from fetchCatalog", async () => {
     mockState.runtimeModels.set("codex", [
       { provider: "codex", id: "codex-runtime", label: "Codex Runtime" },

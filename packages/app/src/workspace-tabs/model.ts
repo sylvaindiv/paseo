@@ -4,6 +4,7 @@ import type { WorkspaceFileTabTarget } from "@/workspace/file-open";
 
 export interface WorkspaceDraftTabSetup {
   launchProfileId?: string;
+  modelRouting?: "manual" | "jev";
   provider: AgentProvider;
   cwd: string;
   modeId: string | null;

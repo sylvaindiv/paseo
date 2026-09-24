@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import type { PluginSettingsHandle, PluginBeforeRequests } from "@getpaseo/plugin/server";
 import { profileId, roles } from "../shared/profiles";
 import { WorkflowController, type WorkflowPort } from "./workflow";
+import { classifyExecution, classifyInitialExecution } from "./execution-routing";
 import { workflowSettings } from "./state";
 import type { PaseoApi } from "./types";
 
@@ -16,9 +17,9 @@ export function runtime(
   settings: PluginSettingsHandle<typeof workflowSettings.schema>,
 ) {
   let revision: string | undefined;
-  const history = async (id: string) => {
+  const history = async (id: string, projection: "canonical" | "projected" = "canonical") => {
     const agent = paseo.agents.ref(id);
-    let page = await agent.timeline.refetch({ limit: 200, projection: "canonical" });
+    let page = await agent.timeline.refetch({ limit: 200, projection });
     const pages = [];
     for (;;) {
       if (page.error || page.staleCursor || page.gap)
@@ -29,7 +30,7 @@ export function runtime(
         direction: "before",
         cursor: page.startCursor,
         limit: 200,
-        projection: "canonical",
+        projection,
       });
     }
     return pages.toReversed().flat();
@@ -61,13 +62,7 @@ export function runtime(
       if (result.error) throw new Error(result.error);
       return result.models ?? [];
     },
-    wait: async (id, timeoutMs) => {
-      const result = await paseo.agents.ref(id).waitForFinish(timeoutMs);
-      return { status: result.status, error: result.error, lastMessage: result.lastMessage };
-    },
-    archive: async (id) => {
-      await paseo.agents.ref(id).archive();
-    },
+    classify: classifyExecution,
     agent: async (id) => {
       const handle = paseo.agents.ref(id);
       const snapshot = await handle.refresh();
@@ -87,7 +82,7 @@ export function runtime(
       if (!snapshot?.workspaceDirectory) throw new Error(`Workspace '${id}' is unavailable.`);
       return { cwd: snapshot.workspaceDirectory, intent: snapshot.intent };
     },
-    timeline: async (id) => (await history(id)).map((entry) => entry.item),
+    timeline: async (id, projection) => (await history(id, projection)).map((entry) => entry.item),
     turn: async (id, turnId, expectedMessageId, approvedPlanCallId, afterMessageId) => {
       turnId ??= await completedTurnId(id);
       if (!turnId) return null;
@@ -227,7 +222,11 @@ export function runtime(
   return new WorkflowController(port);
 }
 
-export async function prepareAgent(request: PluginBeforeRequests["agent.create"], paseo: PaseoApi) {
+export async function prepareAgent(
+  request: PluginBeforeRequests["agent.create"],
+  paseo: PaseoApi,
+  signal?: AbortSignal,
+) {
   const role = roles.find((candidate) => profileId(candidate) === request.launchProfileId);
   if (role) {
     const profile = (await paseo.config.get()).config.agentProfiles?.find(
@@ -244,17 +243,20 @@ export async function prepareAgent(request: PluginBeforeRequests["agent.create"]
   }
   const workspace = await paseo.workspaces.ref(request.workspaceId).refresh();
   if (!workspace) throw new Error("The workflow workspace is unavailable.");
+  if (request.modelRouting?.strategy === "jev") {
+    return prepareInitialModelRouting(request, paseo, workspace.intent ?? undefined, signal);
+  }
   if (!role && !workspace.intent) return request;
-  const readOnly = role === "router" || role === "plan-reviewer" || role?.startsWith("audit-");
+  const readOnly = isReadOnlyRole(role);
   let instruction: string | undefined;
   if (role === "router") {
     instruction =
       'Clarify the real user request interactively, expose tradeoffs and ask missing questions. Do not implement or delegate. Once ready, return only JSON {"ready":true,"recommendation":"standard|advanced","constraints":["..."],"assumptions":["..."]}. Until ready, ask the user questions; do not return the ready JSON.';
   } else if (role) {
-    instruction = `Your workflow role is ${role}. Follow the bounded workflow request. ${readOnly ? "Read only. Never edit, mutate, commit or delegate." : "Preserve pre-existing dirty files and concurrent changes. Never push, merge, deploy or cause external effects without explicit user authority."}`;
+    instruction = `Your workflow role is ${role}. Follow the bounded workflow request. ${readOnly ? "Read only. Never edit, mutate, commit or delegate." : "Preserve pre-existing dirty files and concurrent changes. Follow the approved plan and user authorization limits; workflow approval or handoff does not expand authorization. Local branch synchronization is allowed when explicitly authorized by the plan or user. Never push, integrate into a shared branch, deploy or cause external effects without explicit user authority."}`;
     if (role === "planner")
       instruction +=
-        " Before approval, clarify and plan without implementing. After approval, implement the approved plan in this conversation, run targeted checks, stage only your own files/hunks, and create a functional commit after successful validation. Then wait for final review. If validation or attribution is blocked, report it instead of committing.";
+        " Before approval, clarify and plan without implementing. After approval, implement the approved plan in this conversation and run targeted checks. Stage or commit only when explicitly authorized by the approved plan or user and validation succeeds, including only your own files/hunks. A validated local result without a commit is valid. Report validation or attribution blockers; never commit to satisfy the workflow. Then wait for final review.";
   }
   return {
     ...request,
@@ -269,5 +271,41 @@ export async function prepareAgent(request: PluginBeforeRequests["agent.create"]
         .filter(Boolean)
         .join("\n\n"),
     },
+  };
+}
+
+function isReadOnlyRole(role: string | undefined): boolean {
+  return role === "router" || role === "plan-reviewer" || role?.startsWith("audit-") === true;
+}
+
+async function prepareInitialModelRouting(
+  request: PluginBeforeRequests["agent.create"],
+  paseo: PaseoApi,
+  workspaceIntent: string | undefined,
+  signal?: AbortSignal,
+): Promise<PluginBeforeRequests["agent.create"]> {
+  const routing = request.modelRouting;
+  if (!routing?.prompt.trim())
+    throw new Error("Décrivez la demande ou choisissez un modèle manuellement.");
+  const decision = await classifyInitialExecution(
+    {
+      prompt: routing.prompt,
+      modeId: request.config.modeId,
+      featureValues: request.config.featureValues,
+      workspaceIntent,
+    },
+    signal,
+  );
+  const models = await paseo.providers.listModels("codex", { cwd: request.config.cwd });
+  if (models.error) throw new Error(models.error);
+  const model = models.models?.find((candidate) => candidate.id === decision.model);
+  if (!model?.thinkingOptions?.some((option) => option.id === decision.effort))
+    throw new Error(
+      `Le modèle ou l'effort sélectionné par JEV n'est pas disponible dans ce workspace.`,
+    );
+  return {
+    ...request,
+    config: { ...request.config, model: decision.model, thinkingOptionId: decision.effort },
+    modelRouting: { ...routing, resolved: true },
   };
 }

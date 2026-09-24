@@ -5,6 +5,7 @@ test("keeps daemon-client APIs out of the server public entry", async () => {
 
   expect(serverExports.createPaseoDaemon).toBeTypeOf("function");
   expect(serverExports.resolvePaseoHome).toBeTypeOf("function");
+  expect(serverExports.AgentStorage).toBeTypeOf("function");
 
   for (const name of [
     "DaemonClient",

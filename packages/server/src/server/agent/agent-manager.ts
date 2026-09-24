@@ -1,6 +1,7 @@
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
-import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
+import type { PluginBeforeRequests, PluginSessionOpenRequest } from "@getpaseo/plugin/server";
+import type { CreateAgentRequestMessage } from "@getpaseo/protocol/messages";
 import { randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { stat } from "node:fs/promises";
@@ -99,7 +100,10 @@ import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
 import { isSystemInjectedEnvelope } from "./agent-prompt.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { stripInternalPaseoMcpServer, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
-import { resolveCreateAgentTitles } from "./create-agent-title.js";
+import {
+  resolveCreateAgentTitles,
+  type GenerateCreateAgentTitleOptions,
+} from "./create-agent-title.js";
 import type { PaseoToolCatalogFactory } from "./tools/types.js";
 import { isPaseoToolPolicyEnabled } from "./paseo-tool-policy.js";
 import {
@@ -308,6 +312,8 @@ export interface CreateAgentOptions {
   syntheticPlanDecisions?: Record<string, SyntheticPlanDecision>;
   labels?: Record<string, string>;
   initialPrompt?: string;
+  modelRouting?: CreateAgentRequestMessage["modelRouting"];
+  titleIsProvisional?: boolean;
   env?: Record<string, string>;
   persistSession?: boolean;
   initialTitle?: string | null;
@@ -341,6 +347,12 @@ export interface AgentManagerOptions {
     agentId: string;
     expectedTurnId: string;
   }) => Promise<void>;
+  generateAgentTitle?: (
+    options: Pick<
+      GenerateCreateAgentTitleOptions,
+      "agentManager" | "cwd" | "prompt" | "currentSelection"
+    >,
+  ) => Promise<string | null>;
   logger: Logger;
 }
 
@@ -745,6 +757,10 @@ export class AgentManager {
   private readonly durableTimelineStore?: AgentTimelineStore;
   private readonly previousStatuses = new Map<string, AgentLifecycleStatus>();
   private readonly backgroundTasks = new Set<Promise<void>>();
+  private readonly pendingAgentTitleGenerations = new Map<
+    string,
+    { expectedTitle: string | null; started: boolean }
+  >();
   private readonly agentRegistrationTasks = new Set<Promise<void>>();
   private readonly inFlightAgentCloses = new Map<string, Promise<void>>();
   private readonly reloadedSessionCloses = new WeakMap<AgentSession, Promise<void>>();
@@ -765,6 +781,7 @@ export class AgentManager {
   private logger: Logger;
   private readonly rescueTimeouts: Required<AgentManagerRescueTimeouts>;
   private readonly beforeSteerUnavailableFallback?: AgentManagerOptions["beforeSteerUnavailableFallback"];
+  private readonly generateAgentTitle?: AgentManagerOptions["generateAgentTitle"];
   private acceptingAgentRegistrations = true;
 
   constructor(options: AgentManagerOptions) {
@@ -775,6 +792,7 @@ export class AgentManager {
     this.durableTimelineStore = options?.durableTimelineStore;
     this.onAgentAttention = options?.onAgentAttention;
     this.onWorkspaceStateMayHaveChanged = options?.onWorkspaceStateMayHaveChanged;
+    this.generateAgentTitle = options.generateAgentTitle;
     this.mcpBaseUrl = options?.mcpBaseUrl ?? null;
     this.mcpAuthToken = options?.mcpAuthToken ?? null;
     this.configurePaseoTools(options);
@@ -1260,18 +1278,24 @@ export class AgentManager {
     assertWritePolicySupported(config);
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
+    let modelRouting: PluginBeforeRequests["agent.create"]["modelRouting"] = options.modelRouting;
     if (this.pluginLifecycle && !config.internal) {
       const request = await this.pluginLifecycle.before("agent.create", {
         config,
         env: options.env,
         workspaceId: options.workspaceId,
         launchProfileId: options.launchProfileId,
+        modelRouting,
       });
       const writePolicy = request.config.writePolicy ?? config.writePolicy;
       if (config.writePolicy === "read_only") assertWritePolicyUnchanged(config, { writePolicy });
       config = { ...request.config, internal: config.internal, writePolicy };
       assertWritePolicySupported(config);
       options = { ...options, env: request.env };
+      modelRouting = request.modelRouting;
+    }
+    if (modelRouting !== undefined && modelRouting.resolved !== true) {
+      throw new Error("Initial model routing must complete before creating an agent");
     }
     await this.deleteAgentState(resolvedAgentId);
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
@@ -1309,6 +1333,7 @@ export class AgentManager {
       owner: options.owner,
       historyPrimed: true,
     });
+    this.armInitialAgentTitleGeneration(agent, options);
     if (!agent.internal) {
       this.pluginLifecycle?.emit("agent.created", {
         agent: describeHookAgent({ ...agent, title: agent.config.title }),
@@ -2072,6 +2097,13 @@ export class AgentManager {
   }
 
   async setTitle(agentId: string, title: string): Promise<void> {
+    await this.runLifecycleMutation(agentId, async () => {
+      this.pendingAgentTitleGenerations.delete(agentId);
+      await this.setTitleUnlocked(agentId, title);
+    });
+  }
+
+  private async setTitleUnlocked(agentId: string, title: string): Promise<void> {
     const agent = this.requireAgent(agentId);
     const normalizedTitle = title.trim();
     if (!normalizedTitle) {
@@ -2336,7 +2368,8 @@ export class AgentManager {
     const liveAgent = this.getAgent(agentId);
     if (liveAgent) {
       if (updates.title) {
-        await this.setTitle(agentId, updates.title);
+        this.pendingAgentTitleGenerations.delete(agentId);
+        await this.setTitleUnlocked(agentId, updates.title);
       }
       if (updates.labels) {
         await this.writeLabels(agentId, updates.labels);
@@ -5063,6 +5096,9 @@ export class AgentManager {
     options?: { providerMessageId?: string },
   ): AgentStreamEvent {
     const row = this.recordTimeline(agentId, item, { ...options, turnId });
+    if (item.type === "user_message") {
+      this.startInitialAgentTitleGeneration(agentId, item.text);
+    }
     const event: AgentStreamEvent = {
       type: "timeline",
       item,
@@ -5088,6 +5124,66 @@ export class AgentManager {
     }
 
     return event;
+  }
+
+  private startInitialAgentTitleGeneration(agentId: string, prompt: string): void {
+    const generation = this.pendingAgentTitleGenerations.get(agentId);
+    const agent = this.agents.get(agentId);
+    const trimmedPrompt = prompt.trim();
+    if (
+      !generation ||
+      generation.started ||
+      !agent ||
+      agent.internal ||
+      !trimmedPrompt ||
+      isSystemInjectedEnvelope(trimmedPrompt)
+    ) {
+      return;
+    }
+
+    generation.started = true;
+    const task = (async () => {
+      const title = await this.generateAgentTitle!({
+        agentManager: this,
+        cwd: agent.cwd,
+        prompt: trimmedPrompt,
+        currentSelection: {
+          provider: agent.provider,
+          model: agent.config.model,
+          thinkingOptionId: agent.config.thinkingOptionId,
+        },
+      });
+      if (!title) {
+        if (this.pendingAgentTitleGenerations.get(agentId) === generation) {
+          this.pendingAgentTitleGenerations.delete(agentId);
+        }
+        return;
+      }
+      await this.runLifecycleMutation(agentId, async () => {
+        if (this.pendingAgentTitleGenerations.get(agentId) !== generation) return;
+        const stored = await this.registry?.get(agentId);
+        if (this.registry && (stored?.title ?? null) !== generation.expectedTitle) {
+          this.pendingAgentTitleGenerations.delete(agentId);
+          return;
+        }
+        this.pendingAgentTitleGenerations.delete(agentId);
+        await this.setTitleUnlocked(agentId, title);
+      });
+    })().catch((error) => {
+      if (this.pendingAgentTitleGenerations.get(agentId) === generation) {
+        this.pendingAgentTitleGenerations.delete(agentId);
+      }
+      this.logger.warn({ err: error, agentId }, "Conversation title generation failed");
+    });
+    this.trackBackgroundTask(task);
+  }
+
+  private armInitialAgentTitleGeneration(agent: ManagedAgent, options: CreateAgentOptions): void {
+    if (!options.titleIsProvisional || agent.internal || !this.generateAgentTitle) return;
+    this.pendingAgentTitleGenerations.set(agent.id, {
+      expectedTitle: options.initialTitle ?? null,
+      started: false,
+    });
   }
 
   private recordSubmittedPrompt(

@@ -2697,6 +2697,30 @@ test("sends create_agent_request with workspace and caller identity", async () =
   await expect(createPromise).rejects.toThrow("compat test sentinel");
 });
 
+test("gates initial model routing on host support before sending", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen({ features: {} });
+  await connectPromise;
+
+  await expect(
+    client.createAgent({
+      provider: "codex",
+      cwd: "/tmp/project",
+      modelRouting: { strategy: "jev", prompt: "Route this" },
+    }),
+  ).rejects.toThrow("Update the host to use initial model routing.");
+  expect(mock.sent).toHaveLength(0);
+});
+
 test("sends worktree target and autoArchive in create_agent_request", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();

@@ -69,6 +69,7 @@ describe("Pure black theme", () => {
 
 describe("Sidebar interaction surfaces", () => {
   it("keeps Light selection distinct from the sidebar surface", () => {
+    expect(lightTheme.colors.surfaceSidebar).toBe("#f4f4f4");
     expect(lightTheme.colors.surfaceSidebarHover).toBe(lightTheme.colors.surface1);
     expect(lightTheme.colors.surfaceSidebarSelected).toBe(lightTheme.colors.surface3);
     expect(lightTheme.colors.surfaceSidebarSelected).not.toBe(lightTheme.colors.surfaceSidebar);
@@ -92,5 +93,18 @@ describe("Built-in light theme", () => {
         brightBlack: "#3f3f46",
       },
     });
+  });
+});
+
+describe("Composer plan surface", () => {
+  it("provides plan colors in both built-in appearances", () => {
+    expect(lightTheme.colors.composerInputBackground).toBe("#FAFAF9");
+    expect(lightTheme.colors.composerInputBorder).toBe("#E7E5E4");
+    expect(lightTheme.colors.composerPlanBackground).toBe("#F5EFED");
+    expect(lightTheme.colors.composerPlanStripe).toBe("#EBDDD8");
+    expect(lightTheme.colors.composerPlanBorder).toBe("#DCA480");
+    expect(darkTheme.colors.composerPlanBackground).toBe("#2B2522");
+    expect(darkTheme.colors.composerPlanStripe).toBe("#413732");
+    expect(darkTheme.colors.composerPlanBorder).toBe("#5A463C");
   });
 });
