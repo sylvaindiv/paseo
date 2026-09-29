@@ -723,6 +723,12 @@ export const zhCN: TranslationResources = {
         copyUrl: "复制 {{scriptName}} 的 URL",
         chooseUrl: "选择 {{scriptName}} 的 URL",
         script: "{{scriptName}} script",
+        startPreview: "启动 {{scriptName}} 并打开预览",
+        stopPreview: "停止 {{scriptName}} 并关闭预览",
+        choosePreviewService: "选择要预览的服务",
+      },
+      preview: {
+        section: "开发预览",
       },
       routes: {
         public: "反向代理",
@@ -733,6 +739,8 @@ export const zhCN: TranslationResources = {
         exitCode: "exit {{code}}",
         startFailed: "启动 {{scriptName}} 失败",
         stopFailed: "停止 {{scriptName}} 失败",
+        previewUnhealthy: "{{scriptName}} 运行异常",
+        previewPlacementUnavailable: "无法在当前布局中打开开发预览",
       },
     },
     tree: {

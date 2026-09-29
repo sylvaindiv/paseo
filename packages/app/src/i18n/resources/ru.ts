@@ -733,6 +733,12 @@ export const ru: TranslationResources = {
         copyUrl: "Скопировать URL скрипта {{scriptName}}",
         chooseUrl: "Выбрать URL для {{scriptName}}",
         script: "Скрипт {{scriptName}}",
+        startPreview: "Запустить {{scriptName}} и открыть предпросмотр",
+        stopPreview: "Остановить {{scriptName}} и закрыть предпросмотр",
+        choosePreviewService: "Выберите сервис для предпросмотра",
+      },
+      preview: {
+        section: "Предпросмотр разработки",
       },
       routes: {
         public: "Обратный прокси",
@@ -743,6 +749,9 @@ export const ru: TranslationResources = {
         exitCode: "Код выхода: {{code}}",
         startFailed: "Не удалось запустить скрипт {{scriptName}}",
         stopFailed: "Не удалось остановить скрипт {{scriptName}}",
+        previewUnhealthy: "{{scriptName}} работает некорректно",
+        previewPlacementUnavailable:
+          "Не удалось открыть предпросмотр разработки в текущей компоновке",
       },
     },
     tree: {

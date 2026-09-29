@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import type { GestureResponderEvent } from "react-native";
 import { Pressable, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { useMutation } from "@tanstack/react-query";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import {
   ChevronDown,
   Copy,
@@ -15,13 +16,16 @@ import {
 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
+import type { WorkspaceScriptPayload } from "@getpaseo/protocol/messages";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import { useSessionStore } from "@/stores/session-store";
-import { useHostRuntimeSnapshot } from "@/runtime/host-runtime";
+import { useHostRuntimeSnapshot, type ActiveConnection } from "@/runtime/host-runtime";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   useDropdownMenuClose,
 } from "@/components/ui/dropdown-menu";
@@ -36,10 +40,22 @@ import {
 } from "@/utils/workspace-script-links";
 import type { Theme } from "@/styles/theme";
 import { useWorkspaceServiceRoutePreferencesStore } from "@/workspace-service-routes/store";
+import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import { buttonControlHeight, HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
 import { extraMutedIconColorMapping } from "@/components/ui/icon-color";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
 type RowActionIcon = "copy" | "open" | "restart" | "start" | "stop" | "terminal";
+
+/**
+ * Desktop-only (Electron, non-compact) dev-preview wiring. The button starts the preferred
+ * service, waits for its own `running` + `healthy` + resolved-URL report and asks the workspace
+ * to open the preview column; Stop tears the service down and only then closes the preview.
+ */
+export interface WorkspaceScriptsPreviewActions {
+  onOpenPreview: (input: { scriptName: string; url: string }) => void;
+  onClosePreview: (scriptName: string) => void;
+}
 
 interface WorkspaceScriptsButtonProps {
   serverId: string;
@@ -51,6 +67,7 @@ interface WorkspaceScriptsButtonProps {
   onOpenUrlInBrowserTab?: (url: string) => void;
   hideLabels?: boolean;
   presentation?: "split" | "ghost";
+  preview?: WorkspaceScriptsPreviewActions;
 }
 
 const ThemedPlay = withUnistyles(Play);
@@ -61,6 +78,7 @@ const ThemedEye = withUnistyles(Eye);
 const ThemedCopy = withUnistyles(Copy);
 const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedSquare = withUnistyles(Square);
+const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 
 const GHOST_TRIGGER_ICON_SIZE = 16;
 
@@ -534,6 +552,677 @@ function ScriptRow({
   );
 }
 
+type WorkspaceScriptsPreviewActionState = "choose" | "start" | "starting" | "stop";
+
+function resolvePreviewActionState(input: {
+  hasPreferredService: boolean;
+  isServiceRunning: boolean;
+  isWaitingForPreview: boolean;
+  hasKnownTerminal: boolean;
+}): WorkspaceScriptsPreviewActionState {
+  if (!input.hasPreferredService) return "choose";
+  if (input.isServiceRunning) return "stop";
+  if (input.isWaitingForPreview) return input.hasKnownTerminal ? "stop" : "starting";
+  return "start";
+}
+
+function resolvePreviewServiceUrl(input: {
+  script: WorkspaceScriptPayload;
+  preferredRouteKind: WorkspaceScriptLinkKind | null;
+  activeConnection: ActiveConnection | null;
+}): string | null {
+  const serviceLink = resolveWorkspaceScriptLink({
+    script: input.script,
+    activeConnection: input.activeConnection,
+  });
+  const target =
+    (input.preferredRouteKind
+      ? serviceLink.targets.find((candidate) => candidate.kind === input.preferredRouteKind)
+      : null) ?? serviceLink.primary;
+  return target?.url ?? null;
+}
+
+type PreviewWaitDecision =
+  | { kind: "wait" }
+  | { kind: "cancel"; unhealthy: boolean }
+  | { kind: "open"; url: string };
+
+function resolvePreviewWaitDecision(input: {
+  script: WorkspaceScriptPayload | undefined;
+  preferredRouteKind: WorkspaceScriptLinkKind | null;
+  activeConnection: ActiveConnection | null;
+}): PreviewWaitDecision {
+  const { script } = input;
+  if (!script) {
+    return { kind: "cancel", unhealthy: false };
+  }
+  if (script.lifecycle !== "running") {
+    return { kind: "wait" };
+  }
+  if (script.health === "unhealthy") {
+    return { kind: "cancel", unhealthy: true };
+  }
+  const url = resolvePreviewServiceUrl({
+    script,
+    preferredRouteKind: input.preferredRouteKind,
+    activeConnection: input.activeConnection,
+  });
+  return url ? { kind: "open", url } : { kind: "wait" };
+}
+
+function applyPreviewWaitDecision(input: {
+  decision: PreviewWaitDecision;
+  scriptName: string;
+  cancel: (scriptName: string) => void;
+  open: (input: { scriptName: string; url: string }) => void;
+  reportUnhealthy: (scriptName: string) => void;
+}): void {
+  if (input.decision.kind === "wait") {
+    return;
+  }
+  input.cancel(input.scriptName);
+  if (input.decision.kind === "open") {
+    input.open({ scriptName: input.scriptName, url: input.decision.url });
+    return;
+  }
+  if (input.decision.unhealthy) {
+    input.reportUnhealthy(input.scriptName);
+  }
+}
+
+function consumePendingRestarts(input: {
+  pending: Set<string>;
+  scripts: WorkspaceDescriptor["scripts"];
+  startScript: (scriptName: string) => void;
+}): void {
+  if (input.pending.size === 0) {
+    return;
+  }
+  for (const script of input.scripts) {
+    if (!input.pending.has(script.scriptName) || script.lifecycle === "running") {
+      continue;
+    }
+    input.pending.delete(script.scriptName);
+    input.startScript(script.scriptName);
+  }
+}
+
+function consumeScriptStartOutcome(input: {
+  result: { terminalId?: string | null };
+  scriptName: string;
+  previewStartNames: Set<string>;
+  onPreviewTerminal: (scriptName: string, terminalId: string) => void;
+  onOrdinaryTerminal?: (terminalId: string) => void;
+}): void {
+  if (!input.result.terminalId) {
+    return;
+  }
+  if (input.previewStartNames.delete(input.scriptName)) {
+    input.onPreviewTerminal(input.scriptName, input.result.terminalId);
+    return;
+  }
+  input.onOrdinaryTerminal?.(input.result.terminalId);
+}
+
+interface WorkspaceScriptsPreviewActionProps {
+  scriptName: string | null;
+  isRunning: boolean;
+  isWaiting: boolean;
+  hasKnownTerminal: boolean;
+  onChoose: () => void;
+  onStart: (scriptName: string) => void;
+  onStop: () => void;
+}
+
+/**
+ * The direct-action segment of the desktop split button plus its chevron. Play starts the
+ * preferred service, a running service shows Stop, and with no service chosen the first Play
+ * opens the picker instead of guessing one.
+ */
+function WorkspaceScriptsPreviewAction({
+  scriptName,
+  isRunning,
+  isWaiting,
+  hasKnownTerminal,
+  onChoose,
+  onStart,
+  onStop,
+}: WorkspaceScriptsPreviewActionProps): ReactElement {
+  const { t } = useTranslation();
+  const state = resolvePreviewActionState({
+    hasPreferredService: scriptName !== null,
+    isServiceRunning: isRunning,
+    isWaitingForPreview: isWaiting,
+    hasKnownTerminal,
+  });
+
+  let accessibilityLabel: string;
+  if (state === "choose") {
+    accessibilityLabel = t("workspace.scripts.accessibility.choosePreviewService");
+  } else if (state === "stop") {
+    accessibilityLabel = t("workspace.scripts.accessibility.stopPreview", { scriptName });
+  } else {
+    accessibilityLabel = t("workspace.scripts.accessibility.startPreview", { scriptName });
+  }
+
+  let icon: ReactElement;
+  if (state === "starting") {
+    icon = <ThemedLoadingSpinner size={14} uniProps={blueColorMapping} />;
+  } else if (state === "stop") {
+    icon = <ThemedSquare size={14} uniProps={blueColorMapping} />;
+  } else {
+    icon = <ThemedPlay size={14} uniProps={mutedColorMapping} {...playFillTransparent} />;
+  }
+
+  const actionStyle = useCallback(
+    ({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) => [
+      styles.splitButtonPrimary,
+      (hovered || pressed) && styles.splitButtonPrimaryHovered,
+    ],
+    [],
+  );
+  const chevronStyle = useCallback(
+    ({ hovered, pressed, open }: { hovered?: boolean; pressed: boolean; open: boolean }) => [
+      styles.splitButtonSecondary,
+      (hovered || pressed || open) && styles.splitButtonPrimaryHovered,
+    ],
+    [],
+  );
+
+  const handlePress = useCallback(() => {
+    if (state === "stop") {
+      onStop();
+      return;
+    }
+    if (state === "start" && scriptName) {
+      onStart(scriptName);
+      return;
+    }
+    onChoose();
+  }, [onChoose, onStart, onStop, scriptName, state]);
+
+  return (
+    <>
+      <Pressable
+        testID="workspace-scripts-preview-action"
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        disabled={state === "starting"}
+        onPress={handlePress}
+        style={actionStyle}
+      >
+        {icon}
+      </Pressable>
+      <View style={styles.splitButtonDivider} />
+      <DropdownMenuTrigger
+        testID="workspace-scripts-button"
+        style={chevronStyle}
+        accessibilityRole="button"
+        accessibilityLabel={t("workspace.scripts.accessibility.trigger")}
+      >
+        <View style={styles.splitButtonSecondaryContent}>
+          <ThemedChevronDown size={16} uniProps={extraMutedIconColorMapping} />
+        </View>
+      </DropdownMenuTrigger>
+    </>
+  );
+}
+
+function PreviewServiceItem({
+  scriptName,
+  selected,
+  onSelectService,
+}: {
+  scriptName: string;
+  selected: boolean;
+  onSelectService: (scriptName: string) => void;
+}): ReactElement {
+  const handleSelect = useCallback(
+    () => onSelectService(scriptName),
+    [onSelectService, scriptName],
+  );
+  return (
+    <DropdownMenuItem
+      testID={`workspace-scripts-preview-${scriptName}`}
+      selected={selected}
+      showSelectedCheck
+      onSelect={handleSelect}
+    >
+      {scriptName}
+    </DropdownMenuItem>
+  );
+}
+
+function PreviewServiceMenuSection({
+  services,
+  preferredScriptName,
+  onSelectService,
+}: {
+  services: WorkspaceDescriptor["scripts"];
+  preferredScriptName: string | null;
+  onSelectService: (scriptName: string) => void;
+}): ReactElement {
+  const { t } = useTranslation();
+  return (
+    <>
+      <DropdownMenuLabel testID="workspace-scripts-preview-section">
+        {t("workspace.scripts.preview.section")}
+      </DropdownMenuLabel>
+      {services.map((service) => (
+        <PreviewServiceItem
+          key={service.scriptName}
+          scriptName={service.scriptName}
+          selected={service.scriptName === preferredScriptName}
+          onSelectService={onSelectService}
+        />
+      ))}
+      <DropdownMenuSeparator />
+    </>
+  );
+}
+
+type ToastApi = ReturnType<typeof useToast>;
+
+async function requestStartWorkspaceScript(input: {
+  client: DaemonClient | null;
+  workspaceId: string;
+  scriptName: string;
+  clientUnavailableMessage: string;
+}) {
+  if (!input.client) {
+    throw new Error(input.clientUnavailableMessage);
+  }
+  const result = await input.client.startWorkspaceScript(input.workspaceId, input.scriptName);
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  return result;
+}
+
+async function requestStopWorkspaceScript(input: {
+  client: DaemonClient | null;
+  scripts: WorkspaceDescriptor["scripts"];
+  scriptName: string;
+  terminalId?: string | null;
+  clientUnavailableMessage: string;
+  stopFailedMessage: (scriptName: string) => string;
+}) {
+  if (!input.client) {
+    throw new Error(input.clientUnavailableMessage);
+  }
+  const terminalId =
+    input.terminalId ??
+    input.scripts.find((s) => s.scriptName === input.scriptName)?.terminalId ??
+    null;
+  if (!terminalId) {
+    throw new Error(input.stopFailedMessage(input.scriptName));
+  }
+  const result = await input.client.killTerminal(terminalId);
+  if (!result.success) {
+    throw new Error(input.stopFailedMessage(input.scriptName));
+  }
+}
+
+function showScriptMutationError(input: {
+  toast: ToastApi;
+  error: unknown;
+  fallbackMessage: string;
+}): void {
+  input.toast.show(input.error instanceof Error ? input.error.message : input.fallbackMessage, {
+    variant: "error",
+  });
+}
+
+function findStartablePreviewScript(input: {
+  scripts: WorkspaceDescriptor["scripts"];
+  scriptName: string;
+}): WorkspaceScriptPayload | null {
+  const script = input.scripts.find((candidate) => candidate.scriptName === input.scriptName);
+  if (!script || script.lifecycle === "running") {
+    return null;
+  }
+  return script;
+}
+
+function resolveKnownScriptTerminalId(input: {
+  script: WorkspaceScriptPayload | null;
+  trackedByScript: Record<string, string>;
+  trackedFirst?: boolean;
+}): string | null {
+  if (!input.script) {
+    return null;
+  }
+  const tracked = input.trackedByScript[input.script.scriptName] ?? null;
+  if (input.trackedFirst) {
+    // The terminal the start request returned is known before the payload syncs.
+    return tracked ?? input.script.terminalId ?? null;
+  }
+  return input.script.terminalId ?? tracked ?? null;
+}
+
+interface UseWorkspaceScriptControlsInput {
+  preview: WorkspaceScriptsPreviewActions | undefined;
+  serverId: string;
+  workspaceId: string;
+  scripts: WorkspaceDescriptor["scripts"];
+  client: DaemonClient | null;
+  activeConnection: ActiveConnection | null;
+  preferredRouteKind: WorkspaceScriptLinkKind | null;
+  toast: ToastApi;
+  onScriptTerminalStarted?: (terminalId: string) => void;
+}
+
+interface WorkspaceScriptControls {
+  services: WorkspaceDescriptor["scripts"];
+  previewEnabled: boolean;
+  preferredService: WorkspaceScriptPayload | null;
+  preferredScriptName: string | null;
+  isWaitingForPreview: boolean;
+  hasKnownTerminal: boolean;
+  isStartPending: boolean;
+  isStopPending: boolean;
+  menuOpen: boolean;
+  setMenuOpen: (open: boolean) => void;
+  openMenu: () => void;
+  startPreviewService: (scriptName: string) => void;
+  stopPreviewService: () => void;
+  selectPreviewService: (scriptName: string) => void;
+  startScript: (scriptName: string) => void;
+  stopScript: (scriptName: string) => void;
+  restartScript: (scriptName: string) => void;
+}
+
+/**
+ * Script lifecycle (start, stop, restart through the terminal) plus the desktop dev-preview
+ * flow: the per-workspace service choice, the wait for `running` + `healthy` + a resolved URL,
+ * and the cancellation rules that keep stale reports from opening a preview.
+ */
+function useWorkspaceScriptControls(
+  input: UseWorkspaceScriptControlsInput,
+): WorkspaceScriptControls {
+  const { preview, serverId, workspaceId, scripts, client, activeConnection } = input;
+  const { t } = useTranslation();
+  const toast = input.toast;
+  const previewWorkspaceKey = useMemo(
+    () => buildWorkspaceTabPersistenceKey({ serverId, workspaceId }),
+    [serverId, workspaceId],
+  );
+  const preferredScriptByWorkspace = useWorkspaceServiceRoutePreferencesStore(
+    (state) => state.preferredScriptByWorkspace,
+  );
+  const setPreferredScript = useWorkspaceServiceRoutePreferencesStore(
+    (state) => state.setPreferredScript,
+  );
+  const services = useMemo(
+    () => scripts.filter((script) => (script.type ?? "service") === "service"),
+    [scripts],
+  );
+  const previewEnabled = preview !== undefined && services.length > 0;
+  const previewKey = previewEnabled ? previewWorkspaceKey : null;
+  const preferredService = useMemo(
+    () =>
+      previewKey
+        ? (services.find(
+            (script) => script.scriptName === (preferredScriptByWorkspace[previewKey] ?? null),
+          ) ?? null)
+        : null,
+    [previewKey, services, preferredScriptByWorkspace],
+  );
+  // The dev preview waits for the daemon's own reports instead of assuming the start request
+  // made the service reachable, so the pending flag is the source of truth for "starting".
+  const [pendingPreviewScriptName, setPendingPreviewScriptName] = useState<string | null>(null);
+  const [previewTerminalIdByScript, setPreviewTerminalIdByScript] = useState<
+    Record<string, string>
+  >({});
+  const [menuOpen, setMenuOpen] = useState(false);
+  const pendingRestartRef = useRef<Set<string>>(new Set());
+  const activePreviewScriptRef = useRef<string | null>(null);
+  const previewStartNamesRef = useRef<Set<string>>(new Set());
+
+  const cancelPendingPreview = useCallback((scriptName: string) => {
+    if (activePreviewScriptRef.current !== scriptName) {
+      return;
+    }
+    activePreviewScriptRef.current = null;
+    setPendingPreviewScriptName((current) => (current === scriptName ? null : current));
+  }, []);
+
+  const recordPreviewTerminalId = useCallback((scriptName: string, terminalId: string) => {
+    setPreviewTerminalIdByScript((current) => ({ ...current, [scriptName]: terminalId }));
+  }, []);
+
+  // Starting a preview must not yank the workspace to the service's terminal: the launch is
+  // registered as a preview start and its terminal id goes to the preview flow instead.
+  const startScriptMutation = useMutation({
+    mutationFn: (scriptName: string) =>
+      requestStartWorkspaceScript({
+        client,
+        workspaceId,
+        scriptName,
+        clientUnavailableMessage: t("common.errors.daemonClientUnavailable"),
+      }),
+    onError: (error, scriptName) => {
+      previewStartNamesRef.current.delete(scriptName);
+      cancelPendingPreview(scriptName);
+      showScriptMutationError({
+        toast,
+        error,
+        fallbackMessage: t("workspace.scripts.states.startFailed", { scriptName }),
+      });
+    },
+    onSuccess: (result, scriptName) => {
+      consumeScriptStartOutcome({
+        result,
+        scriptName,
+        previewStartNames: previewStartNamesRef.current,
+        onPreviewTerminal: recordPreviewTerminalId,
+        onOrdinaryTerminal: input.onScriptTerminalStarted,
+      });
+    },
+  });
+
+  const stopScriptMutation = useMutation({
+    mutationFn: (stopInput: {
+      scriptName: string;
+      terminalId?: string | null;
+      isPreviewStop?: boolean;
+    }) =>
+      requestStopWorkspaceScript({
+        client,
+        scripts,
+        scriptName: stopInput.scriptName,
+        terminalId: stopInput.terminalId,
+        clientUnavailableMessage: t("common.errors.daemonClientUnavailable"),
+        stopFailedMessage: (scriptName) => t("workspace.scripts.states.stopFailed", { scriptName }),
+      }),
+    onError: (error, stopInput) => {
+      pendingRestartRef.current.delete(stopInput.scriptName);
+      showScriptMutationError({
+        toast,
+        error,
+        fallbackMessage: t("workspace.scripts.states.stopFailed", {
+          scriptName: stopInput.scriptName,
+        }),
+      });
+    },
+    onSuccess: (_result, stopInput) => {
+      // Only the preview's own Stop closes the preview, and only once the stop succeeded.
+      // A refused stop keeps the preview and its error is already surfaced.
+      if (stopInput.isPreviewStop) {
+        preview?.onClosePreview(stopInput.scriptName);
+      }
+    },
+  });
+
+  // Restart = kill the script terminal, then start again once the daemon
+  // reports the script as stopped (it tears the runtime entry down on exit).
+  const startScript = startScriptMutation.mutate;
+  const stopScript = useCallback(
+    (scriptName: string) => stopScriptMutation.mutate({ scriptName }),
+    [stopScriptMutation],
+  );
+  const restartScript = useCallback(
+    (scriptName: string) => {
+      pendingRestartRef.current.add(scriptName);
+      stopScriptMutation.mutate({ scriptName });
+    },
+    [stopScriptMutation],
+  );
+
+  useEffect(() => {
+    consumePendingRestarts({
+      pending: pendingRestartRef.current,
+      scripts,
+      startScript,
+    });
+  }, [scripts, startScript]);
+
+  const startPreviewService = useCallback(
+    (scriptName: string) => {
+      if (previewKey === null) {
+        return;
+      }
+      const script = findStartablePreviewScript({ scripts, scriptName });
+      if (!script) {
+        return;
+      }
+      // One launch at a time, synchronously guarded so a double press cannot queue two starts.
+      if (startScriptMutation.isPending || previewStartNamesRef.current.has(scriptName)) {
+        return;
+      }
+      previewStartNamesRef.current.add(scriptName);
+      activePreviewScriptRef.current = scriptName;
+      setPendingPreviewScriptName(scriptName);
+      setPreferredScript(previewKey, scriptName);
+      startScriptMutation.mutate(scriptName);
+    },
+    [previewKey, scripts, startScriptMutation, setPreferredScript],
+  );
+
+  const stopPreviewService = useCallback(() => {
+    const scriptName = preferredService?.scriptName;
+    if (!scriptName) {
+      return;
+    }
+    // Stopping cancels a still-pending preview open right away; the preview itself only
+    // closes once the stop reports success.
+    cancelPendingPreview(scriptName);
+    stopScriptMutation.mutate({
+      scriptName,
+      terminalId: resolveKnownScriptTerminalId({
+        script: preferredService,
+        trackedByScript: previewTerminalIdByScript,
+        trackedFirst: true,
+      }),
+      isPreviewStop: true,
+    });
+  }, [cancelPendingPreview, preferredService, previewTerminalIdByScript, stopScriptMutation]);
+
+  const selectPreviewService = useCallback(
+    (scriptName: string) => {
+      if (previewKey === null) {
+        return;
+      }
+      const script = scripts.find((candidate) => candidate.scriptName === scriptName);
+      if (!script) {
+        return;
+      }
+      setPreferredScript(previewKey, scriptName);
+      const url = resolvePreviewServiceUrl({
+        script,
+        preferredRouteKind: input.preferredRouteKind,
+        activeConnection,
+      });
+      if (url) {
+        preview?.onOpenPreview({ scriptName, url });
+        return;
+      }
+      startPreviewService(scriptName);
+    },
+    [
+      activeConnection,
+      input.preferredRouteKind,
+      preview,
+      previewKey,
+      scripts,
+      setPreferredScript,
+      startPreviewService,
+    ],
+  );
+
+  const showUnhealthyPreviewToast = useCallback(
+    (scriptName: string) => {
+      toast.show(t("workspace.scripts.states.previewUnhealthy", { scriptName }), {
+        variant: "error",
+      });
+    },
+    [t, toast],
+  );
+
+  // Wait for the existing status reports: open once the service is running, healthy and has a
+  // resolved URL. Unhealthy cancels the wait and reports; the logs stay reachable in the menu.
+  useEffect(() => {
+    const scriptName = pendingPreviewScriptName;
+    if (!scriptName || !preview || activePreviewScriptRef.current !== scriptName) {
+      return;
+    }
+    // The ref clears synchronously on cancel (stop, workspace change, unmount), while the
+    // pending state only lands on the next render — this guard keeps stale reports from opening.
+    applyPreviewWaitDecision({
+      decision: resolvePreviewWaitDecision({
+        script: scripts.find((candidate) => candidate.scriptName === scriptName),
+        preferredRouteKind: input.preferredRouteKind,
+        activeConnection,
+      }),
+      scriptName,
+      cancel: cancelPendingPreview,
+      open: preview.onOpenPreview,
+      reportUnhealthy: showUnhealthyPreviewToast,
+    });
+  }, [
+    activeConnection,
+    cancelPendingPreview,
+    input.preferredRouteKind,
+    pendingPreviewScriptName,
+    preview,
+    scripts,
+    showUnhealthyPreviewToast,
+  ]);
+
+  // A pending open does not survive a workspace change or unmount; stale reports are ignored
+  // because the wait effect only acts while the pending flag for this workspace is set.
+  useEffect(() => {
+    return () => {
+      activePreviewScriptRef.current = null;
+      setPendingPreviewScriptName(null);
+    };
+  }, [serverId, workspaceId]);
+
+  return {
+    services,
+    previewEnabled,
+    preferredService,
+    preferredScriptName: preferredService?.scriptName ?? null,
+    isWaitingForPreview: previewEnabled && pendingPreviewScriptName !== null,
+    hasKnownTerminal:
+      resolveKnownScriptTerminalId({
+        script: preferredService,
+        trackedByScript: previewTerminalIdByScript,
+      }) !== null,
+    isStartPending: startScriptMutation.isPending,
+    isStopPending: stopScriptMutation.isPending,
+    menuOpen,
+    setMenuOpen,
+    openMenu: useCallback(() => setMenuOpen(true), []),
+    startPreviewService,
+    stopPreviewService,
+    selectPreviewService,
+    startScript,
+    stopScript,
+    restartScript,
+  };
+}
+
 export function WorkspaceScriptsButton({
   serverId,
   workspaceId,
@@ -544,6 +1233,7 @@ export function WorkspaceScriptsButton({
   onOpenUrlInBrowserTab,
   hideLabels,
   presentation = "split",
+  preview,
 }: WorkspaceScriptsButtonProps): ReactElement | null {
   const { t } = useTranslation();
   const toast = useToast();
@@ -556,75 +1246,18 @@ export function WorkspaceScriptsButton({
     (state) => state.setPreferredRoute,
   );
   const liveTerminalIdSet = useMemo(() => new Set(liveTerminalIds), [liveTerminalIds]);
-  const pendingRestartRef = useRef<Set<string>>(new Set());
 
-  const startScriptMutation = useMutation({
-    mutationFn: async (scriptName: string) => {
-      if (!client) {
-        throw new Error(t("common.errors.daemonClientUnavailable"));
-      }
-      const result = await client.startWorkspaceScript(workspaceId, scriptName);
-      if (result.error) {
-        throw new Error(result.error);
-      }
-      return result;
-    },
-    onError: (error, scriptName) => {
-      toast.show(
-        error instanceof Error
-          ? error.message
-          : t("workspace.scripts.states.startFailed", { scriptName }),
-        {
-          variant: "error",
-        },
-      );
-    },
-    onSuccess: (result) => {
-      if (result.terminalId) {
-        onScriptTerminalStarted?.(result.terminalId);
-      }
-    },
+  const scriptControls = useWorkspaceScriptControls({
+    preview,
+    serverId,
+    workspaceId,
+    scripts,
+    client,
+    activeConnection,
+    preferredRouteKind,
+    toast,
+    onScriptTerminalStarted,
   });
-  const startScript = startScriptMutation.mutate;
-
-  const stopScriptMutation = useMutation({
-    mutationFn: async (scriptName: string) => {
-      if (!client) {
-        throw new Error(t("common.errors.daemonClientUnavailable"));
-      }
-      const terminalId = scripts.find((s) => s.scriptName === scriptName)?.terminalId;
-      if (!terminalId) {
-        throw new Error(t("workspace.scripts.states.stopFailed", { scriptName }));
-      }
-      const result = await client.killTerminal(terminalId);
-      if (!result.success) {
-        throw new Error(t("workspace.scripts.states.stopFailed", { scriptName }));
-      }
-    },
-    onError: (error, scriptName) => {
-      pendingRestartRef.current.delete(scriptName);
-      toast.show(
-        error instanceof Error
-          ? error.message
-          : t("workspace.scripts.states.stopFailed", { scriptName }),
-        {
-          variant: "error",
-        },
-      );
-    },
-  });
-
-  // Restart = kill the script terminal, then start again once the daemon
-  // reports the script as stopped (it tears the runtime entry down on exit).
-  useEffect(() => {
-    const pending = pendingRestartRef.current;
-    if (pending.size === 0) return;
-    for (const script of scripts) {
-      if (!pending.has(script.scriptName) || script.lifecycle === "running") continue;
-      pending.delete(script.scriptName);
-      startScript(script.scriptName);
-    }
-  }, [scripts, startScript]);
 
   const triggerStyle = useCallback(
     ({ hovered, pressed, open }: { hovered: boolean; pressed: boolean; open: boolean }) => [
@@ -633,24 +1266,6 @@ export function WorkspaceScriptsButton({
         (presentation === "ghost" ? styles.ghostButtonHovered : styles.splitButtonPrimaryHovered),
     ],
     [presentation],
-  );
-
-  const handleStartScript = useCallback(
-    (scriptName: string) => startScriptMutation.mutate(scriptName),
-    [startScriptMutation],
-  );
-
-  const handleStopScript = useCallback(
-    (scriptName: string) => stopScriptMutation.mutate(scriptName),
-    [stopScriptMutation],
-  );
-
-  const handleRestartScript = useCallback(
-    (scriptName: string) => {
-      pendingRestartRef.current.add(scriptName);
-      stopScriptMutation.mutate(scriptName);
-    },
-    [stopScriptMutation],
   );
 
   const handleCopyUrl = useCallback(
@@ -679,44 +1294,66 @@ export function WorkspaceScriptsButton({
   return (
     <View style={styles.row}>
       <View style={presentation === "ghost" ? styles.ghostButtonFrame : styles.splitButton}>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            testID="workspace-scripts-button"
-            style={triggerStyle}
-            accessibilityRole="button"
-            accessibilityLabel={t("workspace.scripts.accessibility.trigger")}
-          >
-            <View style={styles.splitButtonContent}>
-              <ThemedPlay
-                size={triggerIconSize}
-                uniProps={triggerPlayMapping}
-                {...triggerPlayProps}
-              />
-              {!hideLabels && (
-                <Text style={styles.splitButtonText}>{t("workspace.scripts.title")}</Text>
-              )}
-              {presentation === "split" ? (
-                <ThemedChevronDown size={16} uniProps={extraMutedIconColorMapping} />
-              ) : null}
-            </View>
-          </DropdownMenuTrigger>
+        <DropdownMenu
+          open={scriptControls.previewEnabled ? scriptControls.menuOpen : undefined}
+          onOpenChange={scriptControls.previewEnabled ? scriptControls.setMenuOpen : undefined}
+        >
+          {scriptControls.previewEnabled ? (
+            <WorkspaceScriptsPreviewAction
+              scriptName={scriptControls.preferredScriptName}
+              isRunning={scriptControls.preferredService?.lifecycle === "running"}
+              isWaiting={scriptControls.isWaitingForPreview}
+              hasKnownTerminal={scriptControls.hasKnownTerminal}
+              onChoose={scriptControls.openMenu}
+              onStart={scriptControls.startPreviewService}
+              onStop={scriptControls.stopPreviewService}
+            />
+          ) : (
+            <DropdownMenuTrigger
+              testID="workspace-scripts-button"
+              style={triggerStyle}
+              accessibilityRole="button"
+              accessibilityLabel={t("workspace.scripts.accessibility.trigger")}
+            >
+              <View style={styles.splitButtonContent}>
+                <ThemedPlay
+                  size={triggerIconSize}
+                  uniProps={triggerPlayMapping}
+                  {...triggerPlayProps}
+                />
+                {!hideLabels && (
+                  <Text style={styles.splitButtonText}>{t("workspace.scripts.title")}</Text>
+                )}
+                {presentation === "split" ? (
+                  <ThemedChevronDown size={16} uniProps={extraMutedIconColorMapping} />
+                ) : null}
+              </View>
+            </DropdownMenuTrigger>
+          )}
           <DropdownMenuContent
             align="end"
             minWidth={200}
             maxWidth={280}
             testID="workspace-scripts-menu"
           >
+            {scriptControls.previewEnabled ? (
+              <PreviewServiceMenuSection
+                services={scriptControls.services}
+                preferredScriptName={scriptControls.preferredScriptName}
+                onSelectService={scriptControls.selectPreviewService}
+              />
+            ) : null}
             {scripts.map((script) => (
               <ScriptRow
                 key={script.scriptName}
                 script={script}
                 liveTerminalIdSet={liveTerminalIdSet}
                 activeConnection={activeConnection}
-                isStartPending={startScriptMutation.isPending}
-                isStopPending={stopScriptMutation.isPending}
-                onStartScript={handleStartScript}
-                onStopScript={handleStopScript}
-                onRestartScript={handleRestartScript}
+                isStartPending={scriptControls.isStartPending}
+                isStopPending={scriptControls.isStopPending}
+                onStartScript={scriptControls.startScript}
+                onStopScript={scriptControls.stopScript}
+                onRestartScript={scriptControls.restartScript}
                 onCopyUrl={handleCopyUrl}
                 preferredRouteKind={preferredRouteKind}
                 onSelectRouteKind={handleSelectRouteKind}
@@ -774,6 +1411,19 @@ const styles = StyleSheet.create((theme) => ({
   },
   splitButtonPrimaryHovered: {
     backgroundColor: theme.colors.surface2,
+  },
+  splitButtonSecondary: {
+    paddingHorizontal: theme.spacing[1.5],
+    justifyContent: "center",
+  },
+  splitButtonSecondaryContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  splitButtonDivider: {
+    width: 1,
+    backgroundColor: theme.colors.borderAccent,
   },
   splitButtonText: {
     fontSize: theme.fontSize.base,
