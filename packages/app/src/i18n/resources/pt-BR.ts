@@ -730,6 +730,12 @@ export const ptBR: TranslationResources = {
         copyUrl: "Copiar URL de {{scriptName}}",
         chooseUrl: "Escolher URL para {{scriptName}}",
         script: "script {{scriptName}}",
+        startPreview: "Iniciar {{scriptName}} e abrir a prévia",
+        stopPreview: "Parar {{scriptName}} e fechar a prévia",
+        choosePreviewService: "Escolha um serviço para pré-visualizar",
+      },
+      preview: {
+        section: "Prévia de desenvolvimento",
       },
       routes: {
         public: "Proxy reverso",
@@ -740,6 +746,9 @@ export const ptBR: TranslationResources = {
         exitCode: "saída {{code}}",
         startFailed: "Falha ao iniciar {{scriptName}}",
         stopFailed: "Falha ao parar {{scriptName}}",
+        previewUnhealthy: "{{scriptName}} está com falha",
+        previewPlacementUnavailable:
+          "Não foi possível abrir a prévia de desenvolvimento no layout atual",
       },
     },
     tree: {

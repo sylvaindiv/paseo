@@ -371,6 +371,8 @@ Override the command used to launch any provider with the `command` field. This 
 
 The `command` array completely replaces the default command for that provider. The binary must exist on the system — Paseo checks for its availability and will mark the provider as unavailable if not found.
 
+The model catalog listed in a provider's settings comes from the binary that is actually launched. Refreshing the catalog spawns a new process of that same binary; it never updates the binary itself. A built-in provider whose binary updates in the background (e.g. Codex, via its own update mechanism) can therefore show a stale catalog — opening the Codex model sheet refetches it when it's more than an hour old.
+
 ### OMP profiles and Pi-compatible forks
 
 OMP ships as a first-class built-in provider option. It is disabled by default; enable it with:

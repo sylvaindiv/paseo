@@ -21,7 +21,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, type Href } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { useTranslation } from "react-i18next";
-import { ChevronDown } from "lucide-react-native";
+import { ChevronDown, ChevronRight } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
@@ -90,6 +90,8 @@ import type {
 } from "@/keyboard/keyboard-action-dispatcher";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { normalizeWorkspaceTabTarget, workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
+import { extraMutedIconColorMapping } from "@/components/ui/icon-color";
+import { findWorkspaceDevPreview, openWorkspaceDevPreview } from "@/workspace-tabs/dev-preview";
 import { useVisibleAgentIds } from "./visible-agent-ids";
 import {
   getHostRuntimeStore,
@@ -949,6 +951,56 @@ function WorkspaceHeaderProjectRow({
   );
 }
 
+const ThemedChevronRight = withUnistyles(ChevronRight);
+
+/**
+ * Desktop reads as a breadcrumb: the project, then the branch it sits on. Without a branch the
+ * workspace name takes the second slot — the header never invents one.
+ */
+function WorkspaceHeaderProjectBranchBreadcrumb({
+  project,
+  workspaceName,
+  currentBranchName,
+}: {
+  project: string;
+  workspaceName: string;
+  currentBranchName: string | null;
+}) {
+  const projectName = project.trim();
+  const projectRepeatsWorkspaceWithoutBranch =
+    !currentBranchName &&
+    projectName.length > 0 &&
+    projectName.toLocaleLowerCase() === workspaceName.toLocaleLowerCase();
+  const showProject = projectName.length > 0 && !projectRepeatsWorkspaceWithoutBranch;
+  return (
+    <View style={styles.headerBreadcrumb} testID="workspace-header-breadcrumb">
+      {showProject ? (
+        <>
+          <Text
+            testID="workspace-header-subtitle"
+            style={styles.headerBreadcrumbProject}
+            numberOfLines={1}
+          >
+            {projectName}
+          </Text>
+          <ThemedChevronRight
+            size={12}
+            uniProps={extraMutedIconColorMapping}
+            style={styles.headerBreadcrumbChevron}
+          />
+        </>
+      ) : null}
+      <Text
+        testID={currentBranchName ? "workspace-header-branch" : "workspace-header-title"}
+        style={styles.headerBreadcrumbBranch}
+        numberOfLines={1}
+      >
+        {currentBranchName ?? workspaceName}
+      </Text>
+    </View>
+  );
+}
+
 interface WorkspaceHeaderTitleBarProps {
   isLoading: boolean;
   title: string;
@@ -1010,6 +1062,35 @@ function WorkspaceHeaderTitleBar({
   const [editingIntention, setEditingIntention] = useState(false);
   const editIntention = useCallback(() => setEditingIntention(true), []);
   const closeIntention = useCallback(() => setEditingIntention(false), []);
+  let headerTitleContent: ReactNode;
+  if (isLoading) {
+    headerTitleContent = (
+      <View style={styles.headerTitleTextGroup}>
+        <View style={styles.headerTitleSkeleton} />
+      </View>
+    );
+  } else if (isMobile) {
+    headerTitleContent = (
+      <View style={styles.headerTitleTextGroup}>
+        <ScreenTitle testID="workspace-header-title">{title}</ScreenTitle>
+        <WorkspaceHeaderProjectRow
+          subtitle={subtitle}
+          isSubtitleDistinct={isSubtitleDistinct}
+          serverId={normalizedServerId}
+        />
+      </View>
+    );
+  } else {
+    headerTitleContent = (
+      <View style={styles.headerTitleTextGroup}>
+        <WorkspaceHeaderProjectBranchBreadcrumb
+          project={subtitle}
+          workspaceName={title}
+          currentBranchName={currentBranchName}
+        />
+      </View>
+    );
+  }
   return (
     <View style={styles.headerTitleContainer}>
       {editingIntention && supportsWorkspaceIntent ? (
@@ -1019,20 +1100,7 @@ function WorkspaceHeaderTitleBar({
           onClose={closeIntention}
         />
       ) : null}
-      {isLoading ? (
-        <View style={styles.headerTitleTextGroup}>
-          <View style={styles.headerTitleSkeleton} />
-        </View>
-      ) : (
-        <View style={styles.headerTitleTextGroup}>
-          <ScreenTitle testID="workspace-header-title">{title}</ScreenTitle>
-          <WorkspaceHeaderProjectRow
-            subtitle={subtitle}
-            isSubtitleDistinct={isSubtitleDistinct}
-            serverId={normalizedServerId}
-          />
-        </View>
-      )}
+      {headerTitleContent}
       <View style={styles.compactHeaderMenuCluster}>
         {isMobile ? (
           <WorkspaceHeaderMenuMobile
@@ -2490,6 +2558,52 @@ function WorkspaceScreenContent({
     [openWorkspaceTabFocused, persistenceKey],
   );
 
+  const handleOpenDevPreview = useCallback(
+    (input: { scriptName: string; url: string }) => {
+      if (!persistenceKey || !getIsElectron()) {
+        return;
+      }
+      const result = openWorkspaceDevPreview({
+        workspaceKey: persistenceKey,
+        scriptName: input.scriptName,
+        url: input.url,
+      });
+      if (!result.ok) {
+        toast.show(t("workspace.scripts.states.previewPlacementUnavailable"), {
+          variant: "error",
+        });
+      }
+    },
+    [persistenceKey, t, toast],
+  );
+
+  // Closing the preview goes through the same cleanup path as any browser tab, which also
+  // tears down the webview and its Electron registration. Ordinary browsers never match.
+  const handleCloseDevPreview = useCallback(
+    (scriptName: string) => {
+      if (!persistenceKey) {
+        return;
+      }
+      const existing = findWorkspaceDevPreview({ workspaceKey: persistenceKey, scriptName });
+      if (!existing) {
+        return;
+      }
+      closeWorkspaceTabWithCleanup({
+        tabId: existing.tabId,
+        target: { kind: "browser", browserId: existing.browserId },
+      });
+    },
+    [closeWorkspaceTabWithCleanup, persistenceKey],
+  );
+
+  const workspaceScriptsPreviewActions = useMemo(
+    () =>
+      getIsElectron()
+        ? { onOpenPreview: handleOpenDevPreview, onClosePreview: handleCloseDevPreview }
+        : undefined,
+    [handleCloseDevPreview, handleOpenDevPreview],
+  );
+
   useDesktopBrowserNewTabRequests({
     enabled: Boolean(persistenceKey),
     workspaceLayout,
@@ -3783,6 +3897,7 @@ function WorkspaceScreenContent({
             onScriptTerminalStarted={handleScriptTerminalStarted}
             onViewTerminal={handleViewScriptTerminal}
             onOpenUrlInBrowserTab={handleOpenUrlInBrowserTab}
+            preview={workspaceScriptsPreviewActions}
             hideLabels
           />
         ) : null}
@@ -3835,6 +3950,7 @@ function WorkspaceScreenContent({
       handleScriptTerminalStarted,
       handleViewScriptTerminal,
       handleOpenUrlInBrowserTab,
+      workspaceScriptsPreviewActions,
       handleToggleExplorerSidebar,
       explorerSidebarToggleLabel,
       explorerSidebarToggleAccessibilityState,
@@ -4232,6 +4348,28 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundExtraMuted,
     fontSize: theme.fontSize.sm,
     flexShrink: 0,
+  },
+  headerBreadcrumb: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  headerBreadcrumbProject: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  headerBreadcrumbChevron: {
+    flexShrink: 0,
+  },
+  headerBreadcrumbBranch: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    flexShrink: 1,
+    minWidth: 0,
   },
   headerTitleSkeleton: {
     width: 220,

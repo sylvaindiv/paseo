@@ -727,6 +727,12 @@ export const ar: TranslationResources = {
         copyUrl: "نسخ عنوان URL لـ{{scriptName}}",
         chooseUrl: "اختيار رابط {{scriptName}}",
         script: "البرنامج النصي{{scriptName}}",
+        startPreview: "ابدأ {{scriptName}} وافتح المعاينة",
+        stopPreview: "أوقف {{scriptName}} وأغلق المعاينة",
+        choosePreviewService: "اختر خدمة للمعاينة",
+      },
+      preview: {
+        section: "معاينة التطوير",
       },
       routes: {
         public: "الوكيل العكسي",
@@ -737,6 +743,8 @@ export const ar: TranslationResources = {
         exitCode: "الخروج من{{code}}",
         startFailed: "فشل بدء تشغيل{{scriptName}}",
         stopFailed: "فشل إيقاف{{scriptName}}",
+        previewUnhealthy: "{{scriptName}} غير سليم",
+        previewPlacementUnavailable: "تعذر فتح معاينة التطوير في التخطيط الحالي",
       },
     },
     tree: {

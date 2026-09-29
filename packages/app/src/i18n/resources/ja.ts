@@ -729,6 +729,12 @@ export const ja: TranslationResources = {
         copyUrl: "{{scriptName}}のURLをコピー",
         chooseUrl: "{{scriptName}}のURLを選択",
         script: "{{scriptName}}スクリプト",
+        startPreview: "{{scriptName}}を起動してプレビューを開く",
+        stopPreview: "{{scriptName}}を停止してプレビューを閉じる",
+        choosePreviewService: "プレビューするサービスを選択",
+      },
+      preview: {
+        section: "開発プレビュー",
       },
       routes: {
         public: "リバースプロキシ",
@@ -739,6 +745,8 @@ export const ja: TranslationResources = {
         exitCode: "終了コード: {{code}}",
         startFailed: "{{scriptName}}の起動に失敗しました",
         stopFailed: "{{scriptName}}の停止に失敗しました",
+        previewUnhealthy: "{{scriptName}} が異常です",
+        previewPlacementUnavailable: "現在のレイアウトでは開発プレビューを開けません",
       },
     },
     tree: {

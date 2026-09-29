@@ -94,11 +94,15 @@ const PANE_SPLIT_ACTIONS_RESERVED_WIDTH =
   PANE_SPLIT_ACTIONS_HORIZONTAL_PADDING * 2 +
   PANE_SPLIT_ACTIONS_OUTER_MARGIN;
 const PANE_MAXIMIZE_ACTION_RESERVED_WIDTH = smallIconButtonChromeFrameSize(false) + 1;
-// Chip geometry. `layoutMetrics` measures tabs from these same numbers, so a chip that changes
+// Tab geometry. `layoutMetrics` measures tabs from these same numbers, so a tab that changes
 // shape without changing them mis-measures and drops the row into the overflow-scroll fallback at
 // the wrong width. Keep them together.
-// Tabs and the adjacent New Tab trigger are one control family. Keep their outer box and corner
-// token identical; only their horizontal sizing differs (content-width chip versus square icon).
+// The adjacent New Tab trigger keeps the shared control-height box; tabs fill the row's inner
+// height (TAB_ROW_INNER_HEIGHT) so the active underline sits flush against the row's bottom edge
+// instead of floating above it. Only their horizontal sizing differs.
+// Agent and provider_subagent tabs show their title alone: their icon allocation lives in the
+// per-tab label widths instead of the shared chrome, so files, terminals and browsers keep icons
+// while conversations gain the space.
 const TAB_CHIP_HORIZONTAL_PADDING = 8;
 const TAB_CHIP_GAP = 4;
 const TAB_ROW_PADDING_HORIZONTAL = 4;
@@ -106,11 +110,13 @@ const TAB_ICON_WIDTH = 14;
 const TAB_CONTENT_GAP = 4;
 const TAB_DROP_INDICATOR_WIDTH = 4;
 const TAB_MODIFIED_DOT_SIZE = 8;
-const TAB_MIN_WIDTH = 96;
-const TAB_MAX_WIDTH = 160;
+const TAB_MIN_WIDTH = 180;
+const TAB_MAX_WIDTH = 320;
+const TAB_ACTIVE_UNDERLINE_HEIGHT = 2;
+// The tab row is the secondary header minus its 1px bottom border; tabs fill that inner box.
+const TAB_ROW_INNER_HEIGHT = WORKSPACE_SECONDARY_HEADER_HEIGHT - 1;
 const TAB_CLOSE_BUTTON_RESERVED_WIDTH = 0;
 const TAB_LABEL_LAYOUT_ALLOWANCE = 4;
-const AGENT_TOOLTIP_TITLE_MAX_LENGTH = 80;
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedX = withUnistyles(X);
@@ -141,11 +147,6 @@ function updateMeasuredWidth(
 
 function normalizeAgentTooltipTitle(title: string): string {
   return title.replace(/\s+/g, " ").trim();
-}
-
-function formatAgentTooltipTitle(singleLineTitle: string): string {
-  if (singleLineTitle.length <= AGENT_TOOLTIP_TITLE_MAX_LENGTH) return singleLineTitle;
-  return `${singleLineTitle.slice(0, AGENT_TOOLTIP_TITLE_MAX_LENGTH - 1).trimEnd()}…`;
 }
 
 function formatAgentTooltipActivity(compactActivity: string): string {
@@ -457,6 +458,8 @@ interface WorkspaceTabLabel {
   key: string;
   label: string;
   modified: boolean;
+  /** Tabs whose icon is part of the rendered row; its width rides along in the label width. */
+  icon: boolean;
 }
 
 interface WorkspaceTabLabelMeasurement {
@@ -480,15 +483,17 @@ function completeWorkspaceTabLabelWidths(
   measurements: Map<string, WorkspaceTabLabelMeasurement>,
 ): number[] | null {
   const widths: number[] = [];
-  for (const { key, label, modified } of labels) {
+  for (const { key, label, modified, icon } of labels) {
     const measurement = measurements.get(key);
     if (!measurement || measurement.label !== label || measurement.width <= 0) {
       return null;
     }
     // The modified dot sits in the content row, so a modified tab needs that much more width
-    // before its label starts truncating.
+    // before its label starts truncating. An iconified tab carries its icon and the content gap
+    // the same way — the shared chrome width only covers what every tab renders.
     const modifiedAllowance = modified ? TAB_CONTENT_GAP + TAB_MODIFIED_DOT_SIZE : 0;
-    widths.push(measurement.width + TAB_LABEL_LAYOUT_ALLOWANCE + modifiedAllowance);
+    const iconAllowance = icon ? TAB_ICON_WIDTH + TAB_CONTENT_GAP : 0;
+    widths.push(measurement.width + TAB_LABEL_LAYOUT_ALLOWANCE + modifiedAllowance + iconAllowance);
   }
   return widths;
 }
@@ -639,15 +644,11 @@ function useMiddleClickClose(onClose: () => void) {
   return ref;
 }
 
-/** The chip fill the running-status ring has to knock out of. Mirrors `styles.tab*` exactly. */
-function resolveChipBackdrop({
-  isActiveFocused,
-  isFilled,
-}: {
-  isActiveFocused: boolean;
-  isFilled: boolean;
-}): SurfaceBackdrop {
-  if (isActiveFocused) return "surface2";
+/**
+ * Flat tabs: only a hover carries a fill, so the backdrop the running-status ring and the
+ * close-button scrim knock out of is the surface the tab actually sits on.
+ */
+function resolveChipBackdrop({ isFilled }: { isFilled: boolean }): SurfaceBackdrop {
   return isFilled ? "surface1" : "surface0";
 }
 
@@ -673,12 +674,20 @@ function TabHandleContent({
     () => ({ statusBucket: presentation.statusBucket ?? "none" }),
     [presentation.statusBucket],
   );
+  // Conversations read as their title alone; files, terminals and browsers keep their icon.
+  const showIcon = presentation.kind !== "agent" && presentation.kind !== "provider_subagent";
 
   return (
     <View style={styles.tabHandle} dataSet={tabHandleDataSet}>
-      <View style={styles.tabIcon}>
-        <WorkspaceTabIcon presentation={presentation} active={isHighlighted} backdrop={backdrop} />
-      </View>
+      {showIcon ? (
+        <View style={styles.tabIcon}>
+          <WorkspaceTabIcon
+            presentation={presentation}
+            active={isHighlighted}
+            backdrop={backdrop}
+          />
+        </View>
+      ) : null}
       {showLabel && presentation.titleState === "loading" ? (
         <View style={tabLabelSkeletonStyle} />
       ) : null}
@@ -745,15 +754,12 @@ function TabChip({
   );
   const isCompact = useIsCompactFormFactor();
   const [hovered, setHovered] = useState(false);
-  // An active tab in a pane that does not have focus stays legible but quiet: it keeps the fill of
-  // a hovered chip and the muted label, so only one chip in the window reads as the live one.
+  // Flat tabs mark the active one with a 2px underline and a foreground label instead of a fill;
+  // a hovered tab keeps a quiet surface so pointer aim still reads.
   const isActiveFocused = isActive && isFocused;
   const isHovered = hovered || isCloseHovered;
   const isHighlighted = isActiveFocused || isHovered;
-  const chipBackdrop: SurfaceBackdrop = resolveChipBackdrop({
-    isActiveFocused,
-    isFilled: isActive || isHovered,
-  });
+  const chipBackdrop: SurfaceBackdrop = resolveChipBackdrop({ isFilled: isHovered });
   const showCloseControl = showCloseButton && (isHovered || isNative || isCompact || isClosingTab);
   const closeButtonDragBlockers = isWeb
     ? ({
@@ -769,8 +775,6 @@ function TabChip({
   const tabChipStyle = useCallback(
     () => [
       styles.tab,
-      isActiveFocused && styles.tabActive,
-      isActive && !isFocused && styles.tabActiveUnfocused,
       !isActive && isHovered && styles.tabHovered,
       isWeb && isDragging && ({ cursor: "grabbing" } as object),
       {
@@ -779,7 +783,7 @@ function TabChip({
         maxWidth: resolvedTabWidth,
       },
     ],
-    [isActive, isActiveFocused, isDragging, isFocused, isHovered, resolvedTabWidth],
+    [isActive, isDragging, isHovered, resolvedTabWidth],
   );
 
   const handleTabPointerEnter = useCallback(() => {
@@ -856,6 +860,14 @@ function TabChip({
                 tabLabelStyle={tabLabelStyle}
                 modifiedTestId={`workspace-tab-modified-${testIdentity}`}
               />
+              {isActive ? (
+                <View
+                  style={
+                    isActiveFocused ? styles.tabActiveUnderline : styles.tabActiveUnfocusedUnderline
+                  }
+                  pointerEvents="none"
+                />
+              ) : null}
             </ContextMenuTrigger>
           </TooltipTrigger>
           <TooltipContent
@@ -1054,8 +1066,10 @@ function ResolvedWorkspaceDesktopTabsRow({
       tabGap: TAB_CHIP_GAP,
       minTabWidth: TAB_MIN_WIDTH,
       maxTabWidth: TAB_MAX_WIDTH,
-      tabIconWidth: TAB_ICON_WIDTH,
-      tabContentGap: TAB_CONTENT_GAP,
+      // Iconified tabs carry their icon inside their measured label width, so the shared chrome
+      // stays icon-free and agent tabs are not billed for a slot they never render.
+      tabIconWidth: 0,
+      tabContentGap: 0,
       tabHorizontalPadding: TAB_CHIP_HORIZONTAL_PADDING,
       closeButtonWidth: TAB_CLOSE_BUTTON_RESERVED_WIDTH,
     }),
@@ -1100,7 +1114,12 @@ function ResolvedWorkspaceDesktopTabsRow({
           tab.presentation.titleState === "loading"
             ? getFallbackTabLabel(tab.tab, fallbackTabLabels)
             : tab.presentation.label;
-        return { key: tab.tab.key, label, modified: tab.presentation.modified };
+        return {
+          key: tab.tab.key,
+          label,
+          modified: tab.presentation.modified,
+          icon: tab.tab.target.kind !== "agent" && tab.tab.target.kind !== "provider_subagent",
+        };
       }),
     [fallbackTabLabels, tabs],
   );
@@ -1488,14 +1507,13 @@ function ResolvedDesktopTabChip({
 
   const rawTooltipLabel =
     presentation.titleState === "loading" ? t("common.states.loading") : presentation.tooltip;
+  // The tooltip carries the full title: agent titles are whitespace-normalized but never
+  // truncated, matching the single ellipsized line in the tab.
   const accessibilityLabel =
     item.tab.target.kind === "agent"
       ? normalizeAgentTooltipTitle(rawTooltipLabel)
       : rawTooltipLabel;
-  const tooltipLabel =
-    item.tab.target.kind === "agent"
-      ? formatAgentTooltipTitle(accessibilityLabel)
-      : rawTooltipLabel;
+  const tooltipLabel = accessibilityLabel;
 
   return (
     <View style={styles.tabSlot}>
@@ -1581,9 +1599,9 @@ const styles = StyleSheet.create((theme) => ({
     marginRight: PANE_SPLIT_ACTIONS_OUTER_MARGIN,
   },
   tab: {
-    height: buttonControlHeight.xs,
+    height: TAB_ROW_INNER_HEIGHT,
     paddingHorizontal: TAB_CHIP_HORIZONTAL_PADDING,
-    borderRadius: theme.borderRadius.md,
+    borderRadius: 0,
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[1],
@@ -1592,11 +1610,23 @@ const styles = StyleSheet.create((theme) => ({
   tabHovered: {
     backgroundColor: theme.colors.surface1,
   },
-  tabActive: {
-    backgroundColor: theme.colors.surface2,
+  tabActiveUnderline: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: TAB_ACTIVE_UNDERLINE_HEIGHT,
+    backgroundColor: theme.colors.accent,
+    pointerEvents: "none",
   },
-  tabActiveUnfocused: {
-    backgroundColor: theme.colors.surface1,
+  tabActiveUnfocusedUnderline: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: TAB_ACTIVE_UNDERLINE_HEIGHT,
+    backgroundColor: theme.colors.foregroundExtraMuted,
+    pointerEvents: "none",
   },
   tabHoverFrame: {
     position: "relative",
@@ -1677,8 +1707,6 @@ const styles = StyleSheet.create((theme) => ({
     right: 0,
     bottom: 0,
     width: 48,
-    borderTopRightRadius: theme.borderRadius.md,
-    borderBottomRightRadius: theme.borderRadius.md,
     alignItems: "center",
     justifyContent: "center",
     zIndex: 2,

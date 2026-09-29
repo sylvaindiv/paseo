@@ -733,6 +733,12 @@ export const es: TranslationResources = {
         copyUrl: "Copiar URL de{{scriptName}}",
         chooseUrl: "Elegir URL para {{scriptName}}",
         script: "Guión{{scriptName}}",
+        startPreview: "Iniciar {{scriptName}} y abrir la vista previa",
+        stopPreview: "Detener {{scriptName}} y cerrar la vista previa",
+        choosePreviewService: "Elige un servicio para previsualizar",
+      },
+      preview: {
+        section: "Vista previa de desarrollo",
       },
       routes: {
         public: "Proxy inverso",
@@ -743,6 +749,9 @@ export const es: TranslationResources = {
         exitCode: "salir de{{code}}",
         startFailed: "No se pudo iniciar{{scriptName}}",
         stopFailed: "No se pudo detener{{scriptName}}",
+        previewUnhealthy: "{{scriptName}} con fallos",
+        previewPlacementUnavailable:
+          "No se pudo abrir la vista previa de desarrollo en la disposición actual",
       },
     },
     tree: {

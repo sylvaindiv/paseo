@@ -727,6 +727,12 @@ export const ko: TranslationResources = {
         copyUrl: "{{scriptName}} URL 복사",
         chooseUrl: "{{scriptName}}의 URL 선택",
         script: "{{scriptName}} 스크립트",
+        startPreview: "{{scriptName}} 시작 후 미리보기 열기",
+        stopPreview: "{{scriptName}} 중지 후 미리보기 닫기",
+        choosePreviewService: "미리볼 서비스 선택",
+      },
+      preview: {
+        section: "개발 미리보기",
       },
       routes: {
         public: "역방향 프록시",
@@ -737,6 +743,8 @@ export const ko: TranslationResources = {
         exitCode: "종료 {{code}}",
         startFailed: "{{scriptName}}을(를) 시작하지 못했습니다",
         stopFailed: "{{scriptName}}를 중지하지 못했습니다.",
+        previewUnhealthy: "{{scriptName}}이(가) 비정상 상태입니다",
+        previewPlacementUnavailable: "현재 레이아웃에서는 개발 미리보기를 열 수 없습니다",
       },
     },
     tree: {

@@ -68,6 +68,7 @@ export async function classifyExecution(
   briefing: string,
   signal?: AbortSignal,
   dependencies: { env?: NodeJS.ProcessEnv; fetch?: typeof fetch } = {},
+  options: { minConfidence?: number } = {},
 ): Promise<ExecutionDecision> {
   const key = await apiKey(dependencies.env ?? process.env);
   if (!key)
@@ -83,6 +84,7 @@ export async function classifyExecution(
     timedOut = true;
     controller.abort();
   }, 15_000);
+  const minConfidence = options.minConfidence ?? 0.5;
   try {
     let response: Response;
     try {
@@ -125,7 +127,7 @@ export async function classifyExecution(
       throw new Error("JEV a retourné une distribution de classification incohérente.");
     if (answer.probabilities[answer.choice] < Math.max(...Object.values(answer.probabilities)))
       throw new Error("JEV a retourné un choix incohérent avec sa distribution de classification.");
-    if (answer.confidence < 0.5)
+    if (answer.confidence < minConfidence)
       throw new Error(`JEV est insuffisamment confiant (${answer.confidence.toFixed(2)}).`);
     const route = routes.find((entry) => entry.category === answer.choice)!;
     return {
@@ -162,5 +164,6 @@ export function classifyInitialExecution(
       .join("\n\n"),
     signal,
     dependencies,
+    { minConfidence: 0 },
   );
 }

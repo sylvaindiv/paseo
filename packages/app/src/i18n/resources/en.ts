@@ -723,6 +723,12 @@ export const en = {
         copyUrl: "Copy {{scriptName}} URL",
         chooseUrl: "Choose URL for {{scriptName}}",
         script: "{{scriptName}} script",
+        startPreview: "Start {{scriptName}} and open preview",
+        stopPreview: "Stop {{scriptName}} and close preview",
+        choosePreviewService: "Choose a service to preview",
+      },
+      preview: {
+        section: "Development preview",
       },
       routes: {
         public: "Reverse proxy",
@@ -733,6 +739,8 @@ export const en = {
         exitCode: "exit {{code}}",
         startFailed: "Failed to start {{scriptName}}",
         stopFailed: "Failed to stop {{scriptName}}",
+        previewUnhealthy: "{{scriptName}} is unhealthy",
+        previewPlacementUnavailable: "Couldn't open the development preview in the current layout",
       },
     },
     tree: {

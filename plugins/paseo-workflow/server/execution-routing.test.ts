@@ -109,6 +109,29 @@ test("rejects confidence below 0.5 and accepts the threshold", async () => {
   ).resolves.toMatchObject({ category: "bounded" });
 });
 
+test("accepts a low-confidence but coherent initial classification", async () => {
+  const fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+    expect(JSON.parse(String(init?.body)).state).toContain(
+      "difficulty of implementing the request",
+    );
+    return response(
+      answer("bounded", 0.38, {
+        trivial: 0.15,
+        bounded: 0.38,
+        diagnostic: 0.18,
+        complex: 0.15,
+        critical: 0.14,
+      }),
+    );
+  };
+  await expect(
+    classifyInitialExecution({ prompt: "Ajouter Auto", modeId: "default" }, undefined, {
+      env,
+      fetch,
+    }),
+  ).resolves.toMatchObject({ category: "bounded", model: "gpt-5.6-sol", effort: "medium" });
+});
+
 test("rejects a choice that disagrees with its probability distribution", async () => {
   await expect(
     classifyExecution("plan", undefined, {
