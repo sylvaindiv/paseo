@@ -7,7 +7,10 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,25 +37,48 @@ function createFixture() {
   const daemonLog = join(root, "daemon.log");
   const daemonStatus = join(root, "daemon-status.json");
   const failDaemonRestart = join(root, "fail-daemon-restart");
+  const failPluginReload = join(root, "fail-plugin-reload");
   const paseoHome = join(root, "paseo-home");
+  const pluginSource = join(paseoHome, "plugins/paseo-workflow-local");
+  const pluginSettings = join(paseoHome, "plugin-settings/paseo-workflow");
+  const workflowSettingsFile = join(pluginSettings, "workflows.json");
 
   mkdirSync(source);
   git(source, "init", "-b", "paseo-local");
   git(source, "config", "user.email", "test@example.com");
   git(source, "config", "user.name", "Test");
   writeFileSync(join(source, "version"), "one\n");
-  git(source, "add", "version");
+  mkdirSync(join(source, "plugins/paseo-workflow"), { recursive: true });
+  writeFileSync(
+    join(source, "plugins/paseo-workflow/paseo-plugin.json"),
+    '{"id":"paseo-workflow"}\n',
+  );
+  writeFileSync(join(source, "plugins/paseo-workflow/prompt.txt"), "corrected prompt\n");
+  git(source, "add", "version", "plugins/paseo-workflow");
   git(source, "commit", "-m", "one");
   execFileSync("git", ["clone", "--bare", source, remote]);
   git(source, "remote", "add", "origin", remote);
   mkdirSync(state);
   execFileSync("git", ["clone", "--branch", "paseo-local", "--single-branch", remote, checkout]);
+  mkdirSync(pluginSource, { recursive: true });
+  mkdirSync(pluginSettings, { recursive: true });
+  writeFileSync(join(pluginSource, "prompt.txt"), "stale prompt\n");
+  writeFileSync(workflowSettingsFile, '{"workflow":"keep"}\n');
+  writeFileSync(
+    join(paseoHome, "config.json"),
+    `${JSON.stringify({
+      pluginsEnabled: true,
+      plugins: {
+        "paseo-workflow": { source: "directory", path: pluginSource, enabled: true },
+      },
+    })}\n`,
+  );
 
   mkdirSync(bin);
   const fakeNpm = join(bin, "npm");
   writeFileSync(
     fakeNpm,
-    '#!/bin/sh\ncase "$*" in\n  "run --silent cli -- daemon status --home $PASEO_TEST_PASEO_HOME --json")\n    printf "%s\\n" "$*" >> "$PASEO_TEST_DAEMON_LOG"\n    cat "$PASEO_TEST_DAEMON_STATUS"\n    exit 0\n    ;;\n  "run --silent cli -- daemon restart --home $PASEO_TEST_PASEO_HOME --json")\n    printf "%s\\n" "$*" >> "$PASEO_TEST_DAEMON_LOG"\n    if [ -e "$PASEO_TEST_FAIL_DAEMON_RESTART" ]; then echo "restart failed" >&2; exit 43; fi\n    printf "%s\\n" "{\\"action\\":\\"restarted\\",\\"acknowledged\\":true}"\n    exit 0\n    ;;\nesac\nprintf "%s\\n" "$*" >> "$PASEO_TEST_NPM_LOG"\nprintf "npm:%s\\n" "$*"\nif [ "$*" = "run build" ] && [ -e "$PASEO_TEST_FAIL_BUILD" ]; then exit 42; fi\n',
+    '#!/bin/sh\ncase "$*" in\n  "run --silent cli -- daemon status --home $PASEO_TEST_PASEO_HOME --json")\n    printf "%s\\n" "$*" >> "$PASEO_TEST_DAEMON_LOG"\n    cat "$PASEO_TEST_DAEMON_STATUS"\n    exit 0\n    ;;\n  "run --silent cli -- daemon restart --home $PASEO_TEST_PASEO_HOME --json")\n    printf "%s\\n" "$*" >> "$PASEO_TEST_DAEMON_LOG"\n    if [ -e "$PASEO_TEST_FAIL_DAEMON_RESTART" ]; then echo "restart failed" >&2; exit 43; fi\n    printf "%s\\n" "{\\"action\\":\\"restarted\\",\\"acknowledged\\":true}"\n    exit 0\n    ;;\n  "run --silent cli -- plugin reload paseo-workflow --host 127.0.0.1:6767 --json")\n    printf "%s\\n" "$*" >> "$PASEO_TEST_DAEMON_LOG"\n    if [ -e "$PASEO_TEST_FAIL_PLUGIN_RELOAD" ]; then rm -f "$PASEO_TEST_FAIL_PLUGIN_RELOAD"; echo "plugin reload failed" >&2; exit 44; fi\n    printf "%s\\n" "{\\"id\\":\\"paseo-workflow\\",\\"status\\":\\"running\\"}"\n    exit 0\n    ;;\nesac\nprintf "%s\\n" "$*" >> "$PASEO_TEST_NPM_LOG"\nprintf "npm:%s\\n" "$*"\nif [ "$*" = "run build" ] && [ -e "$PASEO_TEST_FAIL_BUILD" ]; then exit 42; fi\n',
   );
   chmodSync(fakeNpm, 0o755);
   writeFileSync(daemonStatus, '{"localDaemon":"stopped","desktopManaged":false}\n');
@@ -68,7 +94,11 @@ function createFixture() {
     daemonLog,
     daemonStatus,
     failDaemonRestart,
+    failPluginReload,
     paseoHome,
+    pluginSource,
+    pluginSettings,
+    workflowSettingsFile,
     env: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
@@ -78,6 +108,7 @@ function createFixture() {
       PASEO_TEST_DAEMON_LOG: daemonLog,
       PASEO_TEST_DAEMON_STATUS: daemonStatus,
       PASEO_TEST_FAIL_DAEMON_RESTART: failDaemonRestart,
+      PASEO_TEST_FAIL_PLUGIN_RELOAD: failPluginReload,
       PASEO_TEST_PASEO_HOME: paseoHome,
       PASEO_LOCAL_BUILDER_PASEO_HOME: paseoHome,
     },
@@ -141,6 +172,147 @@ describe.runIf(process.platform === "darwin")("Paseo Local automatic build", () 
     expect(result.stdout).toContain("npm:run build");
     expect(readFileSync(fixture.npmLog, "utf8")).toBe("ci\nrun build\n");
     expect(readFileSync(join(fixture.state, "last-successful-commit"), "utf8")).toBe(`${commit}\n`);
+    expect(readFileSync(join(fixture.pluginSource, "prompt.txt"), "utf8")).toBe("stale prompt\n");
+    expect(existsSync(join(fixture.state, "last-successful-workflow-activation-commit"))).toBe(
+      false,
+    );
+  });
+
+  it("publishes the successful build's plugin snapshot and activates it once", () => {
+    const fixture = createFixture();
+    const commit = git(fixture.checkout, "rev-parse", "HEAD");
+    writeFileSync(fixture.daemonStatus, '{"localDaemon":"running","desktopManaged":false}\n');
+
+    const first = run(fixture);
+
+    expect(first.status).toBe(0);
+    expect(readFileSync(join(fixture.pluginSource, "prompt.txt"), "utf8")).toBe(
+      "corrected prompt\n",
+    );
+    expect(
+      readFileSync(join(fixture.state, "workflow-releases", commit, "prompt.txt"), "utf8"),
+    ).toBe("corrected prompt\n");
+    expect(readlinkSync(fixture.pluginSource)).toBe(
+      join(fixture.state, "workflow-releases", commit),
+    );
+    expect(readFileSync(fixture.workflowSettingsFile, "utf8")).toBe('{"workflow":"keep"}\n');
+    expect(
+      JSON.parse(readFileSync(join(fixture.paseoHome, "config.json"), "utf8")).plugins[
+        "paseo-workflow"
+      ].path,
+    ).toBe(fixture.pluginSource);
+    expect(
+      readFileSync(join(fixture.state, "last-successful-workflow-activation-commit"), "utf8"),
+    ).toBe(`${commit}\n`);
+    expect(readFileSync(fixture.daemonLog, "utf8")).toContain(
+      "plugin reload paseo-workflow --host 127.0.0.1:6767 --json",
+    );
+
+    writeFileSync(fixture.npmLog, "");
+    writeFileSync(fixture.daemonLog, "");
+    const second = run(fixture);
+
+    expect(second.status).toBe(0);
+    expect(readFileSync(fixture.npmLog, "utf8")).toBe("");
+    expect(readFileSync(fixture.daemonLog, "utf8")).toBe("");
+  });
+
+  it("does not replace the active plugin when a newer build fails", () => {
+    const fixture = createFixture();
+    writeFileSync(fixture.daemonStatus, '{"localDaemon":"running","desktopManaged":false}\n');
+    expect(run(fixture).status).toBe(0);
+    const firstCommit = git(fixture.checkout, "rev-parse", "HEAD");
+
+    writeFileSync(join(fixture.source, "version"), "two\n");
+    writeFileSync(join(fixture.source, "plugins/paseo-workflow/prompt.txt"), "next prompt\n");
+    git(fixture.source, "add", "version", "plugins/paseo-workflow/prompt.txt");
+    git(fixture.source, "commit", "-m", "two");
+    git(fixture.source, "push", "origin", "paseo-local");
+    writeFileSync(fixture.failBuild, "fail\n");
+
+    const failed = run(fixture);
+
+    expect(failed.status).toBe(1);
+    expect(readFileSync(join(fixture.pluginSource, "prompt.txt"), "utf8")).toBe(
+      "corrected prompt\n",
+    );
+    expect(readFileSync(join(fixture.state, "last-successful-commit"), "utf8")).toBe(
+      `${firstCommit}\n`,
+    );
+  });
+
+  it("syncs the marked commit without building and retries after a reload failure", () => {
+    const fixture = createFixture();
+    expect(run(fixture).status).toBe(0);
+    const commit = git(fixture.checkout, "rev-parse", "HEAD");
+    writeFileSync(fixture.daemonStatus, '{"localDaemon":"running","desktopManaged":false}\n');
+    writeFileSync(fixture.failPluginReload, "fail once\n");
+    writeFileSync(fixture.npmLog, "");
+    writeFileSync(fixture.daemonLog, "");
+
+    const failed = run(fixture, "sync-workflow");
+
+    expect(failed.status).toBe(1);
+    expect(readFileSync(join(fixture.pluginSource, "prompt.txt"), "utf8")).toBe("stale prompt\n");
+    expect(existsSync(join(fixture.state, "last-successful-workflow-activation-commit"))).toBe(
+      false,
+    );
+    expect(readFileSync(fixture.npmLog, "utf8")).toBe("");
+
+    const retried = run(fixture, "sync-workflow");
+
+    expect(retried.status).toBe(0);
+    expect(readFileSync(join(fixture.pluginSource, "prompt.txt"), "utf8")).toBe(
+      "corrected prompt\n",
+    );
+    expect(
+      readFileSync(join(fixture.state, "last-successful-workflow-activation-commit"), "utf8"),
+    ).toBe(`${commit}\n`);
+    expect(readFileSync(fixture.npmLog, "utf8")).toBe("");
+  });
+
+  it("skips a disabled plugin and rejects an unexpected source symlink", () => {
+    const fixture = createFixture();
+    expect(run(fixture).status).toBe(0);
+
+    const configPath = join(fixture.paseoHome, "config.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.plugins["paseo-workflow"].enabled = false;
+    writeFileSync(configPath, `${JSON.stringify(config)}\n`);
+    expect(run(fixture, "sync-workflow").status).toBe(0);
+    expect(readFileSync(join(fixture.pluginSource, "prompt.txt"), "utf8")).toBe("stale prompt\n");
+    expect(existsSync(join(fixture.state, "last-successful-workflow-activation-commit"))).toBe(
+      false,
+    );
+
+    config.plugins["paseo-workflow"].enabled = true;
+    writeFileSync(configPath, `${JSON.stringify(config)}\n`);
+    const unexpected = join(fixture.root, "unexpected-plugin");
+    mkdirSync(unexpected);
+    rmSync(fixture.pluginSource, { recursive: true, force: true });
+    symlinkSync(unexpected, fixture.pluginSource, "dir");
+
+    const result = run(fixture, "sync-workflow");
+
+    expect(result.status).toBe(1);
+    expect(readlinkSync(fixture.pluginSource)).toBe(unexpected);
+    expect(result.stderr).toContain("Unexpected paseo-workflow symlink");
+  });
+
+  it("recovers an interrupted first conversion from the preserved directory", () => {
+    const fixture = createFixture();
+    expect(run(fixture).status).toBe(0);
+    writeFileSync(fixture.daemonStatus, '{"localDaemon":"running","desktopManaged":false}\n');
+    const backup = `${fixture.pluginSource}.before-workflow-releases`;
+    renameSync(fixture.pluginSource, backup);
+
+    const result = run(fixture, "sync-workflow");
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(fixture.pluginSource, "prompt.txt"), "utf8")).toBe(
+      "corrected prompt\n",
+    );
+    expect(readFileSync(join(backup, "prompt.txt"), "utf8")).toBe("stale prompt\n");
   });
 
   it("restarts a running desktop daemon once after a successful build", () => {
@@ -154,7 +326,8 @@ describe.runIf(process.platform === "darwin")("Paseo Local automatic build", () 
     expect(first.status).toBe(0);
     expect(readFileSync(fixture.daemonLog, "utf8")).toBe(
       `run --silent cli -- daemon status --home ${fixture.paseoHome} --json\n` +
-        `run --silent cli -- daemon restart --home ${fixture.paseoHome} --json\n`,
+        `run --silent cli -- daemon restart --home ${fixture.paseoHome} --json\n` +
+        "run --silent cli -- plugin reload paseo-workflow --host 127.0.0.1:6767 --json\n",
     );
     expect(readFileSync(join(fixture.state, "last-successful-daemon-restart-commit"), "utf8")).toBe(
       `${commit}\n`,
