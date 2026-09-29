@@ -3,15 +3,18 @@
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readlinkSync,
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -32,6 +35,8 @@ function paths(env) {
     lock: join(state, "build.lock"),
     marker: join(state, "last-successful-commit"),
     restartMarker: join(state, "last-successful-daemon-restart-commit"),
+    workflowActivationMarker: join(state, "last-successful-workflow-activation-commit"),
+    workflowReleases: join(state, "workflow-releases"),
     paseoHome: resolve(env.PASEO_LOCAL_BUILDER_PASEO_HOME ?? join(homedir(), ".paseo")),
     launchAgents,
     plist: join(launchAgents, `${label}.plist`),
@@ -69,6 +74,227 @@ function writeMarker(marker, commit) {
   const temporaryMarker = `${marker}.${process.pid}.tmp`;
   writeFileSync(temporaryMarker, `${commit}\n`);
   renameSync(temporaryMarker, marker);
+}
+
+function workflowSource(env) {
+  const { paseoHome, workflowReleases } = paths(env);
+  const configPath = join(paseoHome, "config.json");
+  if (!existsSync(configPath)) return null;
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  const plugin = config.plugins?.["paseo-workflow"];
+  if (!plugin || config.pluginsEnabled !== true || plugin.enabled === false) return null;
+
+  const source = join(paseoHome, "plugins/paseo-workflow-local");
+  if (
+    plugin.source !== "directory" ||
+    typeof plugin.path !== "string" ||
+    resolve(plugin.path) !== source
+  ) {
+    throw new Error(`paseo-workflow is configured outside the expected source: ${plugin.path}`);
+  }
+  return { source, backup: `${source}.before-workflow-releases`, workflowReleases };
+}
+
+function workflowSnapshot(checkout, releases, commit, env) {
+  if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error(`Invalid successful build commit: ${commit}`);
+  execute("git", ["cat-file", "-e", `${commit}^{commit}`], { cwd: checkout, env });
+  mkdirSync(releases, { recursive: true });
+  const snapshot = join(releases, commit);
+  if (!existsSync(snapshot)) {
+    const temporary = mkdtempSync(join(releases, `.${commit}.`));
+    try {
+      const archive = spawnSync(
+        "git",
+        ["archive", "--format=tar", commit, "plugins/paseo-workflow"],
+        {
+          cwd: checkout,
+          env,
+        },
+      );
+      if (archive.status !== 0) {
+        throw new Error(
+          `git archive ${commit} failed: ${(archive.stderr || "").toString().trim()}`,
+        );
+      }
+      const extracted = spawnSync("tar", ["-xf", "-", "-C", temporary, "--strip-components=2"], {
+        input: archive.stdout,
+        encoding: "utf8",
+        env,
+      });
+      if (extracted.status !== 0) {
+        throw new Error(`tar extraction failed: ${(extracted.stderr || "").trim()}`);
+      }
+      if (!existsSync(join(temporary, "paseo-plugin.json"))) {
+        throw new Error(`Commit ${commit} has no plugins/paseo-workflow plugin manifest`);
+      }
+      renameSync(temporary, snapshot);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  }
+  const info = lstatSync(snapshot);
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    !existsSync(join(snapshot, "paseo-plugin.json"))
+  ) {
+    throw new Error(`Invalid workflow snapshot: ${snapshot}`);
+  }
+  return snapshot;
+}
+
+function currentWorkflowTarget(source, releases) {
+  if (!existsSync(source) && !lstatSync(source, { throwIfNoEntry: false })) return null;
+  const info = lstatSync(source);
+  if (!info.isSymbolicLink()) return null;
+  const target = resolve(dirname(source), readlinkSync(source));
+  const fromReleases = relative(releases, target);
+  if (fromReleases === "" || fromReleases.startsWith("..") || fromReleases.includes("/")) {
+    throw new Error(`Unexpected paseo-workflow symlink: ${source} -> ${target}`);
+  }
+  if (!lstatSync(target, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`Workflow snapshot target is missing: ${target}`);
+  }
+  return target;
+}
+
+function pointWorkflowSource(source, backup, releases, snapshot, previousTarget) {
+  if (!existsSync(source) && !lstatSync(source, { throwIfNoEntry: false }) && existsSync(backup)) {
+    renameSync(backup, source);
+  }
+  const info = lstatSync(source, { throwIfNoEntry: false });
+  if (!info) throw new Error(`Configured workflow source is missing: ${source}`);
+
+  if (!info.isSymbolicLink()) {
+    if (!info.isDirectory())
+      throw new Error(`Configured workflow source is not a directory: ${source}`);
+    if (existsSync(backup)) throw new Error(`Workflow backup already exists: ${backup}`);
+    renameSync(source, backup);
+  }
+
+  const temporaryLink = `${source}.${process.pid}.tmp`;
+  try {
+    symlinkSync(snapshot, temporaryLink, "dir");
+    renameSync(temporaryLink, source);
+  } catch (error) {
+    rmSync(temporaryLink, { force: true });
+    if (!info.isSymbolicLink() && existsSync(backup) && !existsSync(source))
+      renameSync(backup, source);
+    throw error;
+  }
+
+  return () => {
+    if (previousTarget) {
+      const rollbackLink = `${source}.${process.pid}.rollback`;
+      symlinkSync(previousTarget, rollbackLink, "dir");
+      renameSync(rollbackLink, source);
+    } else {
+      rmSync(source, { force: true });
+      if (existsSync(backup)) renameSync(backup, source);
+    }
+  };
+}
+
+function daemonStatus(checkout, paseoHome, env) {
+  const cliArgs = ["run", "--silent", "cli", "--"];
+  return JSON.parse(
+    execute("npm", [...cliArgs, "daemon", "status", "--home", paseoHome, "--json"], {
+      cwd: checkout,
+      env,
+    }),
+  );
+}
+
+function reloadWorkflow(checkout, env) {
+  const cliArgs = ["run", "--silent", "cli", "--"];
+  const item = JSON.parse(
+    execute(
+      "npm",
+      [...cliArgs, "plugin", "reload", "paseo-workflow", "--host", "127.0.0.1:6767", "--json"],
+      { cwd: checkout, env },
+    ),
+  );
+  if (item.status !== "running") {
+    throw new Error(
+      `paseo-workflow reload did not reach running status: ${item.status ?? "unknown"}`,
+    );
+  }
+}
+
+function syncWorkflowCommit(env, commit, currentDaemon = null) {
+  const { checkout, paseoHome, workflowActivationMarker } = paths(env);
+  const configured = workflowSource(env);
+  if (!configured) {
+    log("paseo-workflow is absent or disabled; skipping sync");
+    return 0;
+  }
+
+  const snapshot = workflowSnapshot(checkout, configured.workflowReleases, commit, env);
+  const currentTarget = currentWorkflowTarget(configured.source, configured.workflowReleases);
+  const activatedCommit = existsSync(workflowActivationMarker)
+    ? readFileSync(workflowActivationMarker, "utf8").trim()
+    : "";
+  if (activatedCommit && !/^[a-f0-9]{40}$/.test(activatedCommit)) {
+    throw new Error(`Invalid workflow activation commit: ${activatedCommit}`);
+  }
+  const alreadyActivated = activatedCommit === commit && currentTarget === snapshot;
+  if (alreadyActivated) return 0;
+
+  let previousTarget = currentTarget;
+  if (activatedCommit) previousTarget = join(configured.workflowReleases, activatedCommit);
+  else if (existsSync(configured.backup)) previousTarget = null;
+  if (previousTarget && !lstatSync(previousTarget, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`Previously activated workflow snapshot is missing: ${previousTarget}`);
+  }
+  let reloadAttempted = false;
+  let restore = null;
+  try {
+    const daemon = currentDaemon ?? daemonStatus(checkout, paseoHome, env);
+    if (daemon.localDaemon !== "running") {
+      log(`Published paseo-workflow ${commit}; activation pending because the daemon is stopped`);
+      return 0;
+    }
+    restore = pointWorkflowSource(
+      configured.source,
+      configured.backup,
+      configured.workflowReleases,
+      snapshot,
+      previousTarget,
+    );
+    reloadAttempted = true;
+    reloadWorkflow(checkout, env);
+    writeMarker(workflowActivationMarker, commit);
+    log(`Activated paseo-workflow ${commit}`);
+    return 0;
+  } catch (error) {
+    if (restore) {
+      try {
+        restore();
+      } catch (restoreError) {
+        throw new Error(
+          `Workflow sync failed: ${error.message}; restoring the previous source failed: ${restoreError.message}`,
+          { cause: restoreError },
+        );
+      }
+    }
+    if (reloadAttempted) {
+      try {
+        reloadWorkflow(checkout, env);
+      } catch (reloadError) {
+        throw new Error(
+          `Workflow sync failed: ${error.message}; previous source was restored but its reload failed: ${reloadError.message}`,
+          { cause: reloadError },
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+function syncWorkflowLocked(env) {
+  const { marker } = paths(env);
+  if (!existsSync(marker)) throw new Error("No successful Paseo Local build is recorded yet");
+  return syncWorkflowCommit(env, readFileSync(marker, "utf8").trim());
 }
 
 function xml(value) {
@@ -286,29 +512,26 @@ function runLocked(env) {
   const restartedCommit = existsSync(restartMarker)
     ? readFileSync(restartMarker, "utf8").trim()
     : "";
-  if (restartedCommit === commit) return 0;
-
-  const cliArgs = ["run", "--silent", "cli", "--"];
-  const daemon = JSON.parse(
-    execute("npm", [...cliArgs, "daemon", "status", "--home", paseoHome, "--json"], {
-      cwd: checkout,
-      env,
-    }),
-  );
-  if (daemon.localDaemon === "running" && daemon.desktopManaged === true) {
-    const restart = JSON.parse(
-      execute("npm", [...cliArgs, "daemon", "restart", "--home", paseoHome, "--json"], {
-        cwd: checkout,
-        env,
-      }),
-    );
-    if (restart.action !== "restarted" || restart.acknowledged !== true) {
-      throw new Error("Paseo Local daemon restart was not acknowledged");
+  let daemon = null;
+  if (restartedCommit !== commit) {
+    const cliArgs = ["run", "--silent", "cli", "--"];
+    daemon = daemonStatus(checkout, paseoHome, env);
+    if (daemon.localDaemon === "running" && daemon.desktopManaged === true) {
+      const restart = JSON.parse(
+        execute("npm", [...cliArgs, "daemon", "restart", "--home", paseoHome, "--json"], {
+          cwd: checkout,
+          env,
+        }),
+      );
+      if (restart.action !== "restarted" || restart.acknowledged !== true) {
+        throw new Error("Paseo Local daemon restart was not acknowledged");
+      }
+      daemon = { ...daemon, localDaemon: "running" };
+      log("Restarted Paseo Local daemon");
     }
-    log("Restarted Paseo Local daemon");
+    writeMarker(restartMarker, commit);
   }
-  writeMarker(restartMarker, commit);
-  return 0;
+  return syncWorkflowCommit(env, commit, daemon);
 }
 
 function withLock(command, env, busyExitCode) {
@@ -330,10 +553,16 @@ function run(env) {
   return withLock("run-locked", env, 0);
 }
 
+function syncWorkflow(env) {
+  return withLock("sync-workflow-locked", env, 1);
+}
+
 export function main(argv = process.argv.slice(2), env = process.env) {
   const [command, argument] = argv;
   if (command === "run") return run(env);
   if (command === "run-locked") return runLocked(env);
+  if (command === "sync-workflow") return syncWorkflow(env);
+  if (command === "sync-workflow-locked") return syncWorkflowLocked(env);
   if (command === "install") return withLock("install-locked", env, 1);
   if (command === "install-locked") return installLocked(env);
   if (command === "uninstall") return uninstall(env);

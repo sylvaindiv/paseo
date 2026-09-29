@@ -9,6 +9,14 @@ and plugins match the new app. A separate marker makes this happen once per buil
 restart is retried at the next interval without rebuilding the app. A stopped or independently
 managed daemon is left untouched.
 
+After each successful build, the job also archives `plugins/paseo-workflow` from that exact commit
+under `workflow-releases/<commit>`. When the configured `paseo-workflow` plugin is enabled and the
+daemon is running, it points the configured source path at that snapshot and reloads only that
+plugin. The first conversion keeps the existing directory as
+`~/.paseo/plugins/paseo-workflow-local.before-workflow-releases`; configuration and plugin settings
+stay in place. If the daemon is stopped, the snapshot is ready and activation remains pending.
+Failed reloads restore the previous source and retry on the next run.
+
 The job does not open or close Paseo Local. Reopen the app to use the new renderer. The automatic
 daemon restart interrupts provider processes and background work still resident in them.
 
@@ -18,7 +26,12 @@ daemon restart interrupts provider processes and background work still resident 
 npm run paseo-local:auto-build:install
 npm run paseo-local:auto-build:uninstall
 npm run paseo-local:auto-build:verify-launchd
+node scripts/paseo-local-auto-build.mjs sync-workflow
 ```
+
+`sync-workflow` uses only `last-successful-commit`. It does not fetch, build, or restart the daemon,
+so use it to repair the active plugin after an already successful build. It records activation only
+after the targeted reload reports `running`.
 
 Installation is idempotent and loads `~/Library/LaunchAgents/sh.paseo.local-auto-build.plist`. Uninstallation unloads the job and removes the plist. It keeps the checkout, success marker, and log for a fast reinstall and diagnosis.
 
