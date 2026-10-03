@@ -85,6 +85,7 @@ interface TerminalPaneProps {
   terminalId: string;
   isWorkspaceFocused: boolean;
   isPaneFocused: boolean;
+  autoFocus?: boolean;
   onOpenFileExplorer: () => void;
   onOpenWorkspaceFile: (request: WorkspaceFileOpenRequest) => void;
 }
@@ -206,6 +207,7 @@ export function TerminalPane({
   terminalId,
   isWorkspaceFocused,
   isPaneFocused,
+  autoFocus = true,
   onOpenFileExplorer,
   onOpenWorkspaceFile,
 }: TerminalPaneProps) {
@@ -340,7 +342,7 @@ export function TerminalPane({
   );
 
   useEffect(() => {
-    if (isMobile || !isPaneFocused || !terminalId) {
+    if (isMobile || !isPaneFocused || !autoFocus || !terminalId) {
       lastAutoFocusKeyRef.current = null;
       return;
     }
@@ -352,7 +354,15 @@ export function TerminalPane({
       lastAutoFocusKeyRef.current = focusKey;
       requestTerminalFocus();
     }
-  }, [isMobile, isPaneFocused, isWorkspaceFocused, requestTerminalFocus, scopeKey, terminalId]);
+  }, [
+    autoFocus,
+    isMobile,
+    isPaneFocused,
+    isWorkspaceFocused,
+    requestTerminalFocus,
+    scopeKey,
+    terminalId,
+  ]);
 
   useEffect(() => {
     const canRequest = canRequestFocusClaim({

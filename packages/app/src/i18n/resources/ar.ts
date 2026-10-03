@@ -709,6 +709,7 @@ export const ar: TranslationResources = {
     scripts: {
       title: "البرامج النصية",
       actions: {
+        play: "Play",
         chooseUrl: "اختيار الرابط",
         copyUrl: "نسخ الرابط",
         openService: "عرض الخدمة",
@@ -740,6 +741,10 @@ export const ar: TranslationResources = {
         direct: "مباشر",
       },
       states: {
+        noServiceConfigured: "لم تتم تهيئة أي خدمة",
+        shellClosed: "Shell مغلق — أعد تشغيله",
+        shellCreating: "جارٍ إنشاء Shell…",
+        scriptStopped: "تم إيقاف السكربت",
         exitCode: "الخروج من{{code}}",
         startFailed: "فشل بدء تشغيل{{scriptName}}",
         stopFailed: "فشل إيقاف{{scriptName}}",
@@ -1303,6 +1308,13 @@ export const ar: TranslationResources = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "الخطة جاهزة",
+      responseNeeded: "بانتظار الرد",
+      responseSent: "تم إرسال الرد",
+      execute: "تنفيذ",
+      comment: "أضف تعليمات…",
+    },
     windowControls: {
       minimize: "تصغير النافذة",
       maximize: "تكبير النافذة",

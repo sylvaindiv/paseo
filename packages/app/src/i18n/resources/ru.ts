@@ -715,6 +715,7 @@ export const ru: TranslationResources = {
     scripts: {
       title: "Скрипты",
       actions: {
+        play: "Play",
         chooseUrl: "Выбрать URL",
         copyUrl: "Скопировать URL",
         openService: "Открыть сервис",
@@ -746,6 +747,10 @@ export const ru: TranslationResources = {
         direct: "Прямой адрес",
       },
       states: {
+        noServiceConfigured: "Сервис не настроен",
+        shellClosed: "Оболочка закрыта — перезапустить",
+        shellCreating: "Создание оболочки…",
+        scriptStopped: "Скрипт остановлен",
         exitCode: "Код выхода: {{code}}",
         startFailed: "Не удалось запустить скрипт {{scriptName}}",
         stopFailed: "Не удалось остановить скрипт {{scriptName}}",
@@ -1321,6 +1326,13 @@ export const ru: TranslationResources = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "План готов",
+      responseNeeded: "Ожидается ответ",
+      responseSent: "Ответ отправлен",
+      execute: "Выполнить",
+      comment: "Добавить указание…",
+    },
     windowControls: {
       minimize: "Свернуть окно",
       maximize: "Развернуть окно",

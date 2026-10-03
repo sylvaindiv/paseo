@@ -71,7 +71,6 @@ import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import { useCompactTimeAgo } from "@/hooks/use-compact-time-ago";
 import { buildWorkspaceKeyboardHandlerId } from "@/keyboard/handler-id";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
-import { WorkspaceNewTabMenuContent } from "@/screens/workspace/workspace-new-tab-menu";
 import {
   paneContentToolbarTrailingPadding,
   ToolbarButton,
@@ -216,41 +215,27 @@ function TabLabelMeasurement({
 }
 
 interface WorkspaceNewTabButtonProps {
-  serverId: string;
-  paneId?: string;
+  onPress: () => void;
   shortcutKeys: ShortcutKey[][] | null;
   placement: "inline" | "toolbar";
 }
 
-function WorkspaceNewTabButton({
-  serverId,
-  paneId,
-  shortcutKeys,
-  placement,
-}: WorkspaceNewTabButtonProps) {
+function WorkspaceNewTabButton({ onPress, shortcutKeys, placement }: WorkspaceNewTabButtonProps) {
   const { t } = useTranslation();
   const tooltipText = t("workspace.tabs.actions.newTab");
-  const menu = (
-    <DropdownMenu>
-      <ToolbarButton
-        kind="menu"
-        label={tooltipText}
-        shortcut={shortcutKeys}
-        testID="workspace-new-tab-button"
-        style={placement === "inline" ? styles.inlineNewTabButton : undefined}
-      >
-        <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
-      </ToolbarButton>
-      <WorkspaceNewTabMenuContent
-        serverId={serverId}
-        purpose="primary"
-        host="main"
-        paneId={paneId}
-      />
-    </DropdownMenu>
+  const button = (
+    <ToolbarButton
+      label={tooltipText}
+      shortcut={shortcutKeys}
+      testID="workspace-new-tab-button"
+      style={placement === "inline" ? styles.inlineNewTabButton : undefined}
+      onPress={onPress}
+    >
+      <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
+    </ToolbarButton>
   );
 
-  return placement === "inline" ? <View style={styles.inlineAddButton}>{menu}</View> : menu;
+  return placement === "inline" ? <View style={styles.inlineAddButton}>{button}</View> : button;
 }
 
 function WorkspacePaneToolbarActions({
@@ -258,9 +243,8 @@ function WorkspacePaneToolbarActions({
   showSplitActions,
   showMaximizeAction,
   paneMaximized,
-  serverId,
-  paneId,
   newTabShortcutKeys,
+  onCreateNewTab,
   onSplitRight,
   onSplitDown,
   onTogglePaneMaximized,
@@ -269,9 +253,8 @@ function WorkspacePaneToolbarActions({
   showSplitActions: boolean;
   showMaximizeAction: boolean;
   paneMaximized: boolean;
-  serverId: string;
-  paneId?: string;
   newTabShortcutKeys: ShortcutKey[][] | null;
+  onCreateNewTab: () => void;
   onSplitRight?: () => void;
   onSplitDown?: () => void;
   onTogglePaneMaximized?: () => void;
@@ -304,8 +287,7 @@ function WorkspacePaneToolbarActions({
       {showNewTabButton ? (
         <WorkspaceNewTabButton
           placement="toolbar"
-          serverId={serverId}
-          paneId={paneId}
+          onPress={onCreateNewTab}
           shortcutKeys={newTabShortcutKeys}
         />
       ) : null}
@@ -1383,8 +1365,7 @@ function ResolvedWorkspaceDesktopTabsRow({
           {!layout.requiresHorizontalScrollFallback ? (
             <WorkspaceNewTabButton
               placement="inline"
-              serverId={normalizedServerId}
-              paneId={paneId}
+              onPress={createNewTab}
               shortcutKeys={newTabKeys}
             />
           ) : null}
@@ -1402,9 +1383,8 @@ function ResolvedWorkspaceDesktopTabsRow({
         showSplitActions={showPaneSplitActions}
         showMaximizeAction={showPaneMaximizeAction}
         paneMaximized={paneMaximized}
-        serverId={normalizedServerId}
-        paneId={paneId}
         newTabShortcutKeys={newTabKeys}
+        onCreateNewTab={createNewTab}
         onSplitRight={onSplitRight}
         onSplitDown={onSplitDown}
         onTogglePaneMaximized={onTogglePaneMaximized}
@@ -1552,8 +1532,8 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     height: WORKSPACE_SECONDARY_HEADER_HEIGHT,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    backgroundColor: theme.colors.surface0,
+    borderBottomColor: theme.colors.workspace.border,
+    backgroundColor: theme.colors.workspace.chrome,
     flexDirection: "row",
     alignItems: "center",
     overflow: "visible",
@@ -1583,7 +1563,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     paddingHorizontal: theme.spacing[0.5],
     borderRightWidth: 1,
-    borderRightColor: theme.colors.border,
+    borderRightColor: theme.colors.workspace.border,
   },
   inlineAddButton: {
     flexDirection: "row",
@@ -1616,7 +1596,7 @@ const styles = StyleSheet.create((theme) => ({
     right: 0,
     bottom: 0,
     height: TAB_ACTIVE_UNDERLINE_HEIGHT,
-    backgroundColor: theme.colors.accent,
+    backgroundColor: theme.colors.workspace.tabAccent,
     pointerEvents: "none",
   },
   tabActiveUnfocusedUnderline: {
@@ -1659,7 +1639,7 @@ const styles = StyleSheet.create((theme) => ({
     bottom: theme.spacing[0.5],
     width: TAB_DROP_INDICATOR_WIDTH,
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.accent,
+    backgroundColor: theme.colors.workspace.tabAccent,
     zIndex: 10,
     pointerEvents: "none",
   },

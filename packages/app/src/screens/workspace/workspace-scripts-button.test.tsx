@@ -28,6 +28,8 @@ const {
   menuOpenStateRef,
   previewActions,
   onScriptTerminalStartedMock,
+  onPreviewTerminalStartedMock,
+  onPreviewPendingChangeMock,
   onOpenPreviewMock,
   onClosePreviewMock,
 } = vi.hoisted(() => {
@@ -87,6 +89,8 @@ const {
     menuOpenStateRef: { current: undefined as boolean | undefined },
     previewActions: hoistedPreviewActions,
     onScriptTerminalStartedMock: vi.fn(),
+    onPreviewTerminalStartedMock: vi.fn(),
+    onPreviewPendingChangeMock: vi.fn(),
     onOpenPreviewMock: onOpenPreview,
     onClosePreviewMock: onClosePreview,
   };
@@ -323,6 +327,8 @@ function renderScripts(
           presentation={currentOptions.presentation}
           preview={currentOptions.preview ? previewActions : undefined}
           onScriptTerminalStarted={onScriptTerminalStartedMock}
+          onPreviewTerminalStarted={onPreviewTerminalStartedMock}
+          onPreviewPendingChange={onPreviewPendingChangeMock}
         />
       </QueryClientProvider>
     );
@@ -389,6 +395,8 @@ describe("WorkspaceScriptsButton", () => {
     setPreferredRouteMock.mockClear();
     setPreferredScriptMock.mockClear();
     onScriptTerminalStartedMock.mockClear();
+    onPreviewTerminalStartedMock.mockClear();
+    onPreviewPendingChangeMock.mockClear();
     onOpenPreviewMock.mockClear();
     onClosePreviewMock.mockClear();
     menuOpenChangeRef.current = null;
@@ -709,6 +717,7 @@ describe("WorkspaceScriptsButton", () => {
     current = renderScripts(
       [
         script({ scriptName: "app", type: "service", port: 3000 }),
+        script({ scriptName: "api", type: "service", port: 3001 }),
         script({ scriptName: "build", type: "script" }),
       ],
       { preview: true },
@@ -732,6 +741,34 @@ describe("WorkspaceScriptsButton", () => {
     expect(startWorkspaceScriptMock).toHaveBeenCalledWith("workspace-1", "app");
     expect(onScriptTerminalStartedMock).not.toHaveBeenCalled();
     expect(onOpenPreviewMock).not.toHaveBeenCalled();
+  });
+
+  it("starts the sole service on the first Play", async () => {
+    current = renderScripts([script({ scriptName: "app", type: "service", port: 3000 })], {
+      preview: true,
+    });
+
+    fireEvent.click(requirePreviewAction());
+    await act(async () => {});
+
+    expect(startWorkspaceScriptMock).toHaveBeenCalledOnce();
+    expect(startWorkspaceScriptMock).toHaveBeenCalledWith("workspace-1", "app");
+    expect(menuOpenStateRef.current).toBe(false);
+    expect(onPreviewTerminalStartedMock).toHaveBeenCalledOnce();
+    expect(onPreviewTerminalStartedMock).toHaveBeenCalledWith("terminal-script-1");
+    expect(onPreviewPendingChangeMock.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("ignores a second Play while the service is starting", async () => {
+    current = renderScripts([script({ scriptName: "app", type: "service", port: 3000 })], {
+      preview: true,
+    });
+
+    fireEvent.click(requirePreviewAction());
+    fireEvent.click(requirePreviewAction());
+    await act(async () => {});
+
+    expect(startWorkspaceScriptMock).toHaveBeenCalledOnce();
   });
 
   it("opens the preview once, when the service reports running, healthy and a resolved URL", async () => {
@@ -910,7 +947,17 @@ describe("WorkspaceScriptsButton", () => {
 
     expect(document.querySelector('[data-testid="workspace-scripts-preview-action"]')).toBeNull();
     expect(document.querySelector('[data-testid="workspace-scripts-button"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workspace-scripts-disabled"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="workspace-scripts-preview-section"]')).toBeNull();
+  });
+
+  it("shows a disabled Play with a clear hint when there are no scripts", () => {
+    current = renderScripts([], { preview: true });
+
+    const button = document.querySelector('[data-testid="workspace-scripts-disabled"]');
+    expect(button).not.toBeNull();
+    expect(button?.getAttribute("aria-disabled")).toBe("true");
+    expect(document.body.textContent).toContain("No service configured");
   });
 
   it("reopens a running service's preview from the menu without relaunching it", async () => {
@@ -941,9 +988,13 @@ describe("WorkspaceScriptsButton", () => {
 
   it("asks again when the remembered service is not configured anymore", async () => {
     preferredScriptByWorkspaceMock["test-server:workspace-1"] = "ghost";
-    current = renderScripts([script({ scriptName: "app", type: "service", port: 3000 })], {
-      preview: true,
-    });
+    current = renderScripts(
+      [
+        script({ scriptName: "app", type: "service", port: 3000 }),
+        script({ scriptName: "api", type: "service", port: 3001 }),
+      ],
+      { preview: true },
+    );
 
     fireEvent.click(requirePreviewAction());
     await act(async () => {});

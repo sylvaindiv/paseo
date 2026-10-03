@@ -36,7 +36,8 @@ import {
   Paperclip,
 } from "lucide-react-native";
 import * as Clipboard from "expo-clipboard";
-import { FOOTER_HEIGHT, MAX_CONTENT_WIDTH } from "@/constants/layout";
+import { FOOTER_HEIGHT } from "@/constants/layout";
+import { chatStyles } from "@/styles/chat";
 import {
   AgentControls,
   DraftAgentControls,
@@ -2255,7 +2256,7 @@ function ComposerContentImpl({
   );
 
   const inputAreaContainerStyle = useMemo(
-    () => [styles.inputAreaContainer, isComposerLocked && styles.inputAreaLocked],
+    () => [styles.inputAreaContainer, chatStyles.rail, isComposerLocked && styles.inputAreaLocked],
     [isComposerLocked],
   );
 
@@ -2464,7 +2465,6 @@ const styles = StyleSheet.create((theme: Theme) => ({
     alignItems: "center",
     width: "100%",
     overflow: "visible",
-    paddingHorizontal: theme.spacing[4],
     paddingBottom: theme.spacing[4],
   },
   inputAreaLocked: {
@@ -2473,7 +2473,6 @@ const styles = StyleSheet.create((theme: Theme) => ({
   inputAreaContent: {
     flexShrink: 1,
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
     gap: theme.spacing[3],
   },
   messageInputContainer: {

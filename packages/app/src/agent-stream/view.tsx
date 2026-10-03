@@ -1,3 +1,4 @@
+import { chatStyles } from "@/styles/chat";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Alert } from "@/components/ui/alert";
 import React, {
@@ -23,7 +24,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { MAX_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import { useMutation } from "@tanstack/react-query";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { Check, ChevronDown, X } from "lucide-react-native";
@@ -124,7 +125,7 @@ function renderLiveAuxiliaryNode(input: {
     <>
       {input.turnFooter}
       {input.pendingPermissions ? (
-        <View style={stylesheet.contentWrapper}>
+        <View style={chatStyles.rail}>
           <View style={stylesheet.listHeaderContent}>{input.pendingPermissions}</View>
         </View>
       ) : null}
@@ -1043,7 +1044,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       };
     }, [baseRenderModel, pendingPermissionsNode, turnFooterNode]);
 
-    const emptyStateStyle = useMemo(() => [stylesheet.emptyState, stylesheet.contentWrapper], []);
+    const emptyStateStyle = useMemo(() => [stylesheet.emptyState, chatStyles.rail], []);
     const scrollToBottomContainerStyle = useMemo(
       () => [
         stylesheet.scrollToBottomContainer,
@@ -1680,19 +1681,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     flex: 1,
     backgroundColor: theme.colors.surface0,
   },
-  contentWrapper: {
-    width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
-    alignSelf: "center",
-    paddingHorizontal: theme.spacing[2],
-  },
   listContentContainer: {
     paddingVertical: 0,
     flexGrow: 1,
-    paddingHorizontal: {
-      xs: theme.spacing[3],
-      md: theme.spacing[4],
-    },
   },
   forwardListContentContainer: {
     paddingTop: theme.spacing[4],
@@ -1700,12 +1691,6 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   list: {
     flex: 1,
-  },
-  streamItemWrapper: {
-    width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
-    alignSelf: "center",
-    paddingHorizontal: theme.spacing[2],
   },
   emptyState: {
     flex: 1,
@@ -1838,9 +1823,6 @@ interface StreamItemWrapperProps {
 }
 
 function StreamItemWrapper({ gapBelow, children }: StreamItemWrapperProps) {
-  const wrapperStyle = useMemo(
-    () => [stylesheet.streamItemWrapper, { marginBottom: gapBelow }],
-    [gapBelow],
-  );
+  const wrapperStyle = useMemo(() => [chatStyles.rail, { marginBottom: gapBelow }], [gapBelow]);
   return <View style={wrapperStyle}>{children}</View>;
 }

@@ -715,6 +715,7 @@ export const es: TranslationResources = {
     scripts: {
       title: "Scripts",
       actions: {
+        play: "Play",
         chooseUrl: "Elegir URL",
         copyUrl: "Copiar URL",
         openService: "Ver servicio",
@@ -746,6 +747,10 @@ export const es: TranslationResources = {
         direct: "Directa",
       },
       states: {
+        noServiceConfigured: "No hay ningún servicio configurado",
+        shellClosed: "Shell cerrado — volver a iniciar",
+        shellCreating: "Creando shell…",
+        scriptStopped: "Script detenido",
         exitCode: "salir de{{code}}",
         startFailed: "No se pudo iniciar{{scriptName}}",
         stopFailed: "No se pudo detener{{scriptName}}",
@@ -1338,6 +1343,13 @@ export const es: TranslationResources = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "Plan listo",
+      responseNeeded: "Respuesta pendiente",
+      responseSent: "Respuesta enviada",
+      execute: "Ejecutar",
+      comment: "Añadir una instrucción…",
+    },
     windowControls: {
       minimize: "Minimizar ventana",
       maximize: "Maximizar ventana",

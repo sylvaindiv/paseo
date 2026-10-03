@@ -705,6 +705,7 @@ export const zhCN: TranslationResources = {
     scripts: {
       title: "Scripts",
       actions: {
+        play: "Play",
         chooseUrl: "选择 URL",
         copyUrl: "复制 URL",
         openService: "查看服务",
@@ -736,6 +737,10 @@ export const zhCN: TranslationResources = {
         direct: "直接地址",
       },
       states: {
+        noServiceConfigured: "未配置服务",
+        shellClosed: "Shell 已关闭 — 重新启动",
+        shellCreating: "正在创建 Shell…",
+        scriptStopped: "脚本已停止",
         exitCode: "exit {{code}}",
         startFailed: "启动 {{scriptName}} 失败",
         stopFailed: "停止 {{scriptName}} 失败",
@@ -1292,6 +1297,13 @@ export const zhCN: TranslationResources = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "计划已就绪",
+      responseNeeded: "等待回复",
+      responseSent: "回复已发送",
+      execute: "执行",
+      comment: "添加指示…",
+    },
     windowControls: {
       minimize: "最小化窗口",
       maximize: "最大化窗口",

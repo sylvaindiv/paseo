@@ -247,7 +247,9 @@ export function WorkspaceOpenInEditorButton({
             <View style={styles.splitButtonContent}>
               {primaryOption.icon}
               {!hideLabels && (
-                <Text style={styles.splitButtonText}>{t("workspace.git.openInEditor.open")}</Text>
+                <Text style={styles.splitButtonText} numberOfLines={1}>
+                  {primaryOption.label}
+                </Text>
               )}
             </View>
           )}
@@ -300,7 +302,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "stretch",
     borderRadius: theme.borderRadius.md,
     borderWidth: theme.borderWidth[1],
-    borderColor: theme.colors.borderAccent,
+    borderColor: "transparent",
     overflow: "hidden",
   },
   splitButtonPrimary: {
@@ -321,13 +323,14 @@ const styles = StyleSheet.create((theme) => ({
     position: "relative",
   },
   splitButtonPrimaryHovered: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   splitButtonPrimaryDisabled: {
     opacity: 0.6,
   },
   splitButtonText: {
-    fontSize: theme.fontSize.base,
+    maxWidth: 120,
+    fontSize: theme.fontSize.sm,
     lineHeight: theme.fontSize.base * 1.5,
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.normal,
@@ -350,9 +353,9 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     borderLeftWidth: theme.borderWidth[1],
-    borderLeftColor: theme.colors.borderAccent,
+    borderLeftColor: "transparent",
   },
   splitButtonCaretHovered: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
 }));

@@ -705,6 +705,7 @@ export const en = {
     scripts: {
       title: "Scripts",
       actions: {
+        play: "Play",
         chooseUrl: "Choose URL",
         copyUrl: "Copy URL",
         openService: "View service",
@@ -736,6 +737,10 @@ export const en = {
         direct: "Direct",
       },
       states: {
+        noServiceConfigured: "No service configured",
+        shellClosed: "Shell closed — relaunch",
+        shellCreating: "Creating shell…",
+        scriptStopped: "Script stopped",
         exitCode: "exit {{code}}",
         startFailed: "Failed to start {{scriptName}}",
         stopFailed: "Failed to stop {{scriptName}}",
@@ -1312,6 +1317,13 @@ export const en = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "Plan ready",
+      responseNeeded: "Response needed",
+      responseSent: "Response sent",
+      execute: "Execute",
+      comment: "Add an instruction…",
+    },
     windowControls: {
       minimize: "Minimize window",
       maximize: "Maximize window",

@@ -36,7 +36,6 @@ import { workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
 import type { PanelIconProps } from "@/panels/panel-registry";
 import { panelTargetSupportsHost } from "@/plugins/workspace-panels/locations";
 import type { Theme } from "@/styles/theme";
-import type { SurfaceBackdrop } from "@/styles/surface-backdrop";
 import {
   HorizontalScrollBoundaryShades,
   useHorizontalScrollBoundary,
@@ -64,10 +63,6 @@ interface ExplorerSidebarTabRailProps {
 
 function tabKey(item: WorkspaceDesktopTabRowItem): string {
   return `${item.tab.key}:${item.tab.kind}`;
-}
-
-function resolveExplorerSidebarTabBackdrop(): SurfaceBackdrop {
-  return "surfaceSidebar";
 }
 
 function ExplorerSidebarTab({
@@ -139,7 +134,7 @@ function ExplorerSidebarTab({
                 active={item.isActive}
                 size={iconButtonChromeGlyphSize("small")}
                 strokeWidth={1.5}
-                backdrop={resolveExplorerSidebarTabBackdrop()}
+                backdrop="surfaceWorkspace"
               />
               <Text
                 selectable={false}
@@ -360,7 +355,7 @@ export function ExplorerSidebarTabRail({
           </Animated.ScrollView>
           <HorizontalScrollBoundaryShades
             visible
-            backdrop="sidebar"
+            backdrop="workspace"
             testIDPrefix="explorer-sidebar-tabs-scroll-shade"
             leftStyle={scrollBoundary.leftShadeStyle}
             rightStyle={scrollBoundary.rightShadeStyle}
@@ -393,7 +388,7 @@ const styles = StyleSheet.create((theme) => ({
   track: {
     minWidth: 0,
     height: WORKSPACE_SECONDARY_HEADER_HEIGHT,
-    backgroundColor: theme.colors.surfaceSidebar,
+    backgroundColor: theme.colors.surfaceWorkspace,
     flexDirection: "row",
     alignItems: "center",
   },
@@ -450,7 +445,7 @@ const styles = StyleSheet.create((theme) => ({
     bottom: theme.spacing[0.5],
     width: TAB_DROP_INDICATOR_WIDTH,
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.accent,
+    backgroundColor: theme.colors.workspace.tabAccent,
     zIndex: 10,
     pointerEvents: "none",
   },

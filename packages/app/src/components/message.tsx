@@ -333,7 +333,7 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
   },
   content: {
     alignItems: "flex-end",
-    maxWidth: "100%",
+    maxWidth: { xs: "100%", md: "90%" },
     cursor: "auto",
   },
   containerSpacing: {
@@ -347,6 +347,8 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
   },
   bubble: {
     backgroundColor: theme.colors.userMessageBackground,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.workspace.border,
     borderRadius: theme.borderRadius.lg,
     paddingHorizontal: theme.spacing[3],
     paddingVertical: theme.spacing[2],
@@ -354,7 +356,7 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     flexShrink: 1,
   },
   text: {
-    color: theme.colors.foreground,
+    color: theme.colors.workspace.foreground,
     fontSize: theme.fontSize.content,
     ...(isWeb
       ? {
@@ -1018,7 +1020,7 @@ const turnCopyButtonStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
   },
   iconHoveredColor: {
-    color: theme.colors.foreground,
+    color: theme.colors.workspace.foreground,
   },
 }));
 
@@ -1143,10 +1145,10 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
     flexShrink: 0,
   },
   labelActive: {
-    color: theme.colors.foreground,
+    color: theme.colors.workspace.foreground,
   },
   labelLoading: {
-    color: theme.colors.foreground,
+    color: theme.colors.workspace.foreground,
     opacity: 0.72,
   },
   secondaryLabel: {
@@ -1158,7 +1160,7 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
     marginLeft: theme.spacing[2],
   },
   secondaryLabelActive: {
-    color: theme.colors.foreground,
+    color: theme.colors.workspace.foreground,
   },
   shimmerText: {
     color: "transparent",
@@ -1400,6 +1402,7 @@ const MemoizedMarkdownBlock = React.memo(function MemoizedMarkdownBlock({
 }: MemoizedMarkdownBlockProps) {
   return (
     <MarkdownRenderer
+      conversation
       text={text}
       enableHtmlish={false}
       rules={rules}
@@ -2027,7 +2030,7 @@ const speakMessageStylesheet = StyleSheet.create((theme) => ({
     fontFamily: theme.fontFamily.ui,
     fontSize: theme.fontSize.content,
     lineHeight: Math.round(theme.fontSize.content * 1.4),
-    color: theme.colors.foreground,
+    color: theme.colors.workspace.foreground,
   },
 }));
 
@@ -2098,7 +2101,7 @@ const notificationStylesheet = StyleSheet.create((theme) => ({
     flex: 1,
   },
   messageText: {
-    color: theme.colors.foreground,
+    color: theme.colors.workspace.foreground,
     fontSize: theme.fontSize.base,
     lineHeight: 20,
   },

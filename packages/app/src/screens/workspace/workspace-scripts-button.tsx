@@ -63,6 +63,8 @@ interface WorkspaceScriptsButtonProps {
   scripts: WorkspaceDescriptor["scripts"];
   liveTerminalIds?: readonly string[];
   onScriptTerminalStarted?: (terminalId: string) => void;
+  onPreviewTerminalStarted?: (terminalId: string) => void;
+  onPreviewPendingChange?: (pending: boolean) => void;
   onViewTerminal?: (terminalId: string) => void;
   onOpenUrlInBrowserTab?: (url: string) => void;
   hideLabels?: boolean;
@@ -99,6 +101,35 @@ const redColorMapping = (theme: Theme) => ({
 });
 const playFillTransparent = { fill: "transparent" };
 const ghostPlayStroke = { strokeWidth: 1.5 };
+const disabledAccessibilityState = { disabled: true };
+
+function DisabledPreviewPlay({ hideLabels }: { hideLabels?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
+      <TooltipTrigger asChild triggerRefProp="ref">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={disabledAccessibilityState}
+          accessibilityLabel={t("workspace.scripts.states.noServiceConfigured")}
+          disabled
+          testID="workspace-scripts-disabled"
+          style={styles.splitButtonPrimary}
+        >
+          <View style={styles.splitButtonContent}>
+            <ThemedPlay size={14} uniProps={mutedColorMapping} />
+            {!hideLabels && (
+              <Text style={styles.splitButtonText}>{t("workspace.scripts.actions.play")}</Text>
+            )}
+          </View>
+        </Pressable>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="center" offset={8}>
+        <Text style={styles.tooltipText}>{t("workspace.scripts.states.noServiceConfigured")}</Text>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 interface ScriptRowActionButtonProps {
   accessibilityLabel: string;
@@ -665,6 +696,7 @@ function consumeScriptStartOutcome(input: {
 }
 
 interface WorkspaceScriptsPreviewActionProps {
+  hideLabels?: boolean;
   scriptName: string | null;
   isRunning: boolean;
   isWaiting: boolean;
@@ -680,6 +712,7 @@ interface WorkspaceScriptsPreviewActionProps {
  * opens the picker instead of guessing one.
  */
 function WorkspaceScriptsPreviewAction({
+  hideLabels,
   scriptName,
   isRunning,
   isWaiting,
@@ -751,9 +784,17 @@ function WorkspaceScriptsPreviewAction({
         onPress={handlePress}
         style={actionStyle}
       >
-        {icon}
+        <View style={styles.splitButtonContent}>
+          {icon}
+          {!hideLabels && (
+            <Text style={[styles.splitButtonText, state === "stop" && styles.runningText]}>
+              {state === "stop"
+                ? t("workspace.scripts.actions.stop")
+                : t("workspace.scripts.actions.play")}
+            </Text>
+          )}
+        </View>
       </Pressable>
-      <View style={styles.splitButtonDivider} />
       <DropdownMenuTrigger
         testID="workspace-scripts-button"
         style={chevronStyle}
@@ -910,6 +951,8 @@ interface UseWorkspaceScriptControlsInput {
   preferredRouteKind: WorkspaceScriptLinkKind | null;
   toast: ToastApi;
   onScriptTerminalStarted?: (terminalId: string) => void;
+  onPreviewTerminalStarted?: (terminalId: string) => void;
+  onPreviewPendingChange?: (pending: boolean) => void;
 }
 
 interface WorkspaceScriptControls {
@@ -940,7 +983,16 @@ interface WorkspaceScriptControls {
 function useWorkspaceScriptControls(
   input: UseWorkspaceScriptControlsInput,
 ): WorkspaceScriptControls {
-  const { preview, serverId, workspaceId, scripts, client, activeConnection } = input;
+  const {
+    preview,
+    serverId,
+    workspaceId,
+    scripts,
+    client,
+    activeConnection,
+    onPreviewTerminalStarted,
+    onPreviewPendingChange,
+  } = input;
   const { t } = useTranslation();
   const toast = input.toast;
   const previewWorkspaceKey = useMemo(
@@ -964,7 +1016,7 @@ function useWorkspaceScriptControls(
       previewKey
         ? (services.find(
             (script) => script.scriptName === (preferredScriptByWorkspace[previewKey] ?? null),
-          ) ?? null)
+          ) ?? (services.length === 1 ? services[0] : null))
         : null,
     [previewKey, services, preferredScriptByWorkspace],
   );
@@ -987,9 +1039,13 @@ function useWorkspaceScriptControls(
     setPendingPreviewScriptName((current) => (current === scriptName ? null : current));
   }, []);
 
-  const recordPreviewTerminalId = useCallback((scriptName: string, terminalId: string) => {
-    setPreviewTerminalIdByScript((current) => ({ ...current, [scriptName]: terminalId }));
-  }, []);
+  const recordPreviewTerminalId = useCallback(
+    (scriptName: string, terminalId: string) => {
+      setPreviewTerminalIdByScript((current) => ({ ...current, [scriptName]: terminalId }));
+      onPreviewTerminalStarted?.(terminalId);
+    },
+    [onPreviewTerminalStarted],
+  );
 
   // Starting a preview must not yank the workspace to the service's terminal: the launch is
   // registered as a preview start and its terminal id goes to the preview flow instead.
@@ -1002,6 +1058,7 @@ function useWorkspaceScriptControls(
         clientUnavailableMessage: t("common.errors.daemonClientUnavailable"),
       }),
     onError: (error, scriptName) => {
+      if (previewStartNamesRef.current.has(scriptName)) onPreviewPendingChange?.(false);
       previewStartNamesRef.current.delete(scriptName);
       cancelPendingPreview(scriptName);
       showScriptMutationError({
@@ -1011,6 +1068,7 @@ function useWorkspaceScriptControls(
       });
     },
     onSuccess: (result, scriptName) => {
+      const wasPreviewStart = previewStartNamesRef.current.has(scriptName);
       consumeScriptStartOutcome({
         result,
         scriptName,
@@ -1018,6 +1076,7 @@ function useWorkspaceScriptControls(
         onPreviewTerminal: recordPreviewTerminalId,
         onOrdinaryTerminal: input.onScriptTerminalStarted,
       });
+      if (wasPreviewStart) onPreviewPendingChange?.(false);
     },
   });
 
@@ -1091,12 +1150,13 @@ function useWorkspaceScriptControls(
         return;
       }
       previewStartNamesRef.current.add(scriptName);
+      onPreviewPendingChange?.(true);
       activePreviewScriptRef.current = scriptName;
       setPendingPreviewScriptName(scriptName);
       setPreferredScript(previewKey, scriptName);
       startScriptMutation.mutate(scriptName);
     },
-    [previewKey, scripts, startScriptMutation, setPreferredScript],
+    [previewKey, scripts, startScriptMutation, setPreferredScript, onPreviewPendingChange],
   );
 
   const stopPreviewService = useCallback(() => {
@@ -1223,12 +1283,16 @@ function useWorkspaceScriptControls(
   };
 }
 
+// The desktop control keeps preview and ordinary script actions in one menu.
+// eslint-disable-next-line complexity
 export function WorkspaceScriptsButton({
   serverId,
   workspaceId,
   scripts,
   liveTerminalIds = [],
   onScriptTerminalStarted,
+  onPreviewTerminalStarted,
+  onPreviewPendingChange,
   onViewTerminal,
   onOpenUrlInBrowserTab,
   hideLabels,
@@ -1257,6 +1321,8 @@ export function WorkspaceScriptsButton({
     preferredRouteKind,
     toast,
     onScriptTerminalStarted,
+    onPreviewTerminalStarted,
+    onPreviewPendingChange,
   });
 
   const triggerStyle = useCallback(
@@ -1282,7 +1348,7 @@ export function WorkspaceScriptsButton({
   );
 
   if (scripts.length === 0) {
-    return null;
+    return preview ? <DisabledPreviewPlay hideLabels={hideLabels} /> : null;
   }
 
   const hasAnyRunning = scripts.some((s) => s.lifecycle === "running");
@@ -1298,8 +1364,22 @@ export function WorkspaceScriptsButton({
           open={scriptControls.previewEnabled ? scriptControls.menuOpen : undefined}
           onOpenChange={scriptControls.previewEnabled ? scriptControls.setMenuOpen : undefined}
         >
-          {scriptControls.previewEnabled ? (
+          {preview && scriptControls.services.length === 0 && (
+            <>
+              <DisabledPreviewPlay hideLabels={hideLabels} />
+              <DropdownMenuTrigger
+                testID="workspace-scripts-button"
+                style={styles.splitButtonSecondary}
+                accessibilityRole="button"
+                accessibilityLabel={t("workspace.scripts.accessibility.trigger")}
+              >
+                <ThemedChevronDown size={16} uniProps={extraMutedIconColorMapping} />
+              </DropdownMenuTrigger>
+            </>
+          )}
+          {scriptControls.previewEnabled && (
             <WorkspaceScriptsPreviewAction
+              hideLabels={hideLabels}
               scriptName={scriptControls.preferredScriptName}
               isRunning={scriptControls.preferredService?.lifecycle === "running"}
               isWaiting={scriptControls.isWaitingForPreview}
@@ -1308,7 +1388,8 @@ export function WorkspaceScriptsButton({
               onStart={scriptControls.startPreviewService}
               onStop={scriptControls.stopPreviewService}
             />
-          ) : (
+          )}
+          {!preview && (
             <DropdownMenuTrigger
               testID="workspace-scripts-button"
               style={triggerStyle}
@@ -1384,7 +1465,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "stretch",
     borderRadius: theme.borderRadius.md,
     borderWidth: theme.borderWidth[1],
-    borderColor: theme.colors.borderAccent,
+    borderColor: "transparent",
     overflow: "hidden",
   },
   ghostButtonFrame: {
@@ -1400,7 +1481,7 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
   },
   ghostButtonHovered: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   splitButtonPrimary: {
     paddingHorizontal: {
@@ -1410,7 +1491,7 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
   },
   splitButtonPrimaryHovered: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   splitButtonSecondary: {
     paddingHorizontal: theme.spacing[1.5],
@@ -1421,12 +1502,11 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
   },
-  splitButtonDivider: {
-    width: 1,
-    backgroundColor: theme.colors.borderAccent,
+  runningText: {
+    color: theme.colors.palette.blue[500],
   },
   splitButtonText: {
-    fontSize: theme.fontSize.base,
+    fontSize: theme.fontSize.sm,
     lineHeight: theme.fontSize.base * 1.5,
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.normal,
@@ -1498,7 +1578,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[1.5],
     paddingVertical: 1,
     borderRadius: 2,
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   exitBadgeText: {
     fontSize: 10,

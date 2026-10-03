@@ -91,6 +91,7 @@ import type { WorkspaceTab } from "@/workspace-tabs/model";
 import { RenderProfile } from "@/utils/render-profiler";
 import { isNative } from "@/constants/platform";
 import { panelTargetSupportsHost } from "@/plugins/workspace-panels/locations";
+import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 
 interface SplitContainerProps {
   layout: WorkspaceLayout;
@@ -116,6 +117,7 @@ interface SplitContainerProps {
   onCloseTabsToRight: (tabId: string, paneTabs: WorkspaceTabDescriptor[]) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string, paneTabs: WorkspaceTabDescriptor[]) => Promise<void> | void;
   onCreateNewTab: (input: { paneId?: string }) => void;
+  onOpenExplorerTerminalFile: (request: WorkspaceFileOpenRequest) => void;
   buildPaneContentModel: (input: {
     paneId: string;
     tab: WorkspaceTabDescriptor;
@@ -175,7 +177,7 @@ function asDragOverData(data: unknown): WorkspaceTabDragData | SplitPaneDropData
 
 interface SplitNodeViewProps extends Omit<
   SplitContainerProps,
-  "layout" | "onMoveTabToPane" | "onSelectTabInPane"
+  "layout" | "onMoveTabToPane" | "onSelectTabInPane" | "onOpenExplorerTerminalFile"
 > {
   node: SplitNode;
   uiTabs: WorkspaceTab[];
@@ -329,6 +331,7 @@ export function SplitContainer({
   onCloseTabsToRight,
   onCloseOtherTabs,
   onCreateNewTab,
+  onOpenExplorerTerminalFile,
   buildPaneContentModel,
   onFocusPane,
   onSplitPane,
@@ -717,6 +720,7 @@ export function SplitContainer({
               />
               <View style={explorerSidebarDockStyle}>
                 <ExplorerSidebarDock
+                  workspaceKey={workspaceKey}
                   pane={explorerSidebarPane}
                   uiTabs={uiTabs}
                   normalizedServerId={normalizedServerId}
@@ -726,6 +730,7 @@ export function SplitContainer({
                   onSelectTab={onSelectTabInPane}
                   onCloseTab={onCloseTab}
                   onCreateNewTab={handleCreateExplorerTab}
+                  onOpenWorkspaceFile={onOpenExplorerTerminalFile}
                   onMoveTabToMain={handleMoveExplorerTabToMain}
                   buildPaneContentModel={buildPaneContentModel}
                   onReorderTabsInPane={onReorderTabsInPane}
@@ -1398,7 +1403,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0,
     minWidth: 240,
     minHeight: 0,
-    backgroundColor: theme.colors.surfaceSidebar,
+    backgroundColor: theme.colors.surfaceWorkspace,
   },
   group: {
     flex: 1,

@@ -13,6 +13,7 @@ import { WindowChromeSafeArea } from "@/utils/desktop-window";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 
 interface ScreenHeaderProps {
+  style?: StyleProp<ViewStyle>;
   left?: ReactNode;
   right?: ReactNode;
   leftStyle?: StyleProp<ViewStyle>;
@@ -26,6 +27,7 @@ interface ScreenHeaderProps {
  * and safe-area logic in one place.
  */
 export function ScreenHeader({
+  style,
   left,
   right,
   leftStyle,
@@ -49,7 +51,7 @@ export function ScreenHeader({
   const rightCombinedStyle = useMemo(() => [styles.right, rightStyle], [rightStyle]);
 
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, style]}>
       <View style={innerStyle}>
         <WindowChromeSafeArea
           placement="inline"

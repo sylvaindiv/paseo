@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/menu";
 import { StatusRing } from "@/components/status-ring";
 import { STATUS_RING_HALO_INSET } from "@/components/status-ring/geometry";
-import { MAX_CONTENT_WIDTH } from "@/constants/layout";
+import { chatStyles } from "@/styles/chat";
 import { isWeb } from "@/constants/platform";
 import { getStatusDotColor } from "@/utils/status-dot-color";
 import { STATUS_INDICATOR_FILLED_DOT_SIZE } from "@/utils/status-indicator-geometry";
@@ -33,7 +33,7 @@ import { COMPOSER_PILL_CLEARANCE, composerPillStyles } from "./pill-styles";
 export function ComposerTrackBar({ children }: { children: ReactNode }): ReactElement {
   return (
     <View style={styles.bar} pointerEvents="box-none">
-      <View style={styles.track} pointerEvents="box-none">
+      <View style={[styles.track, chatStyles.rail]} pointerEvents="box-none">
         {children}
       </View>
     </View>
@@ -320,7 +320,6 @@ const styles = StyleSheet.create((theme) => {
       right: 0,
       bottom: 0,
       alignItems: "center",
-      paddingHorizontal: theme.spacing[4],
       paddingBottom: {
         xs: COMPOSER_PILL_CLEARANCE.compact,
         md: COMPOSER_PILL_CLEARANCE.wide,
@@ -328,7 +327,6 @@ const styles = StyleSheet.create((theme) => {
     },
     track: {
       width: "100%",
-      maxWidth: MAX_CONTENT_WIDTH,
       flexDirection: "row",
       alignItems: "center",
       gap: theme.spacing[1],

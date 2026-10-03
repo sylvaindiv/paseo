@@ -1,0 +1,115 @@
+import type {
+  AgentPermissionRequest,
+  AgentPermissionResponse,
+} from "@getpaseo/protocol/agent-types";
+import type { WidgetAction, WidgetRequest } from "@getpaseo/protocol/desktop-agent-widget";
+import { createMarkdownParser } from "@/utils/markdown-parser";
+import {
+  areQuestionsAnswered,
+  buildQuestionFormAnswers,
+  parseQuestionFormQuestions,
+} from "@/components/question-form-card-core";
+
+const markdown = createMarkdownParser({ linkify: false });
+// Images can disclose plan content through remote URLs; this small reading surface is text-only.
+markdown.disable("image");
+interface RequestInput {
+  serverId: string;
+  agentId: string;
+  request: AgentPermissionRequest;
+  agentTitle: string;
+  workspace: string;
+}
+export function projectWidgetRequest(input: RequestInput): WidgetRequest | null {
+  const { request, serverId, agentId, agentTitle, workspace } = input;
+  if (request.kind !== "plan" && request.kind !== "question") return null;
+  const questions = parseQuestionFormQuestions(request.input) ?? [];
+  if (request.kind === "question" && questions.length === 0) return null;
+  let plan =
+    typeof request.metadata?.planText === "string"
+      ? request.metadata.planText
+      : request.input?.plan;
+  if (typeof plan !== "string" && request.detail?.type === "plan") plan = request.detail.text;
+  if (request.kind === "plan" && typeof plan !== "string") return null;
+  const canApprove =
+    !request.actions?.length || request.actions.some((action) => action.behavior === "allow");
+  return {
+    key: JSON.stringify([serverId, agentId, request.id]),
+    serverId,
+    agentId,
+    requestId: request.id,
+    agentTitle,
+    workspace,
+    kind: request.kind,
+    title: request.title ?? "",
+    planHtml: typeof plan === "string" ? markdown.render(plan) : "",
+    questions,
+    canApprove,
+  };
+}
+export function buildWidgetPermissionResponse(
+  request: AgentPermissionRequest,
+  action: WidgetAction,
+): AgentPermissionResponse {
+  if (action.type === "approve") return approvePlan(request);
+  if (action.type !== "answer" || request.kind !== "question")
+    throw new Error("This request has changed.");
+  const questions = parseQuestionFormQuestions(request.input);
+  if (!questions) throw new Error("This question cannot be answered here.");
+  const selections: Record<number, ReadonlySet<number>> = {};
+  const texts: Record<number, string> = {};
+  for (const [index, question] of questions.entries()) {
+    const selected = action.selections[index] ?? [];
+    if (selected.some((value) => value >= question.options.length))
+      throw new Error("Invalid question option.");
+    if (!question.multiSelect && selected.length > 1) throw new Error("Select one option.");
+    selections[index] = new Set(selected);
+    texts[index] = action.texts[index] ?? "";
+  }
+  if (!areQuestionsAnswered(questions, selections, texts))
+    throw new Error("Answer all required questions.");
+  return {
+    behavior: "allow",
+    updatedInput: {
+      ...request.input,
+      answers: buildQuestionFormAnswers(questions, selections, texts),
+    },
+  };
+}
+
+function approvePlan(request: AgentPermissionRequest): AgentPermissionResponse {
+  if (request.kind !== "plan") throw new Error("This request has changed.");
+  const allowing = request.actions?.filter((item) => item.behavior === "allow") ?? [];
+  const allow = allowing.find((item) => item.variant === "primary") ?? allowing[0];
+  if (request.actions?.length && !allow) throw new Error("This plan cannot be approved.");
+  return { behavior: "allow", selectedActionId: allow?.id ?? "accept" };
+}
+
+interface WidgetResponseInput {
+  client: Pick<
+    import("@getpaseo/client/internal/daemon-client").DaemonClient,
+    "sendAgentMessage" | "respondToPermissionAndWait"
+  >;
+  agentId: string;
+  request: AgentPermissionRequest;
+  operationId: string;
+  action: WidgetAction;
+}
+export async function respondToWidgetRequest(input: WidgetResponseInput): Promise<void> {
+  const { client, agentId, request, operationId, action } = input;
+  if (action.type === "handoff") {
+    if (request.kind !== "plan") throw new Error("This request is not a plan.");
+    // Interrupting a waiting plan uses the normal prompt path and keeps feedback in this conversation.
+    await client.sendAgentMessage(agentId, action.message, {
+      messageId: operationId,
+      activeTurnBehavior: "interrupt",
+    });
+    return;
+  }
+  await client.respondToPermissionAndWait(
+    agentId,
+    request.id,
+    buildWidgetPermissionResponse(request, action),
+    15000,
+  );
+}

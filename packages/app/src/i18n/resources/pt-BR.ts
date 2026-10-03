@@ -712,6 +712,7 @@ export const ptBR: TranslationResources = {
     scripts: {
       title: "Scripts",
       actions: {
+        play: "Play",
         chooseUrl: "Escolher URL",
         copyUrl: "Copiar URL",
         openService: "Ver serviço",
@@ -743,6 +744,10 @@ export const ptBR: TranslationResources = {
         direct: "Direta",
       },
       states: {
+        noServiceConfigured: "Nenhum serviço configurado",
+        shellClosed: "Shell fechado — reiniciar",
+        shellCreating: "Criando shell…",
+        scriptStopped: "Script parado",
         exitCode: "saída {{code}}",
         startFailed: "Falha ao iniciar {{scriptName}}",
         stopFailed: "Falha ao parar {{scriptName}}",
@@ -1329,6 +1334,13 @@ export const ptBR: TranslationResources = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "Plano pronto",
+      responseNeeded: "Resposta pendente",
+      responseSent: "Resposta enviada",
+      execute: "Executar",
+      comment: "Adicionar uma instrução…",
+    },
     windowControls: {
       minimize: "Minimizar janela",
       maximize: "Maximizar janela",

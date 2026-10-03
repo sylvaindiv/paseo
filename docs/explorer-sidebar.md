@@ -38,11 +38,19 @@ The persisted layout still contains the Explorer pane so tabs survive reloads. T
 that pane from the workspace split tree and docks it separately. Persisted identifiers retain the
 literal `"explorer"` pane id and `explorerPaneIdByWorkspace` key for compatibility.
 
-The tab rail has no inline add or close controls. Its context menu opens a New Tab launcher and
+The tab rail has no inline add or close controls. Its context menu creates an agent draft and
 toggles Files, Changes, and Explorer-compatible workspace-scoped plugin panels from the shared
 launch catalog. Individual tab menus close instances or move compatible tabs to main. Explorer tabs
 can be reordered, but the dock cannot be split. Selecting an Explorer tab does not change workspace
 focus.
+
+On desktop, the lower 35% of Explorer holds one workspace shell and the latest service script
+terminal. A vertical resize handle stores the height per workspace. The shell is created only after
+the workspace directory and terminal list are available; its terminal id is reused when Explorer
+reopens. A closed shell stays closed until the user relaunches it. The Script tab appears after Play
+starts a service and selects that terminal. Hiding Explorer and switching workspaces never kills
+either process. The shell id, selected terminal tab, and height belong to the workspace, outside
+the ordinary pane layout.
 
 Cmd+E shows or hides Explorer without changing its selected view. Compact layouts use the combined
 full-screen Explorer overlay for Changes, Files, and pull requests, and close it after a file opens.

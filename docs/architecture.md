@@ -188,6 +188,13 @@ Electron wrapper for macOS, Linux, and Windows.
 - Native file access for workspace integration
 - Same WebSocket client as mobile app
 
+**Agent request widget.** The floating reading sheet uses the main application's existing host
+connections. Its sandboxed renderer has no daemon credentials or general desktop bridge. Application
+windows publish pending plans and questions through desktop-local IPC; main elects one connected
+publisher per host, so multiple windows do not duplicate the queue. Exclude this auxiliary window
+from application-window navigation and project routing. Handoff sends the one-line instruction to
+the current agent through the normal interrupt-and-message path; it does not create another agent.
+
 The desktop does not manage agent skills. It retains one compatibility reader for the old
 `skill-selection.json`, imports that preference into its managed local daemon, then deletes the old
 file after the daemon confirms persistence.
