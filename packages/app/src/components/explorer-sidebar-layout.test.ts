@@ -5,6 +5,10 @@ import {
 } from "@/components/explorer-sidebar-layout";
 
 describe("Explorer sidebar layout", () => {
+  it("defaults to the compact dock and preserves an explicitly resized width", () => {
+    expect(resolveExplorerSidebarWidth({ containerWidth: 1257 })).toBe(295);
+    expect(resolveExplorerSidebarWidth({ requestedWidth: 360, containerWidth: 1257 })).toBe(360);
+  });
   it("keeps the sidebar width fixed when the workspace body changes size", () => {
     const narrow = resolveExplorerSidebarDockSizes({ requestedWidth: 320, containerWidth: 1200 });
     const wide = resolveExplorerSidebarDockSizes({ requestedWidth: 320, containerWidth: 1520 });

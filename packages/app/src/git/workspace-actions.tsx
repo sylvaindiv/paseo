@@ -1,3 +1,8 @@
+import { Text } from "react-native";
+import { Eye, GitCommitHorizontal, GitPullRequest } from "lucide-react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { Theme } from "@/styles/theme";
 import { useCallback, useMemo } from "react";
 import { useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -10,13 +15,23 @@ import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { useSessionStore } from "@/stores/session-store";
 import { buildSettingsHostSectionRoute } from "@/utils/host-routes";
 
+const ThemedEye = withUnistyles(Eye);
+const reviewIconMapping = (theme: Theme) => ({ color: theme.colors.workspace.review });
+const reviewIcon = <ThemedEye size={13} strokeWidth={1.5} uniProps={reviewIconMapping} />;
+
 interface WorkspaceActionsProps {
+  hideLabels?: boolean;
   serverId: string;
   workspaceId: string;
   cwd: string;
 }
 
-export function WorkspaceActions({ serverId, workspaceId, cwd }: WorkspaceActionsProps) {
+export function WorkspaceActions({
+  serverId,
+  workspaceId,
+  cwd,
+  hideLabels,
+}: WorkspaceActionsProps) {
   const router = useRouter();
   const { t } = useTranslation();
   const runGitAction = useGitActionRunner();
@@ -140,23 +155,33 @@ export function WorkspaceActions({ serverId, workspaceId, cwd }: WorkspaceAction
     <>
       <Button
         size="xs"
-        variant="secondary"
+        variant="ghost"
+        leftIcon={reviewIcon}
+        textStyle={styles.reviewText}
         testID="workspace-git-review"
+        accessibilityLabel="Review"
         disabled={!workflowSupported}
         onPress={handleReview}
       >
-        Review
+        {hideLabels ? null : "Review"}
       </Button>
-      <Button
-        size="xs"
-        variant="secondary"
-        testID="workspace-git-commit"
-        disabled={commitAction.disabled}
-        loading={commitAction.status === "pending"}
-        onPress={handleCommit}
-      >
-        Commit
-      </Button>
+      <Tooltip delayDuration={250}>
+        <TooltipTrigger asChild>
+          <Button
+            size="xs"
+            variant="ghost"
+            leftIcon={GitCommitHorizontal}
+            testID="workspace-git-commit"
+            accessibilityLabel="Commit"
+            disabled={commitAction.disabled}
+            loading={commitAction.status === "pending"}
+            onPress={handleCommit}
+          />
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          <Text style={styles.tooltipText}>Commit</Text>
+        </TooltipContent>
+      </Tooltip>
       {workflowState.action === "repair-checks" ? (
         <Button
           size="xs"
@@ -171,7 +196,9 @@ export function WorkspaceActions({ serverId, workspaceId, cwd }: WorkspaceAction
       ) : null}
       <Button
         size="xs"
-        variant="default"
+        variant="outline"
+        leftIcon={GitPullRequest}
+        style={styles.prButton}
         testID="changes-primary-cta"
         disabled={workflowDisabled}
         loading={workflowNativeAction?.status === "pending"}
@@ -182,3 +209,9 @@ export function WorkspaceActions({ serverId, workspaceId, cwd }: WorkspaceAction
     </>
   );
 }
+
+const styles = StyleSheet.create((theme) => ({
+  reviewText: { color: theme.colors.workspace.review },
+  tooltipText: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
+  prButton: { backgroundColor: theme.colors.surface0, borderColor: theme.colors.workspace.border },
+}));

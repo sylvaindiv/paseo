@@ -715,6 +715,7 @@ export const ru: TranslationResources = {
     scripts: {
       title: "Скрипты",
       actions: {
+        play: "Play",
         chooseUrl: "Выбрать URL",
         copyUrl: "Скопировать URL",
         openService: "Открыть сервис",

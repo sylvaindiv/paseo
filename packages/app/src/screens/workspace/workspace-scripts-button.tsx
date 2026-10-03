@@ -103,7 +103,7 @@ const playFillTransparent = { fill: "transparent" };
 const ghostPlayStroke = { strokeWidth: 1.5 };
 const disabledAccessibilityState = { disabled: true };
 
-function DisabledPreviewPlay() {
+function DisabledPreviewPlay({ hideLabels }: { hideLabels?: boolean }) {
   const { t } = useTranslation();
   return (
     <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
@@ -116,7 +116,12 @@ function DisabledPreviewPlay() {
           testID="workspace-scripts-disabled"
           style={styles.splitButtonPrimary}
         >
-          <ThemedPlay size={14} uniProps={mutedColorMapping} />
+          <View style={styles.splitButtonContent}>
+            <ThemedPlay size={14} uniProps={mutedColorMapping} />
+            {!hideLabels && (
+              <Text style={styles.splitButtonText}>{t("workspace.scripts.actions.play")}</Text>
+            )}
+          </View>
         </Pressable>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" offset={8}>
@@ -691,6 +696,7 @@ function consumeScriptStartOutcome(input: {
 }
 
 interface WorkspaceScriptsPreviewActionProps {
+  hideLabels?: boolean;
   scriptName: string | null;
   isRunning: boolean;
   isWaiting: boolean;
@@ -706,6 +712,7 @@ interface WorkspaceScriptsPreviewActionProps {
  * opens the picker instead of guessing one.
  */
 function WorkspaceScriptsPreviewAction({
+  hideLabels,
   scriptName,
   isRunning,
   isWaiting,
@@ -777,9 +784,17 @@ function WorkspaceScriptsPreviewAction({
         onPress={handlePress}
         style={actionStyle}
       >
-        {icon}
+        <View style={styles.splitButtonContent}>
+          {icon}
+          {!hideLabels && (
+            <Text style={[styles.splitButtonText, state === "stop" && styles.runningText]}>
+              {state === "stop"
+                ? t("workspace.scripts.actions.stop")
+                : t("workspace.scripts.actions.play")}
+            </Text>
+          )}
+        </View>
       </Pressable>
-      <View style={styles.splitButtonDivider} />
       <DropdownMenuTrigger
         testID="workspace-scripts-button"
         style={chevronStyle}
@@ -1333,7 +1348,7 @@ export function WorkspaceScriptsButton({
   );
 
   if (scripts.length === 0) {
-    return preview ? <DisabledPreviewPlay /> : null;
+    return preview ? <DisabledPreviewPlay hideLabels={hideLabels} /> : null;
   }
 
   const hasAnyRunning = scripts.some((s) => s.lifecycle === "running");
@@ -1351,7 +1366,7 @@ export function WorkspaceScriptsButton({
         >
           {preview && scriptControls.services.length === 0 && (
             <>
-              <DisabledPreviewPlay />
+              <DisabledPreviewPlay hideLabels={hideLabels} />
               <DropdownMenuTrigger
                 testID="workspace-scripts-button"
                 style={styles.splitButtonSecondary}
@@ -1364,6 +1379,7 @@ export function WorkspaceScriptsButton({
           )}
           {scriptControls.previewEnabled && (
             <WorkspaceScriptsPreviewAction
+              hideLabels={hideLabels}
               scriptName={scriptControls.preferredScriptName}
               isRunning={scriptControls.preferredService?.lifecycle === "running"}
               isWaiting={scriptControls.isWaitingForPreview}
@@ -1449,7 +1465,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "stretch",
     borderRadius: theme.borderRadius.md,
     borderWidth: theme.borderWidth[1],
-    borderColor: theme.colors.borderAccent,
+    borderColor: "transparent",
     overflow: "hidden",
   },
   ghostButtonFrame: {
@@ -1465,7 +1481,7 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
   },
   ghostButtonHovered: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   splitButtonPrimary: {
     paddingHorizontal: {
@@ -1475,7 +1491,7 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
   },
   splitButtonPrimaryHovered: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   splitButtonSecondary: {
     paddingHorizontal: theme.spacing[1.5],
@@ -1486,12 +1502,11 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
   },
-  splitButtonDivider: {
-    width: 1,
-    backgroundColor: theme.colors.borderAccent,
+  runningText: {
+    color: theme.colors.palette.blue[500],
   },
   splitButtonText: {
-    fontSize: theme.fontSize.base,
+    fontSize: theme.fontSize.sm,
     lineHeight: theme.fontSize.base * 1.5,
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.normal,
@@ -1563,7 +1578,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[1.5],
     paddingVertical: 1,
     borderRadius: 2,
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   exitBadgeText: {
     fontSize: 10,

@@ -709,6 +709,7 @@ export const ko: TranslationResources = {
     scripts: {
       title: "스크립트",
       actions: {
+        play: "Play",
         chooseUrl: "URL를 선택하세요",
         copyUrl: "URL 복사",
         openService: "서비스 보기",

@@ -711,6 +711,7 @@ export const ja: TranslationResources = {
     scripts: {
       title: "スクリプト",
       actions: {
+        play: "Play",
         chooseUrl: "URLを選択",
         copyUrl: "URLをコピー",
         openService: "サービスを表示",

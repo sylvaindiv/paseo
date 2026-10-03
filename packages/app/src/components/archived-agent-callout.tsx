@@ -3,7 +3,8 @@ import { View, Text } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { FOOTER_HEIGHT, MAX_CONTENT_WIDTH } from "@/constants/layout";
+import { FOOTER_HEIGHT } from "@/constants/layout";
+import { chatStyles } from "@/styles/chat";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { KeyboardTranslateView } from "@/components/keyboard-translate-view";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,7 @@ export function ArchivedAgentCallout({ serverId, agentId }: ArchivedAgentCallout
 
   return (
     <KeyboardTranslateView style={containerStyle}>
-      <View style={styles.inputAreaContainer}>
+      <View style={[styles.inputAreaContainer, chatStyles.rail]}>
         <View style={styles.inputAreaContent}>
           <View style={styles.calloutStack}>
             <View style={styles.callout}>
@@ -80,11 +81,10 @@ const styles = StyleSheet.create((theme: Theme) => ({
     alignItems: "center",
     width: "100%",
     overflow: "visible",
-    padding: theme.spacing[4],
+    paddingVertical: theme.spacing[4],
   },
   inputAreaContent: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
   },
   callout: {
     flexDirection: "row",

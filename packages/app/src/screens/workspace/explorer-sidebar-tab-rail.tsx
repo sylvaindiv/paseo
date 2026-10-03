@@ -445,7 +445,7 @@ const styles = StyleSheet.create((theme) => ({
     bottom: theme.spacing[0.5],
     width: TAB_DROP_INDICATOR_WIDTH,
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.accent,
+    backgroundColor: theme.colors.workspace.tabAccent,
     zIndex: 10,
     pointerEvents: "none",
   },

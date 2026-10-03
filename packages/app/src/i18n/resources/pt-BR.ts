@@ -712,6 +712,7 @@ export const ptBR: TranslationResources = {
     scripts: {
       title: "Scripts",
       actions: {
+        play: "Play",
         chooseUrl: "Escolher URL",
         copyUrl: "Copiar URL",
         openService: "Ver serviço",

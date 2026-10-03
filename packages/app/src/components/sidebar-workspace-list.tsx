@@ -2634,9 +2634,9 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   projectTitle: {
-    color: theme.colors.foregroundMuted,
+    color: theme.colors.workspace.muted,
     fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.normal,
+    fontWeight: "600",
     minWidth: 0,
     flexShrink: 1,
   },

@@ -715,6 +715,7 @@ export const fr: TranslationResources = {
     scripts: {
       title: "Scripts",
       actions: {
+        play: "Play",
         chooseUrl: "Choisir l’URL",
         copyUrl: "Copier l’URL",
         openService: "Voir le service",

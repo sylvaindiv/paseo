@@ -16,7 +16,7 @@ import {
 } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useIsFocused } from "@react-navigation/native";
-import { BackHandler, Keyboard, Pressable, Text, View } from "react-native";
+import { BackHandler, Keyboard, Pressable, Text, View, type LayoutChangeEvent } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, type Href } from "expo-router";
 import * as Clipboard from "expo-clipboard";
@@ -1632,6 +1632,11 @@ function WorkspaceScreenContent({
 }: WorkspaceScreenContentProps) {
   const { t } = useTranslation();
   const _insets = useSafeAreaInsets();
+  const [hideHeaderActionLabels, setHideHeaderActionLabels] = useState(false);
+  const handleHeaderLayout = useCallback((event: LayoutChangeEvent) => {
+    const width = event.nativeEvent.layout.width;
+    if (width > 0) setHideHeaderActionLabels(width < 720);
+  }, []);
   const toast = useToast();
   const isMobile = useIsCompactFormFactor();
   const hasMacTrafficLights = useHasWindowChromeObstruction("top-left");
@@ -3937,7 +3942,7 @@ function WorkspaceScreenContent({
             onViewTerminal={handleViewScriptTerminal}
             onOpenUrlInBrowserTab={handleOpenUrlInBrowserTab}
             preview={workspaceScriptsPreviewActions}
-            hideLabels
+            hideLabels={hideHeaderActionLabels}
           />
         ) : null}
         {!isMobile && workspaceDirectory ? (
@@ -3945,12 +3950,13 @@ function WorkspaceScreenContent({
             serverId={normalizedServerId}
             cwd={workspaceDirectory}
             activeFile={activeFileLocation}
-            hideLabels
+            hideLabels={hideHeaderActionLabels}
           />
         ) : null}
         {!isMobile && workspaceDirectory ? (
           <>
             <WorkspaceActions
+              hideLabels={hideHeaderActionLabels}
               serverId={normalizedServerId}
               workspaceId={normalizedWorkspaceId}
               cwd={workspaceDirectory}
@@ -3979,6 +3985,7 @@ function WorkspaceScreenContent({
       </View>
     ),
     [
+      hideHeaderActionLabels,
       isMobile,
       workspaceDescriptor,
       normalizedServerId,
@@ -4058,6 +4065,8 @@ function WorkspaceScreenContent({
     () =>
       showScreenHeader ? (
         <ScreenHeader
+          style={styles.workspaceHeader}
+          onRowLayout={handleHeaderLayout}
           left={
             <>
               <SidebarMenuToggle />
@@ -4095,6 +4104,7 @@ function WorkspaceScreenContent({
         />
       ) : null,
     [
+      handleHeaderLayout,
       canOpenImportSheet,
       createTerminalDisabled,
       currentBranchName,
@@ -4422,6 +4432,7 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface3,
     opacity: 0.25,
   },
+  workspaceHeader: { backgroundColor: theme.colors.workspace.chrome },
   headerRight: {
     flexDirection: "row",
     alignItems: "center",

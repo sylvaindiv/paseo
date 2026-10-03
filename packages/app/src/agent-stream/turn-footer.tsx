@@ -1,7 +1,7 @@
+import { chatStyles } from "@/styles/chat";
 import React, { memo, useCallback, useMemo, type ReactNode } from "react";
 import { View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { SPACING, type Theme } from "@/styles/theme";
 import type { TurnTiming } from "@/timeline/turn-time";
 import type { StreamItem } from "@/types/stream";
@@ -208,17 +208,11 @@ function CompletedTurnFooter({
 }
 
 function TurnFooterRow({ children }: { children: ReactNode }) {
-  const rowStyle = useMemo(() => [stylesheet.streamItemWrapper, stylesheet.turnFooterRow], []);
+  const rowStyle = useMemo(() => [chatStyles.rail, stylesheet.turnFooterRow], []);
   return <View style={rowStyle}>{children}</View>;
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-  streamItemWrapper: {
-    width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
-    alignSelf: "center",
-    paddingHorizontal: theme.spacing[2],
-  },
   turnFooterRow: {
     marginTop: theme.spacing[2] + 5,
   },

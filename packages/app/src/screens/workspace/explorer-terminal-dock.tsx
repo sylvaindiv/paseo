@@ -182,6 +182,7 @@ export function ExplorerTerminalDock({
               terminalId={terminalId}
               isWorkspaceFocused={isWorkspaceFocused}
               isPaneFocused
+              autoFocus={false}
               onOpenFileExplorer={noAction}
               onOpenWorkspaceFile={onOpenWorkspaceFile}
             />

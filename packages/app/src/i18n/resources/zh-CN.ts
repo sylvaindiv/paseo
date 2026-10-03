@@ -705,6 +705,7 @@ export const zhCN: TranslationResources = {
     scripts: {
       title: "Scripts",
       actions: {
+        play: "Play",
         chooseUrl: "选择 URL",
         copyUrl: "复制 URL",
         openService: "查看服务",

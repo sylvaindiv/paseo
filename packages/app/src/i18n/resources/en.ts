@@ -705,6 +705,7 @@ export const en = {
     scripts: {
       title: "Scripts",
       actions: {
+        play: "Play",
         chooseUrl: "Choose URL",
         copyUrl: "Copy URL",
         openService: "View service",

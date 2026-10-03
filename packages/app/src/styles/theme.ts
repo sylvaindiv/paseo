@@ -243,6 +243,14 @@ const lightTerminalAnsi = {
 
 export function buildLightSemanticColors(tint: LightThemeConfig) {
   return {
+    workspace: {
+      chrome: tint.surface1,
+      foreground: tint.foreground,
+      muted: tint.foregroundMuted,
+      border: tint.border,
+      review: tint.accent,
+      tabAccent: tint.accent,
+    },
     surface0: tint.surface0,
     surface1: tint.surface1,
     surface2: tint.surface2,
@@ -308,29 +316,44 @@ export function buildLightSemanticColors(tint: LightThemeConfig) {
   };
 }
 
-const lightSemanticColors = buildLightSemanticColors({
-  surface0: "#ffffff",
-  surface1: "#fafafa",
-  surface2: "#f4f4f5",
-  surface3: "#e4e4e7",
-  surface4: "#d4d4d8",
-  surfaceDiffEmpty: "#f6f6f6",
-  surfaceSidebar: "#f4f4f4",
-  foreground: "#1a1a1e",
-  foregroundMuted: "#71717a",
-  foregroundExtraMuted: "#a1a1aa",
-  border: "#e4e4e7",
-  borderAccent: "#ececf1",
-  accent: "#cca694",
-  accentBright: "#dbb7a6",
-  accentForeground: "#1a1a1e",
-  primary: "#18181b",
-  primaryForeground: "#fafafa",
-  destructive: "#b04138",
-  terminalBlack: "#1a1a1e",
-  terminalBrightBlack: "#3f3f46",
-  ring: "#18181b",
-});
+const lightSemanticColors = {
+  ...buildLightSemanticColors({
+    surface0: "#ffffff",
+    surface1: "#fafafa",
+    surface2: "#f4f4f5",
+    surface3: "#e4e4e7",
+    surface4: "#d4d4d8",
+    surfaceDiffEmpty: "#f6f6f6",
+    surfaceSidebar: "#f4f4f4",
+    foreground: "#1a1a1e",
+    foregroundMuted: "#71717a",
+    foregroundExtraMuted: "#a1a1aa",
+    border: "#e4e4e7",
+    borderAccent: "#ececf1",
+    accent: "#cca694",
+    accentBright: "#dbb7a6",
+    accentForeground: "#1a1a1e",
+    primary: "#18181b",
+    primaryForeground: "#fafafa",
+    destructive: "#b04138",
+    terminalBlack: "#1a1a1e",
+    terminalBrightBlack: "#3f3f46",
+    ring: "#18181b",
+  }),
+  surfaceSidebar: "#f0efef",
+  surfaceSidebarSelected: "#e4e3e3",
+  userMessageBackground: "#f9f9f8",
+  composerInputBackground: "#f9f9f8",
+  composerInputBorder: "#e7e4e2",
+  workspace: {
+    chrome: "#f9f9f8",
+    foreground: "#423f3e",
+    muted: "#837d7a",
+    border: "#e7e4e2",
+    review: "#a77c70",
+    tabAccent: "#c69b8b",
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Dark theme variant builder
@@ -379,6 +402,14 @@ export function buildDarkSemanticColors(tint: DarkThemeConfig) {
   const foreground = tint.foreground ?? "#fafafa";
   const ring = tint.ring ?? "#d4d4d8";
   return {
+    workspace: {
+      chrome: tint.surface1,
+      foreground,
+      muted: tint.foregroundMuted,
+      border: tint.border,
+      review: tint.accent,
+      tabAccent: tint.accent,
+    },
     surface0: tint.surface0,
     surface1: tint.surface1,
     surface2: tint.surface2,

@@ -62,6 +62,10 @@ function markdownStyleMapping(theme: Theme): Partial<MarkdownWithStableRendererP
   return { style: createMarkdownStyles(theme) };
 }
 
+function conversationMarkdownStyleMapping(theme: Theme): Partial<MarkdownWithStableRendererProps> {
+  return { style: createMarkdownStyles(theme, theme.colors.workspace.foreground) };
+}
+
 function compactMarkdownStyleMapping(theme: Theme): Partial<MarkdownWithStableRendererProps> {
   return { style: createCompactMarkdownStyles(theme) };
 }
@@ -74,6 +78,7 @@ const MARKDOWN_LIST_ITEM_CONTENT_FLEX: ViewStyle = { flex: 1, flexShrink: 1, min
 export interface MarkdownRendererProps {
   text: string;
   compact?: boolean;
+  conversation?: boolean;
   rules?: RenderRules;
   markdownit?: ReturnType<typeof MarkdownIt>;
   onLinkPress?: (url: string) => boolean;
@@ -85,6 +90,7 @@ export interface MarkdownRendererProps {
 export function MarkdownRenderer({
   text,
   compact = false,
+  conversation = false,
   rules,
   markdownit = defaultMarkdownParser,
   onLinkPress,
@@ -100,6 +106,7 @@ export function MarkdownRenderer({
   const rendererProps = useMemo(
     () => ({
       compact,
+      conversation,
       rules: markdownRules,
       markdownit,
       onLinkPress,
@@ -109,6 +116,7 @@ export function MarkdownRenderer({
     [
       allowedImageHandlers,
       compact,
+      conversation,
       markdownRules,
       markdownit,
       onLinkPress,
@@ -194,13 +202,16 @@ function MarkdownPart({
 function MarkdownFragment({
   text,
   compact,
+  conversation,
   rules,
   markdownit,
   onLinkPress,
   allowedImageHandlers,
   topLevelMaxExceededItem,
 }: MarkdownRendererProps & { rules: RenderRules }) {
-  const uniProps = compact ? compactMarkdownStyleMapping : markdownStyleMapping;
+  let uniProps = markdownStyleMapping;
+  if (conversation) uniProps = conversationMarkdownStyleMapping;
+  if (compact) uniProps = compactMarkdownStyleMapping;
   return (
     <ThemedMarkdown
       uniProps={uniProps}
