@@ -2,6 +2,7 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { RetainedPanel } from "@/components/retained-panel";
+import { ExplorerTerminalDock } from "@/screens/workspace/explorer-terminal-dock";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import type { TabDropPreview } from "@/components/split-container-tab-drop-preview";
 import { ExplorerSidebarTabRail } from "@/screens/workspace/explorer-sidebar-tab-rail";
@@ -13,8 +14,10 @@ import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-
 import type { SplitPane } from "@/stores/workspace-layout-store";
 import type { WorkspaceTab } from "@/workspace-tabs/model";
 import { WindowChromeRegion, WindowChromeSafeArea } from "@/utils/desktop-window";
+import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 
 interface ExplorerSidebarDockProps {
+  workspaceKey: string;
   pane: SplitPane;
   uiTabs: WorkspaceTab[];
   normalizedServerId: string;
@@ -33,10 +36,12 @@ interface ExplorerSidebarDockProps {
     tab: WorkspaceTabDescriptor;
   }) => WorkspacePaneContentModel;
   headerAction?: ReactNode;
+  onOpenWorkspaceFile: (request: WorkspaceFileOpenRequest) => void;
 }
 
 /** A dock shell over the shared panel host. It owns no workspace-pane capabilities. */
 export function ExplorerSidebarDock({
+  workspaceKey,
   pane,
   uiTabs,
   normalizedServerId,
@@ -52,6 +57,7 @@ export function ExplorerSidebarDock({
   onReorderTabsInPane,
   buildPaneContentModel,
   headerAction,
+  onOpenWorkspaceFile,
 }: ExplorerSidebarDockProps) {
   const paneState = useMemo(() => deriveWorkspacePaneState({ pane, tabs: uiTabs }), [pane, uiTabs]);
   const tabs = useMemo(() => paneState.tabs.map((tab) => tab.descriptor), [paneState.tabs]);
@@ -105,16 +111,24 @@ export function ExplorerSidebarDock({
             <View pointerEvents="none" style={styles.tabRailDivider} />
           </WindowChromeSafeArea>
           <View style={styles.content}>
-            <WorkspacePanelHost
-              paneId={pane.id}
-              tabs={tabs}
-              activeTabId={activeTabId}
-              normalizedServerId={normalizedServerId}
-              normalizedWorkspaceId={normalizedWorkspaceId}
+            <ExplorerTerminalDock
+              workspaceKey={workspaceKey}
+              serverId={normalizedServerId}
+              workspaceId={normalizedWorkspaceId}
               isWorkspaceFocused={isWorkspaceFocused}
-              isPaneFocused
-              buildPaneContentModel={buildPaneContentModel}
-            />
+              onOpenWorkspaceFile={onOpenWorkspaceFile}
+            >
+              <WorkspacePanelHost
+                paneId={pane.id}
+                tabs={tabs}
+                activeTabId={activeTabId}
+                normalizedServerId={normalizedServerId}
+                normalizedWorkspaceId={normalizedWorkspaceId}
+                isWorkspaceFocused={isWorkspaceFocused}
+                isPaneFocused
+                buildPaneContentModel={buildPaneContentModel}
+              />
+            </ExplorerTerminalDock>
           </View>
         </View>
       </WindowChromeRegion>
@@ -127,12 +141,12 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
     minHeight: 0,
-    backgroundColor: theme.colors.surfaceSidebar,
+    backgroundColor: theme.colors.surfaceWorkspace,
   },
   tabRail: {
     position: "relative",
     flexShrink: 0,
-    backgroundColor: theme.colors.surfaceSidebar,
+    backgroundColor: theme.colors.surfaceWorkspace,
   },
   tabRailDivider: {
     position: "absolute",
@@ -145,6 +159,6 @@ const styles = StyleSheet.create((theme) => ({
   content: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: theme.colors.surfaceSidebar,
+    backgroundColor: theme.colors.surfaceWorkspace,
   },
 }));

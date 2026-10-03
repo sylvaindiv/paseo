@@ -1,3 +1,4 @@
+import type { AgentWidgetBridge } from "@getpaseo/protocol/desktop-agent-widget";
 import { Platform } from "react-native";
 import { getElectronHost } from "@/desktop/electron/host";
 import type { BrowserKeyboardPolicy } from "@/desktop/browser/shortcuts";
@@ -173,6 +174,7 @@ export interface DesktopInvokeBridge {
 }
 
 export interface DesktopHostBridge {
+  agentWidget?: AgentWidgetBridge;
   platform?: string;
   windowChromeMode?: string;
   invoke?: DesktopInvokeBridge["invoke"];

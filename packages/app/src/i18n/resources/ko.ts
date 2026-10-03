@@ -740,6 +740,10 @@ export const ko: TranslationResources = {
         direct: "직접",
       },
       states: {
+        noServiceConfigured: "구성된 서비스가 없습니다",
+        shellClosed: "셸이 종료됨 — 다시 시작",
+        shellCreating: "셸 생성 중…",
+        scriptStopped: "스크립트가 중지됨",
         exitCode: "종료 {{code}}",
         startFailed: "{{scriptName}}을(를) 시작하지 못했습니다",
         stopFailed: "{{scriptName}}를 중지하지 못했습니다.",
@@ -1310,6 +1314,13 @@ export const ko: TranslationResources = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "계획 준비 완료",
+      responseNeeded: "응답 대기 중",
+      responseSent: "응답을 보냈습니다",
+      execute: "실행",
+      comment: "지시 추가…",
+    },
     windowControls: {
       minimize: "창 최소화",
       maximize: "창 최대화",

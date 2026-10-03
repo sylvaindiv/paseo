@@ -149,7 +149,7 @@ describe("plugin theme palettes", () => {
       composerInputBorder: "#E7E5E4",
       composerPlanBackground: "#F5EFED",
       composerPlanStripe: "#EBDDD8",
-      composerPlanBorder: "#DCA480",
+      composerPlanBorder: "#e2dbd6",
       foreground: "#4c4f69",
       border: "#ccd0da",
       accent: "#8839ef",

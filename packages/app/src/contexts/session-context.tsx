@@ -1,3 +1,4 @@
+import { useAgentWidget } from "@/desktop/agent-widget/use-agent-widget";
 import { useRef, ReactNode, useCallback, useEffect } from "react";
 import { Buffer } from "buffer";
 import { AppState } from "react-native";
@@ -210,6 +211,7 @@ export function SessionProvider(props: SessionProviderProps) {
 }
 
 function SessionProviderInternal({ children, serverId, client }: SessionProviderClientProps) {
+  useAgentWidget(serverId);
   const { t } = useTranslation();
   const voiceRuntime = useVoiceRuntimeOptional();
   const voiceAudioEngine = useVoiceAudioEngineOptional();

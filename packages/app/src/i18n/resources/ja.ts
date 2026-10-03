@@ -742,6 +742,10 @@ export const ja: TranslationResources = {
         direct: "直接接続",
       },
       states: {
+        noServiceConfigured: "サービスが設定されていません",
+        shellClosed: "シェルは終了しました — 再起動",
+        shellCreating: "シェルを作成中…",
+        scriptStopped: "スクリプトは停止しました",
         exitCode: "終了コード: {{code}}",
         startFailed: "{{scriptName}}の起動に失敗しました",
         stopFailed: "{{scriptName}}の停止に失敗しました",
@@ -1315,6 +1319,13 @@ export const ja: TranslationResources = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "プランの準備完了",
+      responseNeeded: "回答待ち",
+      responseSent: "回答を送信しました",
+      execute: "実行",
+      comment: "指示を追加…",
+    },
     windowControls: {
       minimize: "ウィンドウを最小化",
       maximize: "ウィンドウを最大化",

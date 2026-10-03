@@ -1,3 +1,8 @@
+import type {
+  WidgetSnapshot,
+  WidgetActionResult,
+  WidgetActionDelivery,
+} from "@getpaseo/protocol/desktop-agent-widget";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BrowserKeyboardPolicy } from "./features/browser-keyboard/index.js";
 import type { DesktopWindowChromeMode } from "./window/chrome.js";
@@ -30,6 +35,17 @@ interface AttachedBrowserRegistration {
 }
 
 contextBridge.exposeInMainWorld("paseoDesktop", {
+  agentWidget: {
+    publish: (snapshot: WidgetSnapshot) =>
+      ipcRenderer.invoke("paseo:agent-widget:publish", snapshot),
+    result: (result: WidgetActionResult) => ipcRenderer.invoke("paseo:agent-widget:result", result),
+    onAction: (handler: (delivery: WidgetActionDelivery) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, delivery: WidgetActionDelivery) =>
+        handler(delivery);
+      ipcRenderer.on("paseo:agent-widget:action", listener);
+      return () => ipcRenderer.removeListener("paseo:agent-widget:action", listener);
+    },
+  },
   platform: process.platform,
   windowChromeMode: readWindowChromeMode(),
   invoke: (command: string, args?: Record<string, unknown>) =>

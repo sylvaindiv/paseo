@@ -258,7 +258,7 @@ export function buildLightSemanticColors(tint: LightThemeConfig) {
     composerInputBorder: "#E7E5E4",
     composerPlanBackground: "#F5EFED",
     composerPlanStripe: "#EBDDD8",
-    composerPlanBorder: "#DCA480",
+    composerPlanBorder: "#e2dbd6",
     interactionHighlight: "rgba(0, 0, 0, 0.06)",
 
     foreground: tint.foreground,
@@ -274,7 +274,7 @@ export function buildLightSemanticColors(tint: LightThemeConfig) {
 
     destructive: tint.destructive,
     destructiveForeground: tint.surface0,
-    success: tint.accent,
+    success: lightStatusColors.statusSuccess,
     successForeground: tint.surface0,
 
     background: tint.surface0,
@@ -321,9 +321,9 @@ const lightSemanticColors = buildLightSemanticColors({
   foregroundExtraMuted: "#a1a1aa",
   border: "#e4e4e7",
   borderAccent: "#ececf1",
-  accent: "#20744A",
-  accentBright: "#239956",
-  accentForeground: "#ffffff",
+  accent: "#cca694",
+  accentBright: "#dbb7a6",
+  accentForeground: "#1a1a1e",
   primary: "#18181b",
   primaryForeground: "#fafafa",
   destructive: "#b04138",
@@ -410,7 +410,7 @@ export function buildDarkSemanticColors(tint: DarkThemeConfig) {
 
     destructive: tint.destructive,
     destructiveForeground: "#ffffff",
-    success: tint.accent,
+    success: darkStatusColors.statusSuccess,
     successForeground: "#ffffff",
 
     // Legacy aliases (for gradual migration)
@@ -462,8 +462,9 @@ const paseoDarkColors = buildDarkSemanticColors({
   foregroundExtraMuted: "#717574",
   border: "#252B2A",
   borderAccent: "#2F3534",
-  accent: "#20744A",
-  accentBright: "#7ccba0",
+  accent: "#cca694",
+  accentBright: "#dbb7a6",
+  accentForeground: "#18181b",
   destructive: "#c64f43", // warm red, hue ~7 — reads as red (not pink) against the green tint
   terminalBlack: "#141716",
   terminalBrightBlack: "#434645",
@@ -717,8 +718,9 @@ const pureBlackDarkColors = buildDarkSemanticColors({
   foregroundExtraMuted: "#71717a",
   border: "#1c1c1c",
   borderAccent: "#242424",
-  accent: "#20744A",
-  accentBright: "#7ccba0",
+  accent: "#cca694",
+  accentBright: "#dbb7a6",
+  accentForeground: "#18181b",
   destructive: "#c44a4a",
   terminalBlack: "#595959",
   terminalBrightBlack: "#8a8a8a",

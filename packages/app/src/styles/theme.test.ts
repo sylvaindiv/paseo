@@ -48,9 +48,10 @@ describe("Pure black theme", () => {
     expect(darkPureBlackTheme.colors.terminal.background).toBe("#000000");
   });
 
-  it("uses Paseo's muted green accent", () => {
-    expect(darkPureBlackTheme.colors.accent).toBe("#20744A");
-    expect(darkPureBlackTheme.colors.accentBright).toBe("#7ccba0");
+  it("uses Paseo's warm accent with dark button text", () => {
+    expect(darkPureBlackTheme.colors.accent).toBe("#cca694");
+    expect(darkPureBlackTheme.colors.accentBright).toBe("#dbb7a6");
+    expect(darkPureBlackTheme.colors.accentForeground).toBe("#18181b");
   });
 
   it("derives sidebar interaction surfaces from the surface scale", () => {
@@ -94,6 +95,13 @@ describe("Built-in light theme", () => {
       },
     });
   });
+
+  it("keeps success semantic and the accent readable", () => {
+    expect(lightTheme.colors.accent).toBe("#cca694");
+    expect(lightTheme.colors.accentForeground).toBe("#1a1a1e");
+    expect(lightTheme.colors.success).toBe(lightTheme.colors.statusSuccess);
+    expect(darkTheme.colors.success).toBe(darkTheme.colors.statusSuccess);
+  });
 });
 
 describe("Composer plan surface", () => {
@@ -102,7 +110,7 @@ describe("Composer plan surface", () => {
     expect(lightTheme.colors.composerInputBorder).toBe("#E7E5E4");
     expect(lightTheme.colors.composerPlanBackground).toBe("#F5EFED");
     expect(lightTheme.colors.composerPlanStripe).toBe("#EBDDD8");
-    expect(lightTheme.colors.composerPlanBorder).toBe("#DCA480");
+    expect(lightTheme.colors.composerPlanBorder).toBe("#e2dbd6");
     expect(darkTheme.colors.composerPlanBackground).toBe("#2B2522");
     expect(darkTheme.colors.composerPlanStripe).toBe("#413732");
     expect(darkTheme.colors.composerPlanBorder).toBe("#5A463C");

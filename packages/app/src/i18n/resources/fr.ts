@@ -746,6 +746,10 @@ export const fr: TranslationResources = {
         direct: "Directe",
       },
       states: {
+        noServiceConfigured: "Aucun service configuré",
+        shellClosed: "Shell fermé — relancer",
+        shellCreating: "Création du shell…",
+        scriptStopped: "Script arrêté",
         exitCode: "code de sortie {{code}}",
         startFailed: "Échec du démarrage de {{scriptName}}",
         stopFailed: "Échec de l’arrêt de {{scriptName}}",
@@ -1330,6 +1334,13 @@ export const fr: TranslationResources = {
     },
   },
   desktop: {
+    agentWidget: {
+      planReady: "Plan prêt",
+      responseNeeded: "Réponse attendue",
+      responseSent: "Réponse envoyée",
+      execute: "Exécuter",
+      comment: "Ajouter une consigne…",
+    },
     windowControls: {
       minimize: "Réduire la fenêtre",
       maximize: "Agrandir la fenêtre",
