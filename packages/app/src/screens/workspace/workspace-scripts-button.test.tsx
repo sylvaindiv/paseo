@@ -15,6 +15,9 @@ void testI18n;
 const {
   theme,
   startWorkspaceScriptMock,
+  startWorkspaceScriptWithStatusMock,
+  readWorkspaceScriptConfigurationMock,
+  writeWorkspaceScriptConfigurationMock,
   killTerminalMock,
   setStringAsyncMock,
   copiedToastMock,
@@ -72,6 +75,20 @@ const {
   return {
     theme: hoistedTheme,
     startWorkspaceScriptMock: vi.fn(async () => ({ terminalId: "terminal-script-1" })),
+    startWorkspaceScriptWithStatusMock: vi.fn(async () => ({ error: null, script: null })),
+    readWorkspaceScriptConfigurationMock: vi.fn(async () => ({
+      error: null,
+      projectConfig: null,
+      workspaceConfig: null,
+      projectRevision: null,
+      workspaceRevision: null,
+    })),
+    writeWorkspaceScriptConfigurationMock: vi.fn(async () => ({
+      error: null,
+      written: "both",
+      projectRevision: { mtimeMs: 1, size: 1 },
+      workspaceRevision: { mtimeMs: 1, size: 1 },
+    })),
     killTerminalMock: vi.fn(async () => ({
       terminalId: "terminal-script-1",
       success: true,
@@ -154,6 +171,10 @@ vi.mock("@/stores/session-store", () => ({
         "test-server": {
           client: {
             startWorkspaceScript: startWorkspaceScriptMock,
+            startWorkspaceScriptWithStatus: startWorkspaceScriptWithStatusMock,
+            readWorkspaceScriptConfiguration: readWorkspaceScriptConfigurationMock,
+            writeWorkspaceScriptConfiguration: writeWorkspaceScriptConfigurationMock,
+            getLastServerInfoMessage: () => ({ features: { workspaceScriptConfiguration: true } }),
             killTerminal: killTerminalMock,
           },
         },
@@ -168,6 +189,71 @@ vi.mock("@/contexts/toast-context", () => ({
 vi.mock("@/components/ui/loading-spinner", () => ({
   LoadingSpinner: (props: Record<string, unknown>) =>
     React.createElement("span", { "data-testid": "loading-spinner", ...props }),
+}));
+
+vi.mock("@/components/adaptive-modal-sheet", () => ({
+  AdaptiveModalSheet: ({
+    children,
+    visible,
+    testID,
+  }: {
+    children: React.ReactNode;
+    visible: boolean;
+    testID: string;
+  }) => (visible ? <div data-testid={testID}>{children}</div> : null),
+}));
+
+vi.mock("@/components/ui/button", () => ({
+  Button: ({
+    children,
+    onPress,
+    disabled,
+    testID,
+  }: {
+    children: React.ReactNode;
+    onPress: () => void;
+    disabled?: boolean;
+    testID?: string;
+  }) => (
+    <button type="button" data-testid={testID} disabled={disabled} onClick={onPress}>
+      {children}
+    </button>
+  ),
+}));
+
+vi.mock("@/components/ui/alert", () => ({
+  Alert: ({
+    children,
+    title,
+    testID,
+  }: {
+    children?: React.ReactNode;
+    title: string;
+    testID?: string;
+  }) => (
+    <div data-testid={testID}>
+      <span>{title}</span>
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock("@/components/ui/text-input", () => ({
+  EditingTextInput: ({
+    initialValue,
+    onChangeText,
+    testID,
+  }: {
+    initialValue: string;
+    onChangeText: (value: string) => void;
+    testID?: string;
+  }) => {
+    const handleChange = React.useCallback(
+      (event: React.ChangeEvent<HTMLInputElement>) => onChangeText(event.currentTarget.value),
+      [onChangeText],
+    );
+    return <input data-testid={testID} defaultValue={initialValue} onChange={handleChange} />;
+  },
 }));
 
 vi.mock("expo-clipboard", () => ({
@@ -388,6 +474,9 @@ describe("WorkspaceScriptsButton", () => {
     );
     document.body.innerHTML = "";
     startWorkspaceScriptMock.mockClear();
+    startWorkspaceScriptWithStatusMock.mockClear();
+    readWorkspaceScriptConfigurationMock.mockClear();
+    writeWorkspaceScriptConfigurationMock.mockClear();
     killTerminalMock.mockClear();
     setStringAsyncMock.mockClear();
     copiedToastMock.mockClear();
@@ -413,6 +502,57 @@ describe("WorkspaceScriptsButton", () => {
     current?.unmount();
     current = null;
     vi.unstubAllGlobals();
+  });
+
+  it("saves the first service configuration before asking Play to launch it", async () => {
+    current = renderScripts([], { preview: true });
+    fireEvent.click(document.querySelector('[data-testid="workspace-scripts-configure-service"]')!);
+    await act(async () => {});
+
+    expect(readWorkspaceScriptConfigurationMock).toHaveBeenCalledWith("workspace-1");
+    fireEvent.change(document.querySelector('[data-testid="workspace-service-command"]')!, {
+      target: { value: "npm run dev" },
+    });
+    const saveButton = document.querySelector('[data-testid="workspace-service-config-save"]')!;
+    expect((saveButton as HTMLButtonElement).disabled).toBe(false);
+    expect(startWorkspaceScriptMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+    expect(writeWorkspaceScriptConfigurationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        scriptName: "dev",
+        command: "npm run dev",
+        port: null,
+        projectRevision: null,
+        workspaceRevision: null,
+      }),
+    );
+    expect(startWorkspaceScriptMock).not.toHaveBeenCalled();
+
+    await current.rerender([script({ scriptName: "dev", type: "service" })]);
+    expect(startWorkspaceScriptMock).toHaveBeenCalledWith("workspace-1", "dev");
+  });
+
+  it("shows invalid port feedback and closes without writing when cancelled", async () => {
+    current = renderScripts([], { preview: true });
+    fireEvent.click(document.querySelector('[data-testid="workspace-scripts-configure-service"]')!);
+    await act(async () => {});
+    fireEvent.change(document.querySelector('[data-testid="workspace-service-command"]')!, {
+      target: { value: "npm run dev" },
+    });
+    fireEvent.change(document.querySelector('[data-testid="workspace-service-port"]')!, {
+      target: { value: "65536" },
+    });
+    expect(
+      document.querySelector('[data-testid="workspace-service-port-error"]')?.textContent,
+    ).toContain("1 to 65535");
+    fireEvent.click(document.querySelector('[data-testid="workspace-service-config-cancel"]')!);
+    expect(document.querySelector('[data-testid="workspace-service-config-sheet"]')).toBeNull();
+    expect(writeWorkspaceScriptConfigurationMock).not.toHaveBeenCalled();
+    expect(startWorkspaceScriptMock).not.toHaveBeenCalled();
   });
 
   it("keeps completed script row icons visible and muted while the menu content stays mounted", async () => {
@@ -942,22 +1082,24 @@ describe("WorkspaceScriptsButton", () => {
     expect(onOpenPreviewMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the ordinary menu trigger when no service is configured", () => {
+  it("offers service setup while keeping the ordinary menu trigger when only scripts are configured", () => {
     current = renderScripts([script({ scriptName: "build" })], { preview: true });
 
     expect(document.querySelector('[data-testid="workspace-scripts-preview-action"]')).toBeNull();
     expect(document.querySelector('[data-testid="workspace-scripts-button"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="workspace-scripts-disabled"]')).not.toBeNull();
+    expect(
+      document.querySelector('[data-testid="workspace-scripts-configure-service"]'),
+    ).not.toBeNull();
     expect(document.querySelector('[data-testid="workspace-scripts-preview-section"]')).toBeNull();
   });
 
-  it("shows a disabled Play with a clear hint when there are no scripts", () => {
+  it("offers service setup when there are no scripts", () => {
     current = renderScripts([], { preview: true });
 
-    const button = document.querySelector('[data-testid="workspace-scripts-disabled"]');
+    const button = document.querySelector('[data-testid="workspace-scripts-configure-service"]');
     expect(button).not.toBeNull();
-    expect(button?.getAttribute("aria-disabled")).toBe("true");
-    expect(document.body.textContent).toContain("No service configured");
+    expect(button?.getAttribute("aria-disabled")).toBeNull();
+    expect(button?.textContent).toContain("Play");
   });
 
   it("reopens a running service's preview from the menu without relaunching it", async () => {

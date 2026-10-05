@@ -192,8 +192,10 @@ Electron wrapper for macOS, Linux, and Windows.
 connections. Its sandboxed renderer has no daemon credentials or general desktop bridge. Application
 windows publish pending plans and questions through desktop-local IPC; main elects one connected
 publisher per host, so multiple windows do not duplicate the queue. Exclude this auxiliary window
-from application-window navigation and project routing. Handoff sends the one-line instruction to
-the current agent through the normal interrupt-and-message path; it does not create another agent.
+from application-window navigation and project routing. Comments use the current agent's message
+path. Handoff invokes the installed workflow plan contribution with the exact pending plan and
+selects its executor in the owning application window without focusing that window. The widget
+renews its local IPC timeout while the workflow classifies and starts the executor.
 
 The desktop does not manage agent skills. It retains one compatibility reader for the old
 `skill-selection.json`, imports that preference into its managed local daemon, then deletes the old

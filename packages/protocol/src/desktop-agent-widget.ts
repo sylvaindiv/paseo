@@ -15,6 +15,10 @@ export const WidgetRequestSchema = z.object({
   serverId: z.string().min(1),
   agentId: z.string().min(1),
   requestId: z.string().min(1),
+  workspaceId: z.string().optional(),
+  planCallId: z.string().optional(),
+  planText: z.string().optional(),
+  handoffDisabledReason: z.string().optional(),
   agentTitle: z.string(),
   workspace: z.string(),
   kind: z.enum(["plan", "question"]),
@@ -28,6 +32,8 @@ export const WidgetLabelsSchema = z.object({
   question: z.string(),
   execute: z.string(),
   comment: z.string(),
+  sendComment: z.string(),
+  handoff: z.string(),
   submit: z.string(),
   next: z.string(),
   close: z.string(),
@@ -48,8 +54,14 @@ export const WidgetActionSchema = z.discriminatedUnion("type", [
   z.object({ ...actionKey, type: z.literal("approve") }),
   z.object({
     ...actionKey,
-    type: z.literal("handoff"),
+    type: z.literal("comment"),
     message: z.string().trim().min(1).max(100000),
+  }),
+  z.object({
+    ...actionKey,
+    type: z.literal("handoff"),
+    planCallId: z.string().min(1),
+    planText: z.string(),
   }),
   z.object({
     ...actionKey,
@@ -67,6 +79,7 @@ export const WidgetActionResultSchema = z.object({
   operationId: z.string().min(1),
   error: z.string().nullable(),
 });
+export const WidgetActionProgressSchema = z.object({ operationId: z.string().min(1) });
 export type WidgetRequest = z.infer<typeof WidgetRequestSchema>;
 export type WidgetQuestion = z.infer<typeof WidgetQuestionSchema>;
 export type WidgetLabels = z.infer<typeof WidgetLabelsSchema>;
@@ -84,5 +97,6 @@ export interface WidgetDisplay {
 export interface AgentWidgetBridge {
   publish(snapshot: WidgetSnapshot): Promise<void>;
   result(result: WidgetActionResult): Promise<void>;
+  progress(operationId: string): Promise<void>;
   onAction(listener: (delivery: WidgetActionDelivery) => void): () => void;
 }

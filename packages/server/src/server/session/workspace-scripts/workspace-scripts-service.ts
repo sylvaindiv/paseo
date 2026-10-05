@@ -26,6 +26,11 @@ import {
 } from "../../script-status-projection.js";
 import { deriveProjectServiceSlug, deriveProjectSlug } from "../../workspace-git-metadata.js";
 import type { PaseoServicePortAllocation } from "@getpaseo/protocol/paseo-config-schema";
+import type { PaseoConfigRevision } from "@getpaseo/protocol/messages";
+import {
+  readWorkspaceScriptConfiguration,
+  writeWorkspaceScriptConfiguration,
+} from "./workspace-script-configuration.js";
 
 type WorkspaceScriptsPayload = WorkspaceDescriptorPayload["scripts"];
 
@@ -47,6 +52,17 @@ export interface WorkspaceScriptsService {
   list(workspaceId: string): Promise<WorkspaceScriptPayload[]>;
   launch(input: { workspaceId: string; scriptName: string }): Promise<WorkspaceScriptPayload>;
   stop(input: { workspaceId: string; scriptName: string }): Promise<WorkspaceScriptPayload>;
+  readConfiguration(
+    workspaceId: string,
+  ): Promise<ReturnType<typeof readWorkspaceScriptConfiguration>>;
+  writeConfiguration(input: {
+    workspaceId: string;
+    scriptName: string;
+    command: string;
+    port: number | null;
+    projectRevision: PaseoConfigRevision | null;
+    workspaceRevision: PaseoConfigRevision | null;
+  }): Promise<ReturnType<typeof writeWorkspaceScriptConfiguration>>;
   start(request: StartWorkspaceScriptRequest): Promise<void>;
 }
 
@@ -170,6 +186,38 @@ export function createWorkspaceScriptsService(deps: {
     return buildSnapshot(workspace, project);
   }
 
+  async function readConfiguration(workspaceId: string) {
+    const workspace = await getWorkspace(workspaceId);
+    const project = await projectRegistry.get(workspace.projectId);
+    if (!project) throw new Error(`Project not found for workspace: ${workspaceId}`);
+    return readWorkspaceScriptConfiguration({
+      projectDirectory: project.rootPath,
+      workspaceDirectory: workspace.cwd,
+    });
+  }
+
+  async function writeConfiguration(input: {
+    workspaceId: string;
+    scriptName: string;
+    command: string;
+    port: number | null;
+    projectRevision: PaseoConfigRevision | null;
+    workspaceRevision: PaseoConfigRevision | null;
+  }) {
+    const workspace = await getWorkspace(input.workspaceId);
+    const project = await projectRegistry.get(workspace.projectId);
+    if (!project) throw new Error(`Project not found for workspace: ${input.workspaceId}`);
+    return writeWorkspaceScriptConfiguration({
+      projectDirectory: project.rootPath,
+      workspaceDirectory: workspace.cwd,
+      scriptName: input.scriptName,
+      command: input.command,
+      port: input.port,
+      projectRevision: input.projectRevision,
+      workspaceRevision: input.workspaceRevision,
+    });
+  }
+
   async function launchProcess(input: { workspaceId: string; scriptName: string }) {
     const available = requireAvailable();
     const workspace = await getWorkspace(input.workspaceId);
@@ -273,5 +321,14 @@ export function createWorkspaceScriptsService(deps: {
     }
   }
 
-  return { buildSnapshot, emitStatusUpdate, list, launch, stop, start };
+  return {
+    buildSnapshot,
+    emitStatusUpdate,
+    list,
+    launch,
+    stop,
+    start,
+    readConfiguration,
+    writeConfiguration,
+  };
 }

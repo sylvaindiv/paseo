@@ -46,6 +46,7 @@ export interface GitActions {
 export type WorkspaceWorkflowAction =
   | "create-pr"
   | "commit-and-push"
+  | "resolve-conflicts"
   | "repair-checks"
   | "merge"
   | "archive"
@@ -91,6 +92,7 @@ export interface BuildWorkspaceWorkflowStateInput {
   pullRequestIsMerged: boolean;
   /** True when the forge reports an aggregated failing checks status for the PR. */
   pullRequestChecksFailed: boolean;
+  pullRequestMergeable: PullRequestMergeable;
   mergeActionId: WorkspaceWorkflowState["nativeActionId"];
   archiveAvailable: boolean;
 }
@@ -103,6 +105,15 @@ export function buildWorkspaceWorkflowState(
     return { action: "checking", reason: "status-unavailable" };
   }
   if (!input.pullRequestKnown) return { action: "checking", reason: "status-unavailable" };
+
+  if (
+    input.pullRequestUrl &&
+    input.pullRequestState === "open" &&
+    !input.pullRequestIsMerged &&
+    input.pullRequestMergeable === "CONFLICTING"
+  ) {
+    return { action: "resolve-conflicts" };
+  }
 
   const hasPullRequest = input.pullRequestUrl !== null;
   return resolveDeliveredPullRequestState(input, hasPullRequest);

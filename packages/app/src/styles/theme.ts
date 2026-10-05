@@ -284,6 +284,10 @@ export function buildLightSemanticColors(tint: LightThemeConfig) {
     destructiveForeground: tint.surface0,
     success: lightStatusColors.statusSuccess,
     successForeground: tint.surface0,
+    workspaceActionMerge: "#286b3b",
+    workspaceActionMergeForeground: "#ffffff",
+    workspaceActionArchive: "#63379b",
+    workspaceActionArchiveForeground: "#ffffff",
 
     background: tint.surface0,
     popover: tint.surface0,
@@ -443,6 +447,10 @@ export function buildDarkSemanticColors(tint: DarkThemeConfig) {
     destructiveForeground: "#ffffff",
     success: darkStatusColors.statusSuccess,
     successForeground: "#ffffff",
+    workspaceActionMerge: "#286b3b",
+    workspaceActionMergeForeground: "#ffffff",
+    workspaceActionArchive: "#63379b",
+    workspaceActionArchiveForeground: "#ffffff",
 
     // Legacy aliases (for gradual migration)
     background: tint.surface0,

@@ -22,6 +22,8 @@ import {
   type WorkspaceScriptListRequest,
   type WorkspaceScriptStartRequest,
   type WorkspaceScriptStopRequest,
+  type WorkspaceScriptsConfigurationReadRequest,
+  type WorkspaceScriptsConfigurationWriteRequest,
   type CloseItemsRequest,
   type DirectorySuggestionsRequest,
   type ProjectPlacementPayload,
@@ -3003,6 +3005,10 @@ export class Session {
         return this.handleWorkspaceScriptStartRequest(msg);
       case "workspace.script.stop.request":
         return this.handleWorkspaceScriptStopRequest(msg);
+      case "workspace.scripts.configuration.read.request":
+        return this.handleWorkspaceScriptsConfigurationReadRequest(msg);
+      case "workspace.scripts.configuration.write.request":
+        return this.handleWorkspaceScriptsConfigurationWriteRequest(msg);
       default:
         return this.terminalController.dispatch(msg, this.delivery);
     }
@@ -7100,6 +7106,76 @@ export class Session {
           scriptName: request.scriptName,
           script: null,
           error: error instanceof Error ? error.message : "Failed to stop workspace script",
+        },
+      });
+    }
+  }
+
+  private async handleWorkspaceScriptsConfigurationReadRequest(
+    request: WorkspaceScriptsConfigurationReadRequest,
+  ): Promise<void> {
+    try {
+      const result = await this.workspaceScripts.readConfiguration(request.workspaceId);
+      this.emit({
+        type: "workspace.scripts.configuration.read.response",
+        payload: {
+          requestId: request.requestId,
+          projectConfig: result.ok ? result.projectConfig : null,
+          workspaceConfig: result.ok ? result.workspaceConfig : null,
+          projectRevision: result.ok ? result.projectRevision : null,
+          workspaceRevision: result.ok ? result.workspaceRevision : null,
+          error: result.ok ? null : result.error,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "workspace.scripts.configuration.read.response",
+        payload: {
+          requestId: request.requestId,
+          projectConfig: null,
+          workspaceConfig: null,
+          projectRevision: null,
+          workspaceRevision: null,
+          error: error instanceof Error ? error.message : "configuration_read_failed",
+        },
+      });
+    }
+  }
+
+  private async handleWorkspaceScriptsConfigurationWriteRequest(
+    request: WorkspaceScriptsConfigurationWriteRequest,
+  ): Promise<void> {
+    try {
+      const result = await this.workspaceScripts.writeConfiguration(request);
+      this.emit({
+        type: "workspace.scripts.configuration.write.response",
+        payload: {
+          requestId: request.requestId,
+          projectRevision: result.projectRevision,
+          workspaceRevision: result.workspaceRevision,
+          written: result.written,
+          error: result.ok ? null : result.error,
+        },
+      });
+      if (result.ok) {
+        try {
+          await this.workspaceScripts.emitStatusUpdate(request.workspaceId, "");
+        } catch (error) {
+          this.sessionLogger.warn(
+            { err: error, workspaceId: request.workspaceId },
+            "Failed to refresh workspace scripts after configuration write",
+          );
+        }
+      }
+    } catch (error) {
+      this.emit({
+        type: "workspace.scripts.configuration.write.response",
+        payload: {
+          requestId: request.requestId,
+          projectRevision: null,
+          workspaceRevision: null,
+          written: "none",
+          error: error instanceof Error ? error.message : "configuration_write_failed",
         },
       });
     }

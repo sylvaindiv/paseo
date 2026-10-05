@@ -930,6 +930,12 @@ function buildWorkspaceWorkflowContext(input: {
   };
 }
 
+function isDirectMergeAction(
+  id: GitAction["id"] | undefined,
+): id is Extract<GitAction["id"], "merge-pr-squash" | "merge-pr-merge" | "merge-pr-rebase"> {
+  return id === "merge-pr-squash" || id === "merge-pr-merge" || id === "merge-pr-rebase";
+}
+
 function useWorkspaceWorkflowActions(input: {
   gitActions: GitActions;
   commitRuntime: BuildGitActionsInput["runtime"]["commit"];
@@ -993,18 +999,8 @@ function useWorkspaceWorkflowActions(input: {
   );
   const workflowState = useMemo(() => {
     const actions = [gitActions.primary, ...gitActions.secondary, ...gitActions.menu];
-    const mergeAction = actions.find(
-      (action) =>
-        action?.id === "merge-pr-squash" ||
-        action?.id === "merge-pr-merge" ||
-        action?.id === "merge-pr-rebase",
-    );
-    const mergeActionId =
-      mergeAction?.id === "merge-pr-squash" ||
-      mergeAction?.id === "merge-pr-merge" ||
-      mergeAction?.id === "merge-pr-rebase"
-        ? mergeAction.id
-        : undefined;
+    const mergeAction = actions.find((action) => isDirectMergeAction(action?.id));
+    const mergeActionId = isDirectMergeAction(mergeAction?.id) ? mergeAction.id : undefined;
     return buildWorkspaceWorkflowState({
       isGit,
       statusKnown: status !== null && status !== undefined && !isStatusLoading,
@@ -1023,6 +1019,7 @@ function useWorkspaceWorkflowActions(input: {
       pullRequestIsDraft: prStatus?.isDraft ?? false,
       pullRequestIsMerged: prStatus?.isMerged ?? false,
       pullRequestChecksFailed: prStatus?.checksStatus === "failure",
+      pullRequestMergeable: prStatus?.mergeable ?? "UNKNOWN",
       mergeActionId,
       archiveAvailable: archiveController.canArchive && !archiveController.isArchiving,
     });

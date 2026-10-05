@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
     publish: (snapshot: WidgetSnapshot) =>
       ipcRenderer.invoke("paseo:agent-widget:publish", snapshot),
     result: (result: WidgetActionResult) => ipcRenderer.invoke("paseo:agent-widget:result", result),
+    progress: (operationId: string) =>
+      ipcRenderer.invoke("paseo:agent-widget:progress", { operationId }),
     onAction: (handler: (delivery: WidgetActionDelivery) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, delivery: WidgetActionDelivery) =>
         handler(delivery);

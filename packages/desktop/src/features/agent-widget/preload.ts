@@ -75,7 +75,8 @@ function actions(item: WidgetDisplayItem): string {
   const labels = display.labels;
   const disabled = busy !== null || !item.online;
   if (item.kind === "plan") {
-    return `<form class="actions"><label class="sr-only" for="comment">${escape(labels.comment)}</label><input id="comment" data-focus="comment" type="text" placeholder="${escape(labels.comment)}" value="${escape(draft(item.key).message)}" ${disabled ? "disabled" : ""}><button id="handoff" type="submit" ${disabled || !draft(item.key).message.trim() ? "disabled" : ""}>handoff</button><button type="button" data-action="approve" class="primary" ${disabled || !item.canApprove ? "disabled" : ""}>${escape(labels.execute)} ↗</button></form>`;
+    const handoffReason = item.handoffDisabledReason;
+    return `<form class="actions plan-actions"><div class="action-row"><label class="sr-only" for="comment">${escape(labels.comment)}</label><input id="comment" data-focus="comment" type="text" placeholder="${escape(labels.comment)}" value="${escape(draft(item.key).message)}" ${disabled ? "disabled" : ""}><button id="send-comment" type="submit" ${disabled || !draft(item.key).message.trim() ? "disabled" : ""}>${escape(labels.sendComment)}</button></div><div class="action-row"><button id="handoff" type="button" data-action="handoff" title="${escape(handoffReason ?? "")}" ${disabled || handoffReason ? "disabled" : ""}>${escape(labels.handoff)}</button><button type="button" data-action="approve" class="primary" ${disabled || !item.canApprove ? "disabled" : ""}>${escape(labels.execute)} ↗</button></div>${handoffReason ? `<small class="handoff-reason">${escape(handoffReason)}</small>` : ""}</form>`;
   }
   const value = draft(item.key);
   const last = value.question >= item.questions.length - 1;
@@ -167,6 +168,7 @@ async function submit(action: WidgetAction) {
     display.requests = display.requests.filter((entry) => entry.key !== action.key);
     drafts.delete(action.key);
     notice = display.labels.sent;
+    await resize(true);
   } catch (error) {
     failed = true;
     notice = error instanceof Error ? error.message : display.labels.failed;
@@ -191,6 +193,15 @@ function move(direction: number) {
   notice = "";
   failed = false;
   render();
+}
+function submitHandoff(item: WidgetDisplayItem | undefined) {
+  if (!item?.planCallId || item.planText === undefined || item.handoffDisabledReason) return;
+  void submit({
+    type: "handoff",
+    key: item.key,
+    planCallId: item.planCallId,
+    planText: item.planText,
+  });
 }
 function handleClick(event: MouseEvent) {
   if (!(event.target instanceof Element)) return;
@@ -228,6 +239,9 @@ function handleClick(event: MouseEvent) {
     case "approve":
       if (item) void submit({ type: "approve", key: item.key });
       break;
+    case "handoff":
+      submitHandoff(item);
+      break;
     case "answer":
       if (item) {
         const value = draft(item.key);
@@ -252,7 +266,7 @@ function handleInput(event: Event) {
   const value = draft(item.key);
   if (element.id === "comment") {
     value.message = element.value;
-    const button = document.querySelector<HTMLButtonElement>("#handoff");
+    const button = document.querySelector<HTMLButtonElement>("#send-comment");
     if (button) button.disabled = !value.message.trim() || !item.online || busy !== null;
     return;
   }
@@ -277,7 +291,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const item = current();
     if (!item) return;
     const message = draft(item.key).message.trim();
-    if (message) void submit({ type: "handoff", key: item.key, message });
+    if (message) void submit({ type: "comment", key: item.key, message });
   });
   ipcRenderer.on("paseo:agent-widget:update", (_event, value: WidgetDisplay) => {
     display = value;

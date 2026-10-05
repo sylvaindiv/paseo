@@ -86,6 +86,8 @@ import {
 } from "./turn-footer";
 import { resolveBottomOverlayTailInset } from "./bottom-overlay-inset";
 import { layoutStream, type StreamLayoutItem } from "./layout";
+import { projectResponseFolding, type ResponseFolding } from "./response-folding";
+import { ResponseFoldToggle } from "./response-fold-toggle";
 import {
   type BottomAnchorLocalRequest,
   type BottomAnchorRouteRequest,
@@ -322,6 +324,13 @@ function useRetainedValue<T>(value: T, active: boolean): T {
   }
   return active ? value : retainedRef.current;
 }
+
+function useVisibleStreamItems(items: StreamItem[], hiddenItemIds: Set<string>): StreamItem[] {
+  return useMemo(() => {
+    const filtered = items.filter((item) => !hiddenItemIds.has(item.id));
+    return filtered.length === items.length ? items : filtered;
+  }, [items, hiddenItemIds]);
+}
 const EMPTY_PENDING_MESSAGE_SUBMISSIONS: readonly PendingMessageSubmission[] = [];
 const GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT = 200;
 
@@ -370,6 +379,16 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [isMobile],
     );
     const [isNearBottom, setIsNearBottom] = useState(true);
+    const [expandedResponseIds, setExpandedResponseIds] = useState<Set<string>>(new Set());
+    const toggleResponse = useCallback((responseId: string) => {
+      viewportRef.current?.prepareForViewportChange();
+      setExpandedResponseIds((previous) => {
+        const next = new Set(previous);
+        if (next.has(responseId)) next.delete(responseId);
+        else next.add(responseId);
+        return next;
+      });
+    }, []);
     const [expandedInlineToolCallIds, setExpandedInlineToolCallIds] = useState<Set<string>>(
       new Set(),
     );
@@ -398,6 +417,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const timelineEpoch = useSessionStore(
       (state) => state.sessions[resolvedServerId]?.agentTimelineCursor.get(agentId)?.epoch ?? null,
     );
+    useEffect(() => {
+      setExpandedResponseIds(new Set());
+    }, [agentId, timelineEpoch]);
     const isTimelineDetached = useSessionStore(
       (state) => state.sessions[resolvedServerId]?.agentTimelineHasNewer.get(agentId) === true,
     );
@@ -582,6 +604,27 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const isLoadingOlder = remoteIsLoadingOlder;
     const hasOlder = hasLocalHistory || remoteHasOlder;
     const progressKey = `${remoteProgressKey ?? "local"}:${historyWindowStart}`;
+    const previousResponseFolding = useRef<ResponseFolding | undefined>(undefined);
+    const responseFolding = useMemo(() => {
+      const projection = projectResponseFolding({
+        items: [...projectedPlugins.tail.slice(historyWindowStart), ...projectedPlugins.head],
+        isTurnActive,
+        activeTurnId: effectiveTurnPresentation.turnId,
+        expandedResponseIds,
+        toolCallCount: (item) =>
+          projectedToolCalls.groupsByHostId.get(item.id)?.run.calls.length ?? 1,
+        previous: previousResponseFolding.current,
+      });
+      previousResponseFolding.current = projection;
+      return projection;
+    }, [
+      projectedPlugins,
+      historyWindowStart,
+      isTurnActive,
+      effectiveTurnPresentation.turnId,
+      expandedResponseIds,
+      projectedToolCalls.groupsByHostId,
+    ]);
 
     const baseRenderModel = useMemo(() => {
       return buildAgentStreamRenderModel({
@@ -978,7 +1021,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const renderStreamItem = useCallback(
       (layoutItem: StreamLayoutItem) => {
-        const content = renderStreamItemContent(layoutItem);
+        const header = responseFolding.headersByHostId.get(layoutItem.item.id);
+        const content = header ? (
+          <>
+            <ResponseFoldToggle header={header} onToggle={toggleResponse} />
+            {header.expanded ? renderStreamItemContent(layoutItem) : null}
+          </>
+        ) : (
+          renderStreamItemContent(layoutItem)
+        );
         return renderStreamItemWithTurnFooter({
           content,
           layoutItem,
@@ -993,6 +1044,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         renderStreamItemContent,
         streamRenderStrategy,
         supportsAgentForkContextCursor,
+        responseFolding.headersByHostId,
+        toggleResponse,
       ],
     );
 
@@ -1033,16 +1086,47 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         supportsAgentForkContextCursor,
       ],
     );
+    const historyVirtualized = useVisibleStreamItems(
+      baseRenderModel.segments.historyVirtualized,
+      responseFolding.hiddenItemIds,
+    );
+    const historyMounted = useVisibleStreamItems(
+      baseRenderModel.segments.historyMounted,
+      responseFolding.hiddenItemIds,
+    );
+    const liveHead = useVisibleStreamItems(
+      baseRenderModel.segments.liveHead,
+      responseFolding.hiddenItemIds,
+    );
     const renderModel = useMemo<AgentStreamRenderModel>(() => {
+      // Only the displayed rows are filtered. Layout/footer sources retain the full
+      // response so copy, fork, timing and history pagination keep their context.
+      const segments = {
+        historyVirtualized,
+        historyMounted,
+        liveHead,
+      };
       return {
         ...baseRenderModel,
-        boundary: baseRenderModel.boundary,
+        segments,
+        boundary: {
+          hasVirtualizedHistory: segments.historyVirtualized.length > 0,
+          hasMountedHistory: segments.historyMounted.length > 0,
+          hasLiveHead: segments.liveHead.length > 0,
+        },
         auxiliary: {
           pendingPermissions: pendingPermissionsNode,
           turnFooter: turnFooterNode,
         },
       };
-    }, [baseRenderModel, pendingPermissionsNode, turnFooterNode]);
+    }, [
+      baseRenderModel,
+      pendingPermissionsNode,
+      turnFooterNode,
+      historyVirtualized,
+      historyMounted,
+      liveHead,
+    ]);
 
     const emptyStateStyle = useMemo(() => [stylesheet.emptyState, chatStyles.rail], []);
     const scrollToBottomContainerStyle = useMemo(
@@ -1145,7 +1229,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => ({
         contentById: {
           has: (id: string) =>
-            projectedToolCalls.historyGroupUpdatesByHostId.has(id) || planFootersByRowId.has(id),
+            projectedToolCalls.historyGroupUpdatesByHostId.has(id) ||
+            planFootersByRowId.has(id) ||
+            responseFolding.headersByHostId.has(id),
         },
         displayStateById: expandedToolCallGroupIds,
         globalDisplayState: isMobile,
@@ -1155,6 +1241,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         isMobile,
         planFootersByRowId,
         projectedToolCalls.historyGroupUpdatesByHostId,
+        responseFolding.headersByHostId,
       ],
     );
 
