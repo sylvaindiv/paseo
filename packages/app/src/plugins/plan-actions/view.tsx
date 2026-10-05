@@ -22,6 +22,7 @@ import { createPluginNavigation } from "../navigation";
 import { useInstalledPlugins } from "../registry";
 import { createPluginSurfaceRuntime } from "../surface-runtime";
 import { PlanActionState, resolvePlanActions, type PlanAction } from "./model";
+import { runPlanContribution } from "./contribution";
 
 function PlanActionControl({
   action,
@@ -217,26 +218,17 @@ export function PlanActions({
       );
       if (!plugin || !workspaceId || !action.contribution)
         throw new Error(t("common.errors.daemonUnavailable"));
-      const runtime = createPluginSurfaceRuntime(client, plugin);
-      if (!runtime) throw new Error(t("common.errors.daemonUnavailable"));
-      try {
-        const context = createPluginAgentActionContext({
-          plugin,
-          runtime,
-          state: source,
-          workspaceId,
-          agentId,
-          navigation: createPluginNavigation({ serverId, workspaceId }),
-        });
-        if (!context) throw new Error(t("common.errors.daemonUnavailable"));
-        await action.contribution.onPress({
-          signal: lifetime.signal,
-          ...context,
-          plan: { ...plan, permissionRequestId: permission.id },
-        });
-      } finally {
-        await runtime.paseo.dispose();
-      }
+      await runPlanContribution({
+        client,
+        plugin,
+        contributionId: action.contribution.id,
+        serverId,
+        workspaceId,
+        agentId,
+        navigation: createPluginNavigation({ serverId, workspaceId }),
+        signal: lifetime.signal,
+        plan: { ...plan, permissionRequestId: permission.id },
+      });
     });
   });
   const label = (action: PlanAction) =>

@@ -8,6 +8,8 @@ import { getDesktopHost } from "@/desktop/host";
 import { useSessionStore } from "@/stores/session-store";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { respondToWidgetRequest, projectWidgetRequest } from "./model";
+import { pluginRegistry } from "@/plugins/registry";
+import { handoffReason, handoffWidgetPlan } from "./handoff";
 
 export function useAgentWidget(serverId: string): void {
   const { t } = useTranslation();
@@ -20,6 +22,8 @@ export function useAgentWidget(serverId: string): void {
       question: t("desktop.agentWidget.responseNeeded"),
       execute: t("desktop.agentWidget.execute"),
       comment: t("desktop.agentWidget.comment"),
+      sendComment: t("desktop.agentWidget.sendComment"),
+      handoff: t("desktop.agentWidget.handoff"),
       submit: t("message.question.submit"),
       next: t("message.question.next"),
       close: t("common.actions.close"),
@@ -45,6 +49,12 @@ export function useAgentWidget(serverId: string): void {
           request: pending.request,
           agentTitle: agent.title ?? agent.provider,
           workspace: workspace ? `${workspace.projectDisplayName} · ${workspace.name}` : agent.cwd,
+          workspaceId: agent.workspaceId ?? undefined,
+          handoffDisabledReason: handoffReason(
+            serverId,
+            agent.workspaceId ?? undefined,
+            pending.request.sourcePlanCallId,
+          ),
         });
         if (item) requests.push(item);
       }
@@ -71,13 +81,26 @@ export function useAgentWidget(serverId: string): void {
           (item) => JSON.stringify([serverId, item.agentId, item.request.id]) === action.key,
         );
         if (!pending) throw new Error("This request has already been resolved.");
-        await respondToWidgetRequest({
-          client: host.client,
-          agentId: pending.agentId,
-          request: pending.request,
-          operationId,
-          action,
-        });
+        if (action.type === "handoff") {
+          await handoffWidgetPlan({
+            client: host.client,
+            bridge,
+            serverId,
+            agentId: pending.agentId,
+            workspaceId: session?.agents.get(pending.agentId)?.workspaceId ?? undefined,
+            request: pending.request,
+            operationId,
+            action,
+          });
+        } else {
+          await respondToWidgetRequest({
+            client: host.client,
+            agentId: pending.agentId,
+            request: pending.request,
+            operationId,
+            action,
+          });
+        }
       } catch (cause) {
         error = cause instanceof Error ? cause.message : String(cause);
       }
@@ -90,12 +113,14 @@ export function useAgentWidget(serverId: string): void {
       publish,
     );
     const offRuntime = runtime.subscribe(serverId, publish);
+    const offPlugins = pluginRegistry.subscribe(publish);
     const release = runtime.acquireDirectoryDemand(serverId);
     publish();
     return () => {
       offActions();
       offSession();
       offRuntime();
+      offPlugins();
       release();
       void bridge
         .publish({ serverId, online: false, requests: [], labels })

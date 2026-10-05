@@ -4,6 +4,7 @@ import { app, BrowserWindow, ipcMain, screen, type WebContents } from "electron"
 import {
   WidgetActionSchema,
   WidgetActionResultSchema,
+  WidgetActionProgressSchema,
   WidgetSnapshotSchema,
   type WidgetActionResult,
   type WidgetDisplay,
@@ -144,6 +145,15 @@ export function registerAgentWidget() {
     pending.delete(operationId);
     operation.resolve({ operationId, error });
   }
+  function renew(operationId: string, owner: number) {
+    const operation = pending.get(operationId);
+    if (!operation || operation.owner !== owner) return;
+    clearTimeout(operation.timer);
+    operation.timer = setTimeout(
+      () => settle(operationId, "No confirmation received. Check the agent before retrying."),
+      30000,
+    );
+  }
   function assertWidget(sender: WebContents) {
     if (sender !== window?.webContents) throw new Error("Unknown widget window.");
   }
@@ -173,6 +183,13 @@ export function registerAgentWidget() {
     const entry = requests().find((item) => item.request.key === action.key);
     if (!entry?.online || entry.owner.contents.isDestroyed())
       throw new Error("This request is unavailable. Reconnect or open the agent.");
+    if (
+      action.type === "handoff" &&
+      (entry.request.handoffDisabledReason ||
+        entry.request.planCallId !== action.planCallId ||
+        entry.request.planText !== action.planText)
+    )
+      throw new Error(entry.request.handoffDisabledReason ?? "This plan has been replaced.");
     if (runningKeys.has(action.key)) throw new Error("A response is already being sent.");
     runningKeys.add(action.key);
     const operationId = randomUUID();
@@ -200,6 +217,10 @@ export function registerAgentWidget() {
     const result = WidgetActionResultSchema.parse(raw);
     if (pending.get(result.operationId)?.owner !== event.sender.id) return;
     settle(result.operationId, result.error);
+  });
+  ipcMain.handle("paseo:agent-widget:progress", (event, raw: unknown) => {
+    const { operationId } = WidgetActionProgressSchema.parse(raw);
+    renew(operationId, event.sender.id);
   });
   screen.on("display-metrics-changed", position);
   screen.on("display-added", position);

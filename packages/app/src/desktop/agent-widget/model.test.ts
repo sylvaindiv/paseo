@@ -91,7 +91,7 @@ it("validates question choices and keeps optional empty answers", () => {
   );
 });
 
-it("hands feedback to the current agent through the acknowledged message path", async () => {
+it("sends comments to the current agent through the acknowledged message path", async () => {
   const sendAgentMessage = vi.fn().mockResolvedValue(undefined);
   const respondToPermissionAndWait = vi.fn().mockResolvedValue(undefined);
   await respondToWidgetRequest({
@@ -99,7 +99,7 @@ it("hands feedback to the current agent through the acknowledged message path", 
     agentId: "agent",
     request: plan,
     operationId: "delivery",
-    action: { type: "handoff", key: "key", message: "Please revise the tests." },
+    action: { type: "comment", key: "key", message: "Please revise the tests." },
   });
   expect(sendAgentMessage).toHaveBeenCalledWith("agent", "Please revise the tests.", {
     messageId: "delivery",
@@ -113,7 +113,7 @@ it("hands feedback to the current agent through the acknowledged message path", 
       agentId: "agent",
       request: plan,
       operationId: "delivery-2",
-      action: { type: "handoff", key: "key", message: "Keep this draft." },
+      action: { type: "comment", key: "key", message: "Keep this draft." },
     }),
   ).rejects.toThrow("Disconnected");
 });

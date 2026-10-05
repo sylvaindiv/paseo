@@ -2545,6 +2545,40 @@ export class DaemonClient {
     });
   }
 
+  async readWorkspaceScriptConfiguration(workspaceId: string, requestId?: string) {
+    this.requireWorkspaceScriptConfigurationSupport();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "workspace.scripts.configuration.read.request", workspaceId },
+      responseType: "workspace.scripts.configuration.read.response",
+    });
+  }
+
+  async writeWorkspaceScriptConfiguration(input: {
+    workspaceId: string;
+    scriptName: string;
+    command: string;
+    port: number | null;
+    projectRevision: { mtimeMs: number; size: number } | null;
+    workspaceRevision: { mtimeMs: number; size: number } | null;
+    requestId?: string;
+  }) {
+    this.requireWorkspaceScriptConfigurationSupport();
+    return this.sendCorrelatedSessionRequest({
+      requestId: input.requestId,
+      message: {
+        type: "workspace.scripts.configuration.write.request",
+        workspaceId: input.workspaceId,
+        scriptName: input.scriptName,
+        command: input.command,
+        port: input.port,
+        projectRevision: input.projectRevision,
+        workspaceRevision: input.workspaceRevision,
+      },
+      responseType: "workspace.scripts.configuration.write.response",
+    });
+  }
+
   async startWorkspaceScriptWithStatus(
     workspaceId: string,
     scriptName: string,
@@ -5886,6 +5920,12 @@ export class DaemonClient {
     // COMPAT(hubRelationship): added in v0.1.X, drop the gate when floor >= v0.1.X.
     if (this.lastServerInfoMessage?.features?.hubRelationship !== true) {
       throw new Error("Update the host to use Hub relationship management.");
+    }
+  }
+
+  private requireWorkspaceScriptConfigurationSupport(): void {
+    if (this.lastServerInfoMessage?.features?.workspaceScriptConfiguration !== true) {
+      throw new Error("Update the host to configure a workspace service from Play.");
     }
   }
 

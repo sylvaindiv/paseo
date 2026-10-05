@@ -16,7 +16,12 @@ import {
 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import type { WorkspaceScriptPayload } from "@getpaseo/protocol/messages";
+import type {
+  PaseoConfigRaw,
+  PaseoConfigRevision,
+  PaseoScriptEntryRaw,
+  WorkspaceScriptPayload,
+} from "@getpaseo/protocol/messages";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import { useSessionStore } from "@/stores/session-store";
 import { useHostRuntimeSnapshot, type ActiveConnection } from "@/runtime/host-runtime";
@@ -44,6 +49,12 @@ import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import { buttonControlHeight, HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
 import { extraMutedIconColorMapping } from "@/components/ui/icon-color";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { validateWorkspaceScriptDraft } from "@/utils/workspace-script-form";
+import type { WorkspaceScriptValidationError } from "@/utils/workspace-script-form";
+import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
+import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
+import { EditingTextInput as TextInput } from "@/components/ui/text-input";
 
 type RowActionIcon = "copy" | "open" | "restart" | "start" | "stop" | "terminal";
 
@@ -101,34 +112,17 @@ const redColorMapping = (theme: Theme) => ({
 });
 const playFillTransparent = { fill: "transparent" };
 const ghostPlayStroke = { strokeWidth: 1.5 };
-const disabledAccessibilityState = { disabled: true };
 
-function DisabledPreviewPlay({ hideLabels }: { hideLabels?: boolean }) {
-  const { t } = useTranslation();
-  return (
-    <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
-      <TooltipTrigger asChild triggerRefProp="ref">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={disabledAccessibilityState}
-          accessibilityLabel={t("workspace.scripts.states.noServiceConfigured")}
-          disabled
-          testID="workspace-scripts-disabled"
-          style={styles.splitButtonPrimary}
-        >
-          <View style={styles.splitButtonContent}>
-            <ThemedPlay size={14} uniProps={mutedColorMapping} />
-            {!hideLabels && (
-              <Text style={styles.splitButtonText}>{t("workspace.scripts.actions.play")}</Text>
-            )}
-          </View>
-        </Pressable>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" align="center" offset={8}>
-        <Text style={styles.tooltipText}>{t("workspace.scripts.states.noServiceConfigured")}</Text>
-      </TooltipContent>
-    </Tooltip>
-  );
+function configurationWriteError(
+  error: string,
+  written: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (error === "stale_revision" || error === "invalid_config")
+    return t("workspace.scripts.states.configurationConflict");
+  if (error === "collision") return t("workspace.scripts.states.serviceNameCollision");
+  if (written === "project") return t("workspace.scripts.states.partialConfigurationSave");
+  return t("workspace.scripts.states.configurationSaveFailed");
 }
 
 interface ScriptRowActionButtonProps {
@@ -1285,6 +1279,451 @@ function useWorkspaceScriptControls(
 
 // The desktop control keeps preview and ordinary script actions in one menu.
 // eslint-disable-next-line complexity
+interface ConfigureServiceSheetProps {
+  visible: boolean;
+  client: DaemonClient | null;
+  workspaceId: string;
+  onClose: () => void;
+  onSaved: (scriptName: string) => void;
+}
+
+function scriptCommand(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value))
+    return value.filter((item): item is string => typeof item === "string").join("\n");
+  return "";
+}
+
+function ServiceConfigOption({
+  serviceName,
+  entry,
+  onSelect,
+}: {
+  serviceName: string;
+  entry: PaseoScriptEntryRaw | undefined;
+  onSelect: (serviceName: string, entry: PaseoScriptEntryRaw | undefined) => void;
+}) {
+  const handleSelect = useCallback(
+    () => onSelect(serviceName, entry),
+    [entry, onSelect, serviceName],
+  );
+  return <DropdownMenuItem onSelect={handleSelect}>{serviceName}</DropdownMenuItem>;
+}
+
+const serviceValidationTranslationKeys = {
+  name_required: "workspace.scripts.states.invalidServiceName",
+  command_required: "workspace.scripts.states.invalidServiceCommand",
+  port_invalid: "workspace.scripts.states.invalidServicePort",
+  name_collision: "workspace.scripts.states.serviceNameCollision",
+} as const;
+
+function ServiceConfigFields({
+  loading,
+  services,
+  projectConfig,
+  selectedService,
+  selectedLabel,
+  chooseService,
+  name,
+  setName,
+  command,
+  setCommand,
+  port,
+  setPort,
+  validationCode,
+  error,
+  reload,
+}: {
+  loading: boolean;
+  services: [string, PaseoScriptEntryRaw][];
+  projectConfig: PaseoConfigRaw | null;
+  selectedService: string;
+  selectedLabel: string | null;
+  chooseService: (serviceName: string, entry: PaseoScriptEntryRaw | undefined) => void;
+  name: string;
+  setName: (value: string) => void;
+  command: string;
+  setCommand: (value: string) => void;
+  port: string;
+  setPort: (value: string) => void;
+  validationCode: WorkspaceScriptValidationError | null;
+  error: string | null;
+  reload: () => void;
+}) {
+  const { t } = useTranslation();
+  if (loading) {
+    return (
+      <View style={styles.configLoading}>
+        <Text style={styles.configHint}>{t("workspace.scripts.states.configurationLoading")}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <>
+      {services.length > 1 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger style={styles.configServiceChoice} testID="workspace-service-choice">
+            <Text style={styles.configLabel}>{selectedLabel}</Text>
+            <ThemedChevronDown size={14} uniProps={extraMutedIconColorMapping} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" minWidth={220}>
+            {services.map(([serviceName]) => (
+              <ServiceConfigOption
+                key={serviceName}
+                serviceName={serviceName}
+                entry={projectConfig?.scripts?.[serviceName]}
+                onSelect={chooseService}
+              />
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+      <View style={styles.configField}>
+        <Text style={styles.configLabel}>{t("workspace.scripts.states.serviceName")}</Text>
+        <TextInput
+          key={`name-${selectedService}`}
+          testID="workspace-service-name"
+          initialValue={name}
+          onChangeText={setName}
+          placeholder="dev"
+          style={styles.configInput}
+        />
+        {validationCode === "name_required" || validationCode === "name_collision" ? (
+          <Text testID="workspace-service-name-error" style={styles.configError}>
+            {t(serviceValidationTranslationKeys[validationCode])}
+          </Text>
+        ) : null}
+      </View>
+      <View style={styles.configField}>
+        <Text style={styles.configLabel}>{t("workspace.scripts.states.serviceCommand")}</Text>
+        <TextInput
+          key={`command-${selectedService}`}
+          testID="workspace-service-command"
+          multiline
+          initialValue={command}
+          onChangeText={setCommand}
+          placeholder="npm run dev"
+          style={styles.configCommand}
+        />
+        {validationCode === "command_required" ? (
+          <Text testID="workspace-service-command-error" style={styles.configError}>
+            {t("workspace.scripts.states.invalidServiceCommand")}
+          </Text>
+        ) : null}
+      </View>
+      <View style={styles.configField}>
+        <Text style={styles.configLabel}>{t("workspace.scripts.states.servicePort")}</Text>
+        <TextInput
+          key={`port-${selectedService}`}
+          testID="workspace-service-port"
+          initialValue={port}
+          onChangeText={setPort}
+          placeholder={t("workspace.scripts.states.automaticPort")}
+          style={styles.configInput}
+        />
+        {validationCode === "port_invalid" ? (
+          <Text testID="workspace-service-port-error" style={styles.configError}>
+            {t("workspace.scripts.states.invalidServicePort")}
+          </Text>
+        ) : null}
+        {!port.trim() ? (
+          <Text style={styles.configHint}>{t("workspace.scripts.states.automaticPortHint")}</Text>
+        ) : null}
+      </View>
+      {error ? (
+        <Alert testID="workspace-service-config-error" variant="error" title={error}>
+          {error === t("workspace.scripts.states.configurationConflict") ? (
+            <Button onPress={reload} variant="outline" size="sm">
+              {t("workspace.scripts.actions.reloadConfiguration")}
+            </Button>
+          ) : null}
+        </Alert>
+      ) : null}
+    </>
+  );
+}
+
+function ConfigureServiceSheet({
+  visible,
+  client,
+  workspaceId,
+  onClose,
+  onSaved,
+}: ConfigureServiceSheetProps) {
+  const { t } = useTranslation();
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [projectConfig, setProjectConfig] = useState<PaseoConfigRaw | null>(null);
+  const [workspaceConfig, setWorkspaceConfig] = useState<PaseoConfigRaw | null>(null);
+  const [projectRevision, setProjectRevision] = useState<PaseoConfigRevision | null>(null);
+  const [workspaceRevision, setWorkspaceRevision] = useState<PaseoConfigRevision | null>(null);
+  const [name, setName] = useState("dev");
+  const [command, setCommand] = useState("");
+  const [port, setPort] = useState("");
+  const [selectedService, setSelectedService] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const pendingRef = useRef(false);
+
+  const services = useMemo(
+    () =>
+      Object.entries(projectConfig?.scripts ?? {}).filter(([, entry]) => entry.type === "service"),
+    [projectConfig],
+  );
+
+  const load = useCallback(async () => {
+    if (!client) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await client.readWorkspaceScriptConfiguration(workspaceId);
+      if (result.error) throw new Error(result.error);
+      setProjectConfig(result.projectConfig);
+      setWorkspaceConfig(result.workspaceConfig);
+      setProjectRevision(result.projectRevision);
+      setWorkspaceRevision(result.workspaceRevision);
+      const initial = Object.entries(result.projectConfig?.scripts ?? {}).find(
+        ([, entry]) => entry.type === "service",
+      );
+      setSelectedService(initial?.[0] ?? "");
+      setName(initial?.[0] ?? "dev");
+      setCommand(initial ? scriptCommand(initial[1].command) : "");
+      const initialPort = initial?.[1].port;
+      setPort(
+        typeof initialPort === "number" || typeof initialPort === "string"
+          ? String(initialPort)
+          : "",
+      );
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error && loadError.message.includes("Update the host")
+          ? t("workspace.scripts.states.updateHostForConfiguration")
+          : t("workspace.scripts.states.configurationFailed"),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [client, t, workspaceId]);
+
+  useEffect(() => {
+    if (visible) void load();
+  }, [load, visible]);
+
+  const validationCode = validateWorkspaceScriptDraft({
+    name,
+    command,
+    port,
+    collides: Boolean(
+      (projectConfig?.scripts?.[name.trim()] &&
+        projectConfig.scripts[name.trim()]!.type !== "service") ||
+      (workspaceConfig?.scripts?.[name.trim()] &&
+        workspaceConfig.scripts[name.trim()]!.type !== "service"),
+    ),
+  });
+  const validationError = validationCode
+    ? t(serviceValidationTranslationKeys[validationCode])
+    : null;
+
+  const save = useCallback(async () => {
+    if (!client || pendingRef.current || validationError) return;
+    pendingRef.current = true;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await client.writeWorkspaceScriptConfiguration({
+        workspaceId,
+        scriptName: name.trim(),
+        command: command.trim(),
+        port: port.trim() ? Number(port) : null,
+        projectRevision,
+        workspaceRevision,
+      });
+      setProjectRevision(result.projectRevision);
+      setWorkspaceRevision(result.workspaceRevision);
+      if (result.error) {
+        setError(configurationWriteError(result.error, result.written, t));
+        return;
+      }
+      if (result.written !== "both") {
+        setError(t("workspace.scripts.states.configurationSaveFailed"));
+        return;
+      }
+      const savedName = name.trim();
+      onClose();
+      onSaved(savedName);
+    } catch {
+      setError(t("workspace.scripts.states.configurationSaveFailed"));
+    } finally {
+      pendingRef.current = false;
+      setSaving(false);
+    }
+  }, [
+    client,
+    command,
+    name,
+    onClose,
+    onSaved,
+    port,
+    projectRevision,
+    t,
+    validationError,
+    workspaceId,
+    workspaceRevision,
+  ]);
+
+  const header = useMemo(
+    () => ({ title: t("workspace.scripts.states.configureServiceTitle") }),
+    [t],
+  );
+  const reload = useCallback(() => {
+    void load();
+  }, [load]);
+  const savePress = useCallback(() => {
+    void save();
+  }, [save]);
+  const chooseService = useCallback(
+    (serviceName: string, entry: PaseoScriptEntryRaw | undefined) => {
+      setSelectedService(serviceName);
+      setName(serviceName);
+      setCommand(scriptCommand(entry?.command));
+      setPort(
+        typeof entry?.port === "number" || typeof entry?.port === "string"
+          ? String(entry.port)
+          : "",
+      );
+    },
+    [],
+  );
+
+  const selectedLabel = selectedService
+    ? t("workspace.scripts.states.editService", { name: selectedService })
+    : null;
+  return (
+    <AdaptiveModalSheet
+      visible={visible}
+      onClose={onClose}
+      header={header}
+      testID="workspace-service-config-sheet"
+      desktopMaxWidth={560}
+    >
+      <View style={styles.configForm}>
+        <ServiceConfigFields
+          loading={loading}
+          services={services}
+          projectConfig={projectConfig}
+          selectedService={selectedService}
+          selectedLabel={selectedLabel}
+          chooseService={chooseService}
+          name={name}
+          setName={setName}
+          command={command}
+          setCommand={setCommand}
+          port={port}
+          setPort={setPort}
+          validationCode={validationCode}
+          error={error}
+          reload={reload}
+        />
+        <View style={styles.configFooter}>
+          <Button
+            onPress={onClose}
+            variant="ghost"
+            size="md"
+            testID="workspace-service-config-cancel"
+          >
+            {t("workspace.scripts.actions.cancel")}
+          </Button>
+          <Button
+            onPress={savePress}
+            variant="default"
+            size="md"
+            disabled={loading || saving || Boolean(validationError)}
+            testID="workspace-service-config-save"
+          >
+            {saving
+              ? t("settings.project.actions.saving")
+              : t("workspace.scripts.actions.saveAndLaunch")}
+          </Button>
+        </View>
+      </View>
+    </AdaptiveModalSheet>
+  );
+}
+
+function ConfigureServicePlay({
+  client,
+  workspaceId,
+  hideLabels,
+  onSaved,
+}: {
+  client: DaemonClient | null;
+  workspaceId: string;
+  hideLabels?: boolean;
+  onSaved: (scriptName: string) => void;
+}) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const openConfiguration = useCallback(() => {
+    if (client?.getLastServerInfoMessage()?.features?.workspaceScriptConfiguration !== true) {
+      toast.show(t("workspace.scripts.states.updateHostForConfiguration"), { variant: "error" });
+      return;
+    }
+    setOpen(true);
+  }, [client, t, toast]);
+
+  return (
+    <>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t("workspace.scripts.actions.configureService")}
+        testID="workspace-scripts-configure-service"
+        onPress={openConfiguration}
+        style={styles.splitButtonPrimary}
+      >
+        <View style={styles.splitButtonContent}>
+          <ThemedPlay size={14} uniProps={mutedColorMapping} />
+          {!hideLabels && (
+            <Text style={styles.splitButtonText}>{t("workspace.scripts.actions.play")}</Text>
+          )}
+        </View>
+      </Pressable>
+      <ConfigureServiceSheet
+        visible={open}
+        client={client}
+        workspaceId={workspaceId}
+        onClose={close}
+        onSaved={onSaved}
+      />
+    </>
+  );
+}
+
+function EmptyWorkspaceScriptsButton({
+  preview,
+  client,
+  workspaceId,
+  hideLabels,
+  onSaved,
+}: {
+  preview: WorkspaceScriptsPreviewActions | undefined;
+  client: DaemonClient | null;
+  workspaceId: string;
+  hideLabels?: boolean;
+  onSaved: (scriptName: string) => void;
+}) {
+  if (!preview) return null;
+  return (
+    <ConfigureServicePlay
+      client={client}
+      workspaceId={workspaceId}
+      hideLabels={hideLabels}
+      onSaved={onSaved}
+    />
+  );
+}
+
 export function WorkspaceScriptsButton({
   serverId,
   workspaceId,
@@ -1309,6 +1748,7 @@ export function WorkspaceScriptsButton({
   const setPreferredRoute = useWorkspaceServiceRoutePreferencesStore(
     (state) => state.setPreferredRoute,
   );
+  const [autoStartScriptName, setAutoStartScriptName] = useState<string | null>(null);
   const liveTerminalIdSet = useMemo(() => new Set(liveTerminalIds), [liveTerminalIds]);
 
   const scriptControls = useWorkspaceScriptControls({
@@ -1324,6 +1764,21 @@ export function WorkspaceScriptsButton({
     onPreviewTerminalStarted,
     onPreviewPendingChange,
   });
+  const startPreviewService = scriptControls.startPreviewService;
+
+  useEffect(() => {
+    if (
+      !autoStartScriptName ||
+      !scripts.some((script) => script.scriptName === autoStartScriptName)
+    )
+      return;
+    startPreviewService(autoStartScriptName);
+    setAutoStartScriptName(null);
+  }, [autoStartScriptName, scripts, startPreviewService]);
+
+  const onConfigurationSaved = useCallback((scriptName: string) => {
+    setAutoStartScriptName(scriptName);
+  }, []);
 
   const triggerStyle = useCallback(
     ({ hovered, pressed, open }: { hovered: boolean; pressed: boolean; open: boolean }) => [
@@ -1348,7 +1803,15 @@ export function WorkspaceScriptsButton({
   );
 
   if (scripts.length === 0) {
-    return preview ? <DisabledPreviewPlay hideLabels={hideLabels} /> : null;
+    return (
+      <EmptyWorkspaceScriptsButton
+        preview={preview}
+        client={client}
+        workspaceId={workspaceId}
+        hideLabels={hideLabels}
+        onSaved={onConfigurationSaved}
+      />
+    );
   }
 
   const hasAnyRunning = scripts.some((s) => s.lifecycle === "running");
@@ -1366,7 +1829,12 @@ export function WorkspaceScriptsButton({
         >
           {preview && scriptControls.services.length === 0 && (
             <>
-              <DisabledPreviewPlay hideLabels={hideLabels} />
+              <ConfigureServicePlay
+                client={client}
+                workspaceId={workspaceId}
+                hideLabels={hideLabels}
+                onSaved={onConfigurationSaved}
+              />
               <DropdownMenuTrigger
                 testID="workspace-scripts-button"
                 style={styles.splitButtonSecondary}
@@ -1450,6 +1918,65 @@ export function WorkspaceScriptsButton({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  configForm: {
+    paddingHorizontal: theme.spacing[4],
+    paddingBottom: theme.spacing[4],
+    gap: theme.spacing[4],
+  },
+  configLoading: {
+    minHeight: 120,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing[3],
+  },
+  configField: {
+    gap: theme.spacing[2],
+  },
+  configLabel: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+  },
+  configHint: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  configError: {
+    color: theme.colors.palette.red[500],
+    fontSize: theme.fontSize.sm,
+  },
+  configInput: {
+    minHeight: 40,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.md,
+    paddingHorizontal: theme.spacing[3],
+    color: theme.colors.foreground,
+  },
+  configCommand: {
+    minHeight: 88,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.md,
+    padding: theme.spacing[3],
+    color: theme.colors.foreground,
+  },
+  configServiceChoice: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: theme.spacing[3],
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.md,
+  },
+  configFooter: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: theme.spacing[2],
+    marginTop: theme.spacing[2],
+  },
   row: {
     flexDirection: "row",
     alignItems: "center",

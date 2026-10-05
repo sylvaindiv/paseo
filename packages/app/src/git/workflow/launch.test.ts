@@ -138,4 +138,30 @@ describe("workspace workflow launch", () => {
       }),
     ).toThrow();
   });
+
+  it("launches conflict resolution with the PR model and explicit local merge and push scope", () => {
+    launchWorkspaceWorkflowAction({
+      ...context,
+      action: "resolve-conflicts",
+      prUrl: "https://example.com/pr/8",
+      config: {
+        prModel: { provider: "codex", model: "pr" },
+        commitAndPushPrompt: "COMMIT_PUSH_SENTINEL",
+      },
+    });
+
+    const request = calls.submitting.mock.calls[0][0];
+    expect(request).toMatchObject({ provider: "codex", model: "pr", cwd: "/repo" });
+    const prompt = request.text as string;
+    expect(prompt).toContain("https://example.com/pr/8");
+    expect(prompt).toContain("Branche courante : feature");
+    expect(prompt).toContain("branche cible réelle");
+    expect(prompt).toContain("vérifie qu'elle est bien paseo-local");
+    expect(prompt).toContain("fusionne-la localement");
+    expect(prompt).toContain("push de cette branche");
+    expect(prompt).toContain("Ne fais aucun force-push, rebase");
+    expect(prompt).toContain("Si la branche cible réelle est main");
+    expect(prompt).not.toContain("COMMIT_PUSH_SENTINEL");
+    expect(calls.navigate.mock.calls[0][0]).toMatchObject({ target: { kind: "draft" }, pin: true });
+  });
 });

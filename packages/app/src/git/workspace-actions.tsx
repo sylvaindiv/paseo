@@ -10,6 +10,7 @@ import { useAgentProfiles } from "@/agent-profiles";
 import { Button } from "@/components/ui/button";
 import { GIT_ACTION_ICONS } from "@/git/action-icons";
 import { launchWorkspaceWorkflowAction } from "@/git/workflow/launch";
+import type { WorkspaceWorkflowState } from "@/git/policy";
 import { useGitActionRunner, useGitActions } from "@/git/use-actions";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { useSessionStore } from "@/stores/session-store";
@@ -24,6 +25,15 @@ interface WorkspaceActionsProps {
   serverId: string;
   workspaceId: string;
   cwd: string;
+}
+
+function workflowButtonVariant(
+  action: WorkspaceWorkflowState["action"],
+): "destructive" | "merge" | "archive" | "outline" {
+  if (action === "resolve-conflicts") return "destructive";
+  if (action === "merge") return "merge";
+  if (action === "archive") return "archive";
+  return "outline";
 }
 
 export function WorkspaceActions({
@@ -61,7 +71,9 @@ export function WorkspaceActions({
     router.push(buildSettingsHostSectionRoute(serverId, "agents"));
   }, [router, serverId]);
   const launch = useCallback(
-    (action: "review" | "create-pr" | "commit-and-push" | "repair-checks") => {
+    (
+      action: "review" | "create-pr" | "commit-and-push" | "repair-checks" | "resolve-conflicts",
+    ) => {
       const profile = action === "review" ? reviewProfile : deliveryProfile;
       const manual = action === "review" ? workflowConfig.reviewModel : workflowConfig.prModel;
       if (!manual && !profile) {
@@ -122,6 +134,8 @@ export function WorkspaceActions({
         return t("workspace.git.actions.createPr.label");
       case "commit-and-push":
         return t("workspace.git.workflow.commitAndPush");
+      case "resolve-conflicts":
+        return t("workspace.git.workflow.resolveConflicts");
       case "repair-checks":
         return t("workspace.git.workflow.repairChecks");
       case "merge":
@@ -141,7 +155,12 @@ export function WorkspaceActions({
   const handleCommit = useCallback(() => runGitAction(commitAction), [runGitAction, commitAction]);
   const handlePr = useCallback(() => {
     const action = workflowState.action;
-    if (action === "create-pr" || action === "commit-and-push" || action === "repair-checks") {
+    if (
+      action === "create-pr" ||
+      action === "commit-and-push" ||
+      action === "resolve-conflicts" ||
+      action === "repair-checks"
+    ) {
       launch(action);
       return;
     }
@@ -196,9 +215,15 @@ export function WorkspaceActions({
       ) : null}
       <Button
         size="xs"
-        variant="outline"
+        variant={workflowButtonVariant(workflowState.action)}
         leftIcon={GitPullRequest}
-        style={styles.prButton}
+        style={
+          workflowState.action === "resolve-conflicts" ||
+          workflowState.action === "merge" ||
+          workflowState.action === "archive"
+            ? undefined
+            : styles.prButton
+        }
         testID="changes-primary-cta"
         disabled={workflowDisabled}
         loading={workflowNativeAction?.status === "pending"}

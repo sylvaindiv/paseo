@@ -3021,6 +3021,46 @@ export const WorkspaceScriptStopRequestSchema = z.object({
   requestId: z.string(),
 });
 
+export const WorkspaceScriptsConfigurationReadRequestSchema = z.object({
+  type: z.literal("workspace.scripts.configuration.read.request"),
+  workspaceId: z.string(),
+  requestId: z.string(),
+});
+
+export const WorkspaceScriptsConfigurationWriteRequestSchema = z.object({
+  type: z.literal("workspace.scripts.configuration.write.request"),
+  workspaceId: z.string(),
+  scriptName: z.string(),
+  command: z.string(),
+  port: z.number().int().min(1).max(65_535).nullable(),
+  projectRevision: PaseoConfigRevisionSchema.nullable(),
+  workspaceRevision: PaseoConfigRevisionSchema.nullable(),
+  requestId: z.string(),
+});
+
+const WorkspaceScriptConfigurationReadResultSchema = z.object({
+  type: z.literal("workspace.scripts.configuration.read.response"),
+  payload: z.object({
+    requestId: z.string(),
+    projectConfig: PaseoConfigRawSchema.nullable(),
+    workspaceConfig: PaseoConfigRawSchema.nullable(),
+    projectRevision: PaseoConfigRevisionSchema.nullable(),
+    workspaceRevision: PaseoConfigRevisionSchema.nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+const WorkspaceScriptConfigurationWriteResultSchema = z.object({
+  type: z.literal("workspace.scripts.configuration.write.response"),
+  payload: z.object({
+    requestId: z.string(),
+    projectRevision: PaseoConfigRevisionSchema.nullable(),
+    workspaceRevision: PaseoConfigRevisionSchema.nullable(),
+    written: z.enum(["none", "project", "both"]),
+    error: z.string().nullable(),
+  }),
+});
+
 export const SubscribeTerminalRequestSchema = z.object({
   type: z.literal("subscribe_terminal_request"),
   terminalId: z.string(),
@@ -3387,6 +3427,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceScriptListRequestSchema,
   WorkspaceScriptStartRequestSchema,
   WorkspaceScriptStopRequestSchema,
+  WorkspaceScriptsConfigurationReadRequestSchema,
+  WorkspaceScriptsConfigurationWriteRequestSchema,
   SubscribeTerminalRequestSchema,
   UnsubscribeTerminalRequestSchema,
   TerminalInputSchema,
@@ -3742,6 +3784,8 @@ export const ServerInfoStatusPayloadSchema = z
         stableProjectIdentity: z.boolean().optional(),
         // COMPAT(workspaceScriptManagement): added in v0.1.105, remove gate after 2027-01-10.
         workspaceScriptManagement: z.boolean().optional(),
+        // COMPAT(workspaceScriptConfiguration): added in v0.8.0, remove gate after 2027-04-03.
+        workspaceScriptConfiguration: z.boolean().optional(),
         // COMPAT(projectCustomIcon): added in v0.2.0, remove after 2027-01-20.
         projectCustomIcon: z.boolean().optional(),
         // COMPAT(projectEmojiIcon): added in v0.8.1, remove after 2027-03-14.
@@ -6746,6 +6790,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceScriptListResponseMessageSchema,
   WorkspaceScriptStartResponseMessageSchema,
   WorkspaceScriptStopResponseMessageSchema,
+  WorkspaceScriptConfigurationReadResultSchema,
+  WorkspaceScriptConfigurationWriteResultSchema,
   LegacyListAvailableEditorsResponseMessageSchema,
   LegacyOpenInEditorResponseMessageSchema,
   ArchiveWorkspaceResponseMessageSchema,
@@ -6954,6 +7000,18 @@ export type StartWorkspaceScriptResponseMessage = z.infer<
 export type WorkspaceScriptListRequest = z.infer<typeof WorkspaceScriptListRequestSchema>;
 export type WorkspaceScriptStartRequest = z.infer<typeof WorkspaceScriptStartRequestSchema>;
 export type WorkspaceScriptStopRequest = z.infer<typeof WorkspaceScriptStopRequestSchema>;
+export type WorkspaceScriptsConfigurationReadRequest = z.infer<
+  typeof WorkspaceScriptsConfigurationReadRequestSchema
+>;
+export type WorkspaceScriptsConfigurationWriteRequest = z.infer<
+  typeof WorkspaceScriptsConfigurationWriteRequestSchema
+>;
+export type WorkspaceScriptConfigurationReadResponse = z.infer<
+  typeof WorkspaceScriptConfigurationReadResultSchema
+>;
+export type WorkspaceScriptConfigurationWriteResponse = z.infer<
+  typeof WorkspaceScriptConfigurationWriteResultSchema
+>;
 export type WorkspaceScriptListResponseMessage = z.infer<
   typeof WorkspaceScriptListResponseMessageSchema
 >;

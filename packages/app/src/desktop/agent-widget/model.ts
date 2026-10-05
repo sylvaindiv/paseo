@@ -19,6 +19,13 @@ interface RequestInput {
   request: AgentPermissionRequest;
   agentTitle: string;
   workspace: string;
+  workspaceId?: string;
+  handoffDisabledReason?: string;
+}
+function handoffDisabledReason(input: RequestInput, plan: unknown): string | undefined {
+  if (input.handoffDisabledReason) return input.handoffDisabledReason;
+  if (input.request.kind !== "plan") return undefined;
+  return input.request.sourcePlanCallId && plan ? undefined : "This plan cannot be handed off.";
 }
 export function projectWidgetRequest(input: RequestInput): WidgetRequest | null {
   const { request, serverId, agentId, agentTitle, workspace } = input;
@@ -38,6 +45,10 @@ export function projectWidgetRequest(input: RequestInput): WidgetRequest | null 
     serverId,
     agentId,
     requestId: request.id,
+    workspaceId: input.workspaceId,
+    planCallId: request.sourcePlanCallId,
+    planText: typeof plan === "string" ? plan : undefined,
+    handoffDisabledReason: handoffDisabledReason(input, plan),
     agentTitle,
     workspace,
     kind: request.kind,
@@ -97,7 +108,7 @@ interface WidgetResponseInput {
 }
 export async function respondToWidgetRequest(input: WidgetResponseInput): Promise<void> {
   const { client, agentId, request, operationId, action } = input;
-  if (action.type === "handoff") {
+  if (action.type === "comment") {
     if (request.kind !== "plan") throw new Error("This request is not a plan.");
     // Interrupting a waiting plan uses the normal prompt path and keeps feedback in this conversation.
     await client.sendAgentMessage(agentId, action.message, {

@@ -18,6 +18,8 @@ const labels = {
   question: "Réponse attendue",
   execute: "Exécuter",
   comment: "Ajouter une consigne…",
+  sendComment: "Envoyer",
+  handoff: "Handoff",
   submit: "Envoyer la réponse",
   next: "Suivant",
   close: "Fermer",
@@ -32,6 +34,9 @@ const plan = {
   serverId: "host",
   agentId: "agent",
   requestId: "plan",
+  workspaceId: "workspace",
+  planCallId: "plan-call",
+  planText: "# Exact plan",
   agentTitle: "Codex",
   workspace: "Paseo · accra",
   title: "Un agent à portée de main",
@@ -141,11 +146,15 @@ try {
   await widget.screenshot({ path: path.join(output, "free.png") });
   await owner.evaluate(() => (window.widgetError = null));
   await widget.locator("[data-action=answer]").click();
+  await expect(widget.locator(".pill")).toBeVisible();
+  await widget.screenshot({ path: path.join(output, "reduced-after-answer.png") });
+  await widget.locator("[data-action=restore]").click();
   await expect(widget.locator("#comment")).toHaveValue("Garde le widget silencieux.");
   await widget.locator("#handoff").click();
-  await expect(widget.locator(".empty")).toContainText("Réponse envoyée");
+  await expect(widget.locator(".pill")).toBeVisible();
   const actions = await owner.evaluate(() => window.widgetActions);
-  expect(actions.map((action) => action.type)).toEqual(["handoff", "answer", "handoff"]);
+  expect(actions.map((action) => action.type)).toEqual(["comment", "answer", "handoff"]);
+  expect(actions[2]).toMatchObject({ planCallId: "plan-call", planText: "# Exact plan" });
   expect(actions[1].selections).toEqual([[0], [0, 1], []]);
   expect(actions[1].texts).toEqual(["", "", "Ne pas interrompre la saisie."]);
   // A lagging owner snapshot cannot resurrect a handled request.
@@ -155,7 +164,15 @@ try {
     requests: [plan, question],
     labels,
   });
-  await expect(widget.locator(".queue span")).toHaveText("0 / 0");
+  await expect
+    .poll(() =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .find((window) => window.getTitle() === "Paseo")
+          ?.isVisible(),
+      ),
+    )
+    .toBe(false);
   const newPlan = { ...plan, key: JSON.stringify(["host", "agent", "plan2"]), requestId: "plan2" };
   await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
     serverId: "host",
@@ -163,6 +180,8 @@ try {
     requests: [newPlan],
     labels,
   });
+  await expect(widget.locator(".pill")).toBeVisible();
+  await widget.locator("[data-action=restore]").click();
   await expect(widget.locator("[data-action=approve]")).toBeDisabled();
   await expect(widget.locator(".notice")).toHaveText("Hôte déconnecté");
   await widget.screenshot({ path: path.join(output, "offline.png") });
@@ -177,8 +196,15 @@ try {
   await widget.screenshot({ path: path.join(output, "reduced.png") });
   await widget.locator("[data-action=restore]").click();
   await widget.locator("[data-action=approve]").click();
-  await expect(widget.locator(".empty")).toContainText("Réponse envoyée");
-  await widget.screenshot({ path: path.join(output, "sent.png") });
+  await expect
+    .poll(() =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .find((window) => window.getTitle() === "Paseo")
+          ?.isVisible(),
+      ),
+    )
+    .toBe(false);
   // Another application window shares the queue, then takes over when its peer closes.
   const secondOpened = app.waitForEvent("window");
   await app.evaluate(() => globalThis.createWidgetOwner());
@@ -186,8 +212,23 @@ try {
   await secondOwner.waitForFunction(() => Boolean(window.paseoDesktop?.agentWidget));
   await secondOwner.evaluate(() => {
     window.widgetActions = [];
+    window.widgetMode = "normal";
     window.paseoDesktop.agentWidget.onAction((delivery) => {
       window.widgetActions.push(delivery.action);
+      if (window.widgetMode === "silent") return;
+      if (window.widgetMode === "long") {
+        const keepAlive = setInterval(() => {
+          void window.paseoDesktop.agentWidget.progress(delivery.operationId);
+        }, 10_000);
+        setTimeout(() => {
+          clearInterval(keepAlive);
+          void window.paseoDesktop.agentWidget.result({
+            operationId: delivery.operationId,
+            error: null,
+          });
+        }, 33_000);
+        return;
+      }
       void window.paseoDesktop.agentWidget.result({
         operationId: delivery.operationId,
         error: null,
@@ -208,6 +249,8 @@ try {
     (snapshot) => window.paseoDesktop.agentWidget.publish(snapshot),
     sharedSnapshot,
   );
+  await expect(widget.locator(".pill")).toBeVisible();
+  await widget.locator("[data-action=restore]").click();
   await expect(widget.locator(".queue span")).toHaveText("1 / 1");
   await widget.locator("#comment").fill("Conserver cette consigne lors des mises à jour.");
   await owner.evaluate(
@@ -221,10 +264,76 @@ try {
   await owner.close();
   await expect(widget.locator(".queue span")).toHaveText("1 / 1");
   await widget.locator("[data-action=approve]").click();
-  await expect(widget.locator(".empty")).toContainText("Réponse envoyée");
+  await expect
+    .poll(() =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .find((window) => window.getTitle() === "Paseo")
+          ?.isVisible(),
+      ),
+    )
+    .toBe(false);
   expect(
     await secondOwner.evaluate(() => window.widgetActions.map((action) => action.type)),
   ).toEqual(["approve"]);
+  const longPlan = { ...plan, key: JSON.stringify(["host", "agent", "long"]), requestId: "long" };
+  await secondOwner.evaluate(() => (window.widgetMode = "long"));
+  await secondOwner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [longPlan],
+    labels,
+  });
+  await expect(widget.locator(".pill")).toBeVisible();
+  await widget.locator("[data-action=restore]").click();
+  await widget.locator("#handoff").click();
+  await expect(widget.locator("#handoff")).toBeDisabled();
+  await expect.poll(() => secondOwner.evaluate(() => window.widgetActions.length)).toBe(2);
+  await expect
+    .poll(
+      () =>
+        app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()
+            .find((window) => window.getTitle() === "Paseo")
+            ?.isVisible(),
+        ),
+      { timeout: 40_000 },
+    )
+    .toBe(false);
+  expect(await secondOwner.evaluate(() => window.widgetActions.length)).toBe(2);
+
+  const silentPlan = {
+    ...plan,
+    key: JSON.stringify(["host", "agent", "silent"]),
+    requestId: "silent",
+  };
+  await secondOwner.evaluate(() => (window.widgetMode = "silent"));
+  await secondOwner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [silentPlan],
+    labels,
+  });
+  await expect(widget.locator(".pill")).toBeVisible();
+  await widget.locator("[data-action=restore]").click();
+  await widget.locator("#comment").fill("Brouillon à préserver");
+  await widget.locator("#handoff").click();
+  await expect(widget.locator(".notice.error")).toContainText("No confirmation", {
+    timeout: 35_000,
+  });
+  await expect(widget.locator("#comment")).toHaveValue("Brouillon à préserver");
+  await widget.screenshot({ path: path.join(output, "handoff-timeout.png") });
+  await secondOwner.evaluate(() => (window.widgetMode = "normal"));
+  await widget.locator("#handoff").click();
+  await expect
+    .poll(() =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .find((window) => window.getTitle() === "Paseo")
+          ?.isVisible(),
+      ),
+    )
+    .toBe(false);
   const sizeChecks = await app.evaluate(() => {
     const widgetBounds = globalThis.widgetBounds;
     return [
