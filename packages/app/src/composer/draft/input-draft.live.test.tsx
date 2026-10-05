@@ -10,6 +10,8 @@ import { createWorkspaceFileAttachment } from "@/attachments/workspace-file";
 const { asyncStorage } = vi.hoisted(() => ({
   asyncStorage: new Map<string, string>(),
 }));
+const { useAgentFormStateMock } = vi.hoisted(() => ({ useAgentFormStateMock: vi.fn() }));
+const CLAUDE_INITIAL_VALUES = { provider: "claude" as const };
 
 vi.hoisted(() => {
   (globalThis as unknown as { __DEV__: boolean }).__DEV__ = false;
@@ -32,7 +34,7 @@ vi.mock("@/attachments/service", () => ({
 }));
 
 vi.mock("@/hooks/use-agent-form-state", () => ({
-  useAgentFormState: () => ({
+  useAgentFormState: useAgentFormStateMock.mockReturnValue({
     selectedServerId: "host-1",
     selectedProvider: "codex",
     setProviderFromUser: () => undefined,
@@ -127,6 +129,8 @@ afterEach(async () => {
 });
 
 let useAgentInputDraft: typeof import("./input-draft").useAgentInputDraft;
+let useAgentFormState: typeof import("@/hooks/use-agent-form-state").useAgentFormState;
+let resolveDefaultNewConversationSetup: typeof import("./input-draft").__private__.resolveDefaultNewConversationSetup;
 type DraftRecordForTest = ReturnType<typeof useDraftStore.getState>["drafts"][string];
 
 beforeAll(async () => {
@@ -135,11 +139,16 @@ beforeAll(async () => {
     configurable: true,
   });
 
-  ({ useAgentInputDraft } = await import("./input-draft"));
+  ({
+    useAgentInputDraft,
+    __private__: { resolveDefaultNewConversationSetup },
+  } = await import("./input-draft"));
+  ({ useAgentFormState } = await import("@/hooks/use-agent-form-state"));
 });
 
 describe("useAgentInputDraft live contract", () => {
   beforeEach(() => {
+    vi.mocked(useAgentFormState).mockClear();
     asyncStorage.clear();
     document.body.innerHTML = "<div id='root'></div>";
     localStorage.clear();
@@ -149,6 +158,68 @@ describe("useAgentInputDraft live contract", () => {
       createModalDraft: null,
       attachmentFocusRequestByDraftKey: {},
     });
+  });
+
+  it("passes the new-conversation defaults to form resolution", async () => {
+    function Probe() {
+      useAgentInputDraft({
+        draftKey: "draft:defaults",
+        composer: {
+          initialServerId: "host-1",
+          isVisible: true,
+          lockedWorkingDir: "/repo",
+        },
+      });
+      return null;
+    }
+
+    const queryClient = new QueryClient();
+    const container = document.getElementById("root");
+    if (!container) throw new Error("Missing root container");
+    let root: Root | null = createTestRoot(container);
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={queryClient}>
+          <Probe />
+        </QueryClientProvider>,
+      );
+    });
+    expect(vi.mocked(useAgentFormState).mock.calls.at(-1)?.[0]).toMatchObject({
+      initialValues: {
+        provider: "codex",
+        model: "gpt-6-astra",
+        thinkingOptionId: "high",
+        modeId: "full-access",
+        modelRouting: "manual",
+      },
+    });
+    await act(async () => {
+      root!.unmount();
+    });
+  });
+
+  it("includes Plan mode in the one-time default setup and skips defaults for explicit configurations", () => {
+    expect(
+      resolveDefaultNewConversationSetup({
+        initialServerId: "host-1",
+      }),
+    ).toEqual({
+      initialValues: {
+        provider: "codex",
+        model: "gpt-6-astra",
+        thinkingOptionId: "high",
+        modeId: "full-access",
+        modelRouting: "manual",
+      },
+      initialFeatureValues: { plan_mode: true },
+    });
+    expect(
+      resolveDefaultNewConversationSetup({
+        initialServerId: "host-1",
+        initialValues: CLAUDE_INITIAL_VALUES,
+        initialFeatureValues: { plan_mode: false },
+      }),
+    ).toBeNull();
   });
 
   it("hydrates persisted text and attachments and returns draft-mode composer state for a caller-provided key", async () => {

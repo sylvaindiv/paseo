@@ -514,6 +514,52 @@ describe("buildProviderDefinitions", () => {
 });
 
 describe("resolveFormState", () => {
+  it("lets explicit new-conversation values override conflicting saved Codex preferences", () => {
+    const resolved = resolveFormState(
+      {
+        provider: "codex",
+        model: "gpt-6-astra",
+        thinkingOptionId: "high",
+        modeId: "full-access",
+        modelRouting: "manual",
+      },
+      {
+        provider: "claude",
+        providerPreferences: {
+          codex: {
+            model: "gpt-5.3-codex",
+            thinkingByModel: { "gpt-6-astra": "medium" },
+            mode: "plan",
+            modelRouting: "jev",
+          },
+        },
+      },
+      [
+        ...CODEX_MODELS,
+        {
+          provider: "codex",
+          id: "gpt-6-astra",
+          label: "GPT-6 Astra",
+          thinkingOptions: [
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+        },
+      ],
+      INITIAL_USER_MODIFIED,
+      makeState().form,
+      codexProviderMap,
+    );
+
+    expect(resolved).toMatchObject({
+      provider: "codex",
+      model: "gpt-6-astra",
+      thinkingOptionId: "high",
+      modeId: "full-access",
+      modelRouting: "manual",
+    });
+  });
+
   it("keeps provider, mode, and model unset on first open without preferences or explicit values", () => {
     const resolved = resolveFormState(
       undefined,

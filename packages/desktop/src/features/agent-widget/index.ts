@@ -92,6 +92,7 @@ export function registerAgentWidget() {
     if (!window) {
       window = new BrowserWindow({
         ...widgetBounds(screen.getPrimaryDisplay().workArea, reduced),
+        ...(process.platform === "darwin" ? { type: "panel" as const } : {}),
         title: "Paseo",
         show: false,
         frame: false,

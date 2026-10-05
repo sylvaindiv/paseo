@@ -1,5 +1,6 @@
 // Run after npm run build:main --workspace=@getpaseo/desktop.
 import { _electron as electron, expect } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,15 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const output = path.resolve(here, "../../../.context/agent-widget");
 await mkdir(output, { recursive: true });
+const previousBundleId =
+  process.platform === "darwin"
+    ? execFileSync("osascript", [
+        "-e",
+        'tell application "System Events" to get bundle identifier of first process whose frontmost is true',
+      ])
+        .toString()
+        .trim()
+    : null;
 const home = await mkdtemp(path.join(os.tmpdir(), "paseo-widget-"));
 const app = await electron.launch({
   args: [path.join(here, "fixtures/agent-widget.cjs")],
@@ -116,10 +126,14 @@ try {
       area: screen.getPrimaryDisplay().workArea,
       focused: win.isFocused(),
       top: win.isAlwaysOnTop(),
+      ownersVisible: BrowserWindow.getAllWindows().some(
+        (candidate) => candidate !== win && candidate.isVisible(),
+      ),
     };
   });
   expect(geometry.top).toBe(true);
   expect(geometry.focused).toBe(false);
+  expect(geometry.ownersVisible).toBe(true);
   expect(geometry.bounds.x + geometry.bounds.width).toBe(
     geometry.area.x + geometry.area.width - 16,
   );
@@ -127,8 +141,19 @@ try {
     geometry.area.y + geometry.area.height - 16,
   );
   await widget.locator("#comment").fill("Garde le widget silencieux.");
+  const activationBeforeAction = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some(
+      (candidate) => candidate.getTitle() !== "Paseo" && candidate.isFocused(),
+    ),
+  );
   await widget.screenshot({ path: path.join(output, "plan.png") });
   await widget.locator("#comment").press("Enter");
+  const activationAfterAction = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some(
+      (candidate) => candidate.getTitle() !== "Paseo" && candidate.isFocused(),
+    ),
+  );
+  expect(activationAfterAction).toEqual(activationBeforeAction);
   await expect(widget.locator(".notice.error")).toContainText("Réessayez");
   await expect(widget.locator("#comment")).toHaveValue("Garde le widget silencieux.");
   await widget.screenshot({ path: path.join(output, "error.png") });
@@ -195,7 +220,31 @@ try {
   await expect(widget.locator(".pill")).toBeVisible();
   await widget.screenshot({ path: path.join(output, "reduced.png") });
   await widget.locator("[data-action=restore]").click();
-  await widget.locator("[data-action=approve]").click();
+  if (process.platform === "darwin") {
+    const button = await widget.locator("[data-action=approve]").boundingBox();
+    if (!button) throw new Error("The approval button is not visible.");
+    execFileSync("osascript", ["-e", 'tell application id "com.apple.finder" to activate']);
+    const frontmostBefore = execFileSync("osascript", [
+      "-e",
+      'tell application "System Events" to get bundle identifier of first process whose frontmost is true',
+    ])
+      .toString()
+      .trim();
+    expect(frontmostBefore).toBe("com.apple.finder");
+    execFileSync("cliclick", [
+      `c:${Math.round(geometry.bounds.x + button.x + button.width / 2)},${Math.round(geometry.bounds.y + button.y + button.height / 2)}`,
+    ]);
+    const frontmostAfter = execFileSync("osascript", [
+      "-e",
+      'tell application "System Events" to get bundle identifier of first process whose frontmost is true',
+    ])
+      .toString()
+      .trim();
+    expect(frontmostAfter).toBe("com.apple.finder");
+    await app.evaluate(({ app: electronApp }) => electronApp.focus());
+  } else {
+    await widget.locator("[data-action=approve]").click();
+  }
   await expect
     .poll(() =>
       app.evaluate(({ BrowserWindow }) =>
@@ -351,9 +400,12 @@ try {
     JSON.stringify({ passed: true, geometry, actions, pageErrors: errors }, null, 2),
   );
   console.log(
-    "PASS: native window, no focus theft, primary screen bounds, feedback failure/retry, questions, drafts, stale snapshots, offline, collapse, approval, multi-window deduplication and takeover, draft focus and screen sizes.",
+    "PASS: non-activating widget with a visible main window, primary screen bounds, feedback failure/retry, questions, drafts, stale snapshots, offline, collapse, approval, multi-window deduplication and takeover, draft focus and screen sizes.",
   );
 } finally {
   await app.close();
+  if (previousBundleId) {
+    execFileSync("osascript", ["-e", `tell application id "${previousBundleId}" to activate`]);
+  }
   await rm(home, { recursive: true, force: true });
 }

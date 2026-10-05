@@ -8,10 +8,10 @@ it("creates and sends a workspace draft idempotently", async () => {
   const config = {
     provider: "codex",
     cwd: "/workspace",
-    model: "gpt-5",
-    modeId: "plan",
+    model: "gpt-6-astra",
+    modeId: "full-access",
     thinkingOptionId: "high",
-    featureValues: { webSearch: true },
+    featureValues: { plan_mode: true },
   };
   await expect(
     requestWorkspaceDraftAgent({ createAgent, sendMessage } as unknown as DaemonClient, {
