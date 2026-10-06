@@ -142,6 +142,21 @@ try {
   expect(geometry.bounds.y + geometry.bounds.height).toBe(
     geometry.area.y + geometry.area.height - 16,
   );
+  for (const target of [
+    () => widget.locator(".identity b").click(),
+    () => widget.locator(".avatar").click(),
+    () => widget.locator("header button").click({ position: { x: 460, y: 30 } }),
+  ]) {
+    await target();
+    await expect(widget.locator(".pill")).toBeVisible();
+    await widget.locator("[data-action=restore]").click();
+    await expect(widget.locator("#comment")).toBeVisible();
+  }
+  await widget.locator("header button").focus();
+  await widget.locator("header button").press("Space");
+  await expect(widget.locator(".pill")).toBeVisible();
+  await widget.locator("[data-action=restore]").press("Enter");
+  await expect(widget.locator("#comment")).toBeVisible();
   await widget.locator("#comment").fill("Garde le widget silencieux.");
   const activationBeforeAction = await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().some(
@@ -231,8 +246,7 @@ try {
     requests: [newPlan],
     labels,
   });
-  await expect(widget.locator(".pill")).toBeVisible();
-  await widget.locator("[data-action=restore]").click();
+  await expect(widget.locator("#comment")).toBeVisible();
   await expect(widget.locator("[data-action=approve]")).toBeDisabled();
   await expect(widget.locator(".notice")).toHaveText("Hôte déconnecté");
   await widget.screenshot({ path: path.join(output, "offline.png") });
@@ -242,35 +256,32 @@ try {
     requests: [newPlan],
     labels,
   });
-  await widget.locator("[data-action=reduce]").first().click();
+  await widget.locator("header button").click();
   await expect(widget.locator(".pill")).toBeVisible();
   await widget.screenshot({ path: path.join(output, "reduced.png") });
-  await widget.locator("[data-action=restore]").click();
-  if (process.platform === "darwin") {
-    const button = await widget.locator("[data-action=approve]").boundingBox();
-    if (!button) throw new Error("The approval button is not visible.");
-    execFileSync("osascript", ["-e", 'tell application id "com.apple.finder" to activate']);
-    const frontmostBefore = execFileSync("osascript", [
-      "-e",
-      'tell application "System Events" to get bundle identifier of first process whose frontmost is true',
-    ])
-      .toString()
-      .trim();
-    expect(frontmostBefore).toBe("com.apple.finder");
-    execFileSync("cliclick", [
-      `c:${Math.round(geometry.bounds.x + button.x + button.width / 2)},${Math.round(geometry.bounds.y + button.y + button.height / 2)}`,
-    ]);
-    const frontmostAfter = execFileSync("osascript", [
-      "-e",
-      'tell application "System Events" to get bundle identifier of first process whose frontmost is true',
-    ])
-      .toString()
-      .trim();
-    expect(frontmostAfter).toBe("com.apple.finder");
-    await app.evaluate(({ app: electronApp }) => electronApp.focus());
-  } else {
-    await widget.locator("[data-action=approve]").click();
-  }
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [newPlan],
+    labels,
+  });
+  await expect(widget.locator(".pill")).toBeVisible();
+  const nextPlan = { ...plan, key: JSON.stringify(["host", "agent", "plan3"]), requestId: "plan3" };
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [nextPlan],
+    labels,
+  });
+  await expect(widget.locator("#comment")).toBeVisible();
+  await widget.locator("[data-action=approve]").click();
+  expect(
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .find((window) => window.getTitle() === "Paseo")
+        ?.isFocused(),
+    ),
+  ).toBe(false);
   await expect
     .poll(() =>
       app.evaluate(({ BrowserWindow }) =>
@@ -324,6 +335,13 @@ try {
     (snapshot) => window.paseoDesktop.agentWidget.publish(snapshot),
     sharedSnapshot,
   );
+  await expect(widget.locator("#comment")).toBeVisible();
+  await widget.locator("header button").click();
+  await expect(widget.locator(".pill")).toBeVisible();
+  await secondOwner.evaluate(
+    (snapshot) => window.paseoDesktop.agentWidget.publish(snapshot),
+    sharedSnapshot,
+  );
   await expect(widget.locator(".pill")).toBeVisible();
   await widget.locator("[data-action=restore]").click();
   await expect(widget.locator(".queue span")).toHaveText("1 / 1");
@@ -359,11 +377,24 @@ try {
     requests: [longPlan],
     labels,
   });
-  await expect(widget.locator(".pill")).toBeVisible();
-  await widget.locator("[data-action=restore]").click();
+  await expect(widget.locator("#comment")).toBeVisible();
   await widget.locator("#handoff").click();
   await expect(widget.locator("#handoff")).toBeDisabled();
   await expect.poll(() => secondOwner.evaluate(() => window.widgetActions.length)).toBe(2);
+  await widget.locator("header button").click();
+  await expect(widget.locator(".pill")).toBeVisible();
+  const duringSendPlan = {
+    ...plan,
+    key: JSON.stringify(["host", "agent", "during-send"]),
+    requestId: "during-send",
+  };
+  await secondOwner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [duringSendPlan],
+    labels,
+  });
+  await expect(widget.locator("#comment")).toBeVisible();
   await expect
     .poll(
       () =>
@@ -374,7 +405,8 @@ try {
         ),
       { timeout: 40_000 },
     )
-    .toBe(false);
+    .toBe(true);
+  await expect(widget.locator(".notice")).toHaveText("Réponse envoyée", { timeout: 40_000 });
   expect(await secondOwner.evaluate(() => window.widgetActions.length)).toBe(2);
 
   const silentPlan = {
@@ -389,8 +421,7 @@ try {
     requests: [silentPlan],
     labels,
   });
-  await expect(widget.locator(".pill")).toBeVisible();
-  await widget.locator("[data-action=restore]").click();
+  await expect(widget.locator("#comment")).toBeVisible();
   await widget.locator("#comment").fill("Brouillon à préserver");
   await widget.locator("#handoff").click();
   await expect(widget.locator(".notice.error")).toContainText("No confirmation", {

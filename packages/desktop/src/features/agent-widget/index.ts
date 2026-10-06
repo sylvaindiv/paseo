@@ -44,6 +44,8 @@ export function registerAgentWidget() {
   const pending = new Map<string, PendingAction>();
   const runningKeys = new Set<string>();
   const completed = new Set<string>();
+  let requestKeys = new Set<string>();
+  let requestGeneration = 0;
   let window: BrowserWindow | null = null;
   let reduced = false;
   let quitting = false;
@@ -82,8 +84,22 @@ export function registerAgentWidget() {
     if (window && !window.isDestroyed())
       window.setBounds(widgetBounds(screen.getPrimaryDisplay().workArea, reduced));
   }
+  function setReduced(value: boolean) {
+    reduced = value;
+    position();
+    if (window && !window.isDestroyed())
+      window.webContents.send("paseo:agent-widget:reduced", reduced);
+    if (!requests().length && reduced) window?.hide();
+  }
   function update() {
     const value = display();
+    const nextKeys = new Set(value?.requests.map((request) => request.key) ?? []);
+    const arrived = [...nextKeys].some((key) => !requestKeys.has(key));
+    requestKeys = nextKeys;
+    if (arrived) {
+      requestGeneration++;
+      setReduced(false);
+    }
     if (!value) {
       window?.hide();
       return;
@@ -119,9 +135,7 @@ export function registerAgentWidget() {
       window.on("close", (event) => {
         if (quitting) return;
         event.preventDefault();
-        reduced = true;
-        position();
-        window?.webContents.send("paseo:agent-widget:reduced", true);
+        setReduced(true);
       });
       window.on("closed", () => {
         window = null;
@@ -169,14 +183,13 @@ export function registerAgentWidget() {
   });
   ipcMain.handle("paseo:agent-widget:ready", (event) => {
     assertWidget(event.sender);
+    window?.webContents.send("paseo:agent-widget:reduced", reduced);
     return display();
   });
   ipcMain.handle("paseo:agent-widget:reduce", (event, value: unknown) => {
     assertWidget(event.sender);
     if (typeof value !== "boolean") throw new Error("Invalid widget size.");
-    reduced = value;
-    if (!requests().length && reduced) window?.hide();
-    position();
+    setReduced(value);
   });
   ipcMain.handle("paseo:agent-widget:act", async (event, raw: unknown) => {
     assertWidget(event.sender);
@@ -193,6 +206,7 @@ export function registerAgentWidget() {
       throw new Error(entry.request.handoffDisabledReason ?? "This plan has been replaced.");
     if (runningKeys.has(action.key)) throw new Error("A response is already being sent.");
     runningKeys.add(action.key);
+    const generation = requestGeneration;
     const operationId = randomUUID();
     try {
       const result = await new Promise<WidgetActionResult>((resolve) => {
@@ -207,7 +221,10 @@ export function registerAgentWidget() {
           action,
         });
       });
-      if (!result.error) completed.add(action.key);
+      if (!result.error) {
+        completed.add(action.key);
+        if (requestGeneration === generation) setReduced(true);
+      }
       return result;
     } finally {
       runningKeys.delete(action.key);
