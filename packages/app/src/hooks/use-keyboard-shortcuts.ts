@@ -147,6 +147,17 @@ export function useKeyboardShortcuts({
       return true;
     };
 
+    const isComposerTextInput = (event: KeyboardEvent) =>
+      event.target instanceof HTMLTextAreaElement &&
+      event.target.hasAttribute("data-composer-input");
+
+    const shouldSkipTabInCapture = (event: KeyboardEvent, focusScope: KeyboardFocusScope) => {
+      if (event.key !== "Tab") return false;
+      if (focusScope === "message-input" && !isComposerTextInput(event)) return true;
+      // Let the composer accept an autocomplete suggestion before Tab changes the mode.
+      return !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
+    };
+
     const captureCommandCenterFocusRestore = (event: KeyboardEvent) => {
       const target = event.target instanceof Element ? event.target : null;
       const targetEl =
@@ -358,9 +369,38 @@ export function useKeyboardShortcuts({
         target: event.target,
         commandCenterOpen: store.commandCenterOpen,
       });
+      if (shouldSkipTabInCapture(event, focusScope)) {
+        return;
+      }
       resolveAndPerformShortcut({
         event,
         focusScope,
+        domEvent: event,
+      });
+    };
+
+    const handleTabKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Tab" ||
+        event.shiftKey ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.defaultPrevented ||
+        isImeComposingKeyboardEvent(event) ||
+        !isComposerTextInput(event) ||
+        !shouldHandle()
+      ) {
+        return;
+      }
+      const store = useKeyboardShortcutsStore.getState();
+      if (store.capturingShortcut) return;
+      resolveAndPerformShortcut({
+        event,
+        focusScope: resolveKeyboardFocusScope({
+          target: event.target,
+          commandCenterOpen: store.commandCenterOpen,
+        }),
         domEvent: event,
       });
     };
@@ -377,6 +417,7 @@ export function useKeyboardShortcuts({
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keydown", handleTabKeyDown);
     window.addEventListener("keyup", handleKeyUp, true);
     window.addEventListener("blur", handleBlurOrHide);
     document.addEventListener("visibilitychange", handleBlurOrHide);
@@ -405,6 +446,7 @@ export function useKeyboardShortcuts({
         };
       }
       window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keydown", handleTabKeyDown);
       window.removeEventListener("keyup", handleKeyUp, true);
       window.removeEventListener("blur", handleBlurOrHide);
       document.removeEventListener("visibilitychange", handleBlurOrHide);
