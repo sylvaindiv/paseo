@@ -1078,7 +1078,7 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
     combo: "Tab",
     repeat: false,
     when: { commandCenter: false, focusScope: "message-input" },
-    payload: { type: "message-input", kind: "mode-cycle" },
+    payload: { type: "message-input", kind: "profile-next" },
   },
   {
     id: "message-input-mode-cycle-shift-tab",

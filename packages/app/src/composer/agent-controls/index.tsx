@@ -69,6 +69,7 @@ import {
   type AgentControlCommandCenterSource,
 } from "@/command-center/agent-control-registration";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
+import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import { isNative } from "@/constants/platform";
 import {
   resolveComposerControlDensity,
@@ -488,6 +489,19 @@ function buildOpenChangeHandler(
   };
 }
 
+function useAgentProfileShortcut(agentProfiles: AgentProfilePicker | null, disabled: boolean) {
+  const { isActiveComposer } = useComposerKeyboardScope();
+  const handlerId = useRef(`agent-profile:${Math.random().toString(36).slice(2)}`);
+  useKeyboardActionHandler({
+    handlerId: handlerId.current,
+    actions: ["message-input.profile-next"],
+    enabled: isActiveComposer && !disabled && Boolean(agentProfiles?.rows.length),
+    priority: 200,
+    handle: (action) =>
+      action.id === "message-input.profile-next" && (agentProfiles?.applyNextProfile() ?? false),
+  });
+}
+
 function ControlledAgentControls({
   provider,
   providerOptions,
@@ -523,6 +537,7 @@ function ControlledAgentControls({
 }: ControlledAgentControlsProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
+  useAgentProfileShortcut(agentProfiles, disabled);
   const isCompactFormFactor = useIsCompactFormFactor();
   const isCompact = isCompactLayout ?? isCompactFormFactor;
   const { fontScale } = useWindowDimensions();

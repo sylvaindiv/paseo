@@ -320,11 +320,11 @@ describe("keyboard-shortcuts", () => {
       payload: { kind: "dictation-toggle" },
     },
     {
-      name: "routes Tab to cycle agent mode from the message input",
+      name: "routes Tab to the next agent profile from the message input",
       event: { key: "Tab", code: "Tab" },
       context: { focusScope: "message-input" },
       action: "message-input.action",
-      payload: { kind: "mode-cycle" },
+      payload: { kind: "profile-next" },
     },
     {
       name: "routes Shift+Tab to cycle agent mode from the message input",
@@ -489,7 +489,7 @@ describe("keyboard-shortcuts", () => {
       context: { isMac: true, focusScope: "terminal" },
     },
     {
-      name: "does not cycle agent mode with Tab outside the message input",
+      name: "does not apply an agent profile with Tab outside the message input",
       event: { key: "Tab", code: "Tab" },
       context: { focusScope: "other" },
     },
@@ -499,7 +499,7 @@ describe("keyboard-shortcuts", () => {
       context: { focusScope: "other" },
     },
     {
-      name: "does not repeat agent mode cycling while Tab is held",
+      name: "does not repeat agent profile changes while Tab is held",
       event: { key: "Tab", code: "Tab", repeat: true },
       context: { focusScope: "message-input" },
     },

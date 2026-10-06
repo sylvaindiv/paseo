@@ -43,7 +43,7 @@ import {
 } from "@/components/message";
 import { PlanCard } from "@/components/plan-card";
 import { PlanActions } from "@/plugins/plan-actions/view";
-import type { StreamItem } from "@/types/stream";
+import type { StreamItem, UserMessageItem } from "@/types/stream";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
 import type { TurnPresentation } from "@/timeline/turn-liveness";
 import type { PendingPermission } from "@/types/shared";
@@ -114,6 +114,7 @@ import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useStreamHistoryWindow } from "./use-stream-history-window";
 import { PluginTimelineItemView, useInstalledTimelineTransform } from "@/plugins/timeline";
 import { projectPluginTimelineItems } from "@/plugins/timeline/projection";
+import { resolvePinnedPrompt } from "./pinned-prompt";
 
 function renderLiveAuxiliaryNode(input: {
   pendingPermissions: ReactNode;
@@ -141,6 +142,50 @@ function renderLiveAuxiliaryNode(input: {
 function BottomOverlayInset({ height }: { height: number }) {
   const style = useMemo(() => ({ height }), [height]);
   return <View style={style} />;
+}
+
+function PinnedPromptOverlay({
+  prompt,
+  revealLoadedHistory,
+  visibleItemIds,
+  viewportRef,
+}: {
+  prompt: UserMessageItem | null;
+  revealLoadedHistory: (itemId: string) => boolean;
+  visibleItemIds: ReadonlySet<string>;
+  viewportRef: React.RefObject<StreamViewportHandle | null>;
+}) {
+  const [pendingJumpId, setPendingJumpId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingJumpId || !visibleItemIds.has(pendingJumpId)) return;
+    const frame = requestAnimationFrame(() => {
+      viewportRef.current?.scrollToMessage?.(pendingJumpId);
+      setPendingJumpId(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pendingJumpId, visibleItemIds, viewportRef]);
+  const jumpToPrompt = useCallback(() => {
+    if (!prompt) return;
+    if (revealLoadedHistory(prompt.id)) setPendingJumpId(prompt.id);
+    else viewportRef.current?.scrollToMessage?.(prompt.id);
+  }, [prompt, revealLoadedHistory, viewportRef]);
+
+  if (!prompt?.text.trim()) return null;
+  return (
+    <View style={stylesheet.pinnedPromptOverlay} pointerEvents="box-none">
+      <Pressable
+        onPress={jumpToPrompt}
+        accessibilityRole="button"
+        accessibilityLabel={prompt.text}
+        style={stylesheet.pinnedPrompt}
+        testID="pinned-prompt"
+      >
+        <Text numberOfLines={2} ellipsizeMode="tail" style={stylesheet.pinnedPromptText}>
+          {prompt.text}
+        </Text>
+      </Pressable>
+    </View>
+  );
 }
 
 function renderPendingPermissionsNode(input: {
@@ -379,6 +424,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [isMobile],
     );
     const [isNearBottom, setIsNearBottom] = useState(true);
+    const [readingRowId, setReadingRowId] = useState<string | null>(null);
+    useEffect(() => {
+      setReadingRowId(null);
+    }, [agentId]);
     const [expandedResponseIds, setExpandedResponseIds] = useState<Set<string>>(new Set());
     const toggleResponse = useCallback((responseId: string) => {
       viewportRef.current?.prepareForViewportChange();
@@ -591,6 +640,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       }),
       [projectedToolCalls.head, projectedToolCalls.tail, transformTimelineItem],
     );
+    const pinnedPrompt = useMemo(
+      () => resolvePinnedPrompt([...projectedPlugins.tail, ...projectedPlugins.head], readingRowId),
+      [projectedPlugins, readingRowId],
+    );
     const {
       start: historyWindowStart,
       hasLocalHistory,
@@ -682,6 +735,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       onJumpError: handleTimelineHistoryLoadError,
       visibleItemIds: visibleHistoryItemIds,
       revealLoadedItem: revealLoadedHistory,
+    });
+    const handleReadingPositionChange = useStableEvent((rowId: string | null) => {
+      chatOutline.reportReadingPosition(rowId);
+      setReadingRowId(rowId);
     });
 
     useImperativeHandle(
@@ -1261,7 +1318,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               routeBottomAnchorRequest,
               isAuthoritativeHistoryReady,
               onNearBottomChange: setIsNearBottom,
-              onReadingPositionChange: chatOutline.reportReadingPosition,
+              onReadingPositionChange: handleReadingPositionChange,
               onNearHistoryStart: loadOlder,
               isLoadingOlderHistory: isLoadingOlder,
               hasOlderHistory: hasOlder,
@@ -1272,6 +1329,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               forwardListContentContainerStyle: stylesheet.forwardListContentContainer,
             })}
           </MessageOuterSpacingProvider>
+          <PinnedPromptOverlay
+            key={agentId}
+            prompt={pinnedPrompt}
+            revealLoadedHistory={revealLoadedHistory}
+            visibleItemIds={visibleHistoryItemIds}
+            viewportRef={viewportRef}
+          />
           <ChatOutlineRail
             prompts={chatOutline.prompts}
             activePrompt={chatOutline.activePrompt}
@@ -1778,6 +1842,32 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   list: {
     flex: 1,
+  },
+  pinnedPromptOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    paddingHorizontal: { xs: theme.spacing[3], md: 26, xl: 37 },
+  },
+  pinnedPrompt: {
+    width: "100%",
+    maxWidth: 760,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    backgroundColor: theme.colors.surface1,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.lg,
+    ...theme.shadow.sm,
+  },
+  pinnedPromptText: {
+    fontFamily: theme.fontFamily.ui,
+    fontSize: 15,
+    fontWeight: "400",
+    lineHeight: 21,
+    color: theme.colors.workspace.foreground,
   },
   emptyState: {
     flex: 1,

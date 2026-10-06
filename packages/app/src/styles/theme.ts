@@ -661,13 +661,12 @@ export const OPACITY = {
   100: 1,
 } as const;
 
-// Platform default font stacks — copied verbatim from constants/theme.ts `Fonts`
-// (sans -> ui, mono -> mono). These seed the dynamic `fontFamily` theme token and
-// are the fallback an empty user-supplied family resolves to at apply time.
+// Platform default font stacks. These seed the dynamic `fontFamily` theme token
+// and are the fallback an empty user-supplied family resolves to at apply time.
 export const DEFAULT_UI_FONT_STACK: string = Platform.select({
-  ios: "system-ui",
+  ios: "Helvetica Neue",
   default: "normal",
-  web: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+  web: '"Helvetica Neue", Helvetica, Arial, sans-serif',
 });
 
 export const DEFAULT_MONO_FONT_STACK: string = Platform.select({
