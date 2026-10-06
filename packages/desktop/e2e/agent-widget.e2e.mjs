@@ -1,5 +1,6 @@
 // Run after npm run build:main --workspace=@getpaseo/desktop.
 import { _electron as electron, expect } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,15 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const output = path.resolve(here, "../../../.context/agent-widget");
 await mkdir(output, { recursive: true });
+const previousBundleId =
+  process.platform === "darwin"
+    ? execFileSync("osascript", [
+        "-e",
+        'tell application "System Events" to get bundle identifier of first process whose frontmost is true',
+      ])
+        .toString()
+        .trim()
+    : null;
 const home = await mkdtemp(path.join(os.tmpdir(), "paseo-widget-"));
 const app = await electron.launch({
   args: [path.join(here, "fixtures/agent-widget.cjs")],
@@ -36,22 +46,21 @@ const plan = {
   requestId: "plan",
   workspaceId: "workspace",
   planCallId: "plan-call",
-  planText: "# Exact plan",
-  agentTitle: "Codex",
-  workspace: "Paseo · accra",
-  title: "Un agent à portée de main",
+  planText: "# Plan fictif — test automatique\n\nAfficher le premier contenu de test.",
+  agentTitle: "TEST — Codex",
+  workspace: "Environnement de test",
+  title: "Plan fictif — test automatique",
   kind: "plan",
   canApprove: true,
   questions: [],
-  planHtml:
-    "<h1>Un agent à portée de main</h1><p>Retrouver votre agent sans quitter votre travail.</p><h2>1. Une fenêtre au bon endroit</h2><p>Afficher le widget en bas à droite de l’écran principal, au-dessus des applications ouvertes.</p><h2>2. Le contexte avant la décision</h2><p>Présenter le projet, l’agent et le plan. Garder les actions accessibles pendant la lecture.</p><h2>3. Une réponse sans changer de fenêtre</h2><p>Exécuter le plan ou envoyer une consigne à l’agent.</p><h2>Vérifications prévues</h2><p>Tester les plans longs, les questions et les changements de demande.</p>",
+  planHtml: "<h1>Plan fictif — test automatique</h1><p>Afficher le premier contenu de test.</p>",
 };
 const question = {
   ...plan,
   key: JSON.stringify(["host", "agent2", "question"]),
   agentId: "agent2",
   requestId: "question",
-  agentTitle: "Claude",
+  agentTitle: "TEST — Claude",
   kind: "question",
   planHtml: "",
   questions: [
@@ -109,6 +118,9 @@ try {
   const errors = [];
   widget.on("pageerror", (error) => errors.push(error.message));
   await expect(widget.locator("#comment")).toBeVisible();
+  await expect(widget.locator(".identity b")).toHaveText("TEST — Codex");
+  await expect(widget.locator(".identity small")).toHaveText("Environnement de test");
+  await expect(widget.locator(".markdown h1")).toHaveText("Plan fictif — test automatique");
   const geometry = await app.evaluate(({ BrowserWindow, screen }) => {
     const win = BrowserWindow.getAllWindows().find((candidate) => candidate.getTitle() === "Paseo");
     return {
@@ -116,19 +128,73 @@ try {
       area: screen.getPrimaryDisplay().workArea,
       focused: win.isFocused(),
       top: win.isAlwaysOnTop(),
+      ownersVisible: BrowserWindow.getAllWindows().some(
+        (candidate) => candidate !== win && candidate.isVisible(),
+      ),
     };
   });
   expect(geometry.top).toBe(true);
   expect(geometry.focused).toBe(false);
+  expect(geometry.ownersVisible).toBe(true);
   expect(geometry.bounds.x + geometry.bounds.width).toBe(
     geometry.area.x + geometry.area.width - 16,
   );
   expect(geometry.bounds.y + geometry.bounds.height).toBe(
     geometry.area.y + geometry.area.height - 16,
   );
+  for (const target of [
+    () => widget.locator(".identity b").click(),
+    () => widget.locator(".avatar").click(),
+    () => widget.locator("header button").click({ position: { x: 460, y: 30 } }),
+  ]) {
+    await target();
+    await expect(widget.locator(".pill")).toBeVisible();
+    await widget.locator("[data-action=restore]").click();
+    await expect(widget.locator("#comment")).toBeVisible();
+  }
+  await widget.locator("header button").focus();
+  await widget.locator("header button").press("Space");
+  await expect(widget.locator(".pill")).toBeVisible();
+  await widget.locator("[data-action=restore]").press("Enter");
+  await expect(widget.locator("#comment")).toBeVisible();
   await widget.locator("#comment").fill("Garde le widget silencieux.");
+  const activationBeforeAction = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some(
+      (candidate) => candidate.getTitle() !== "Paseo" && candidate.isFocused(),
+    ),
+  );
   await widget.screenshot({ path: path.join(output, "plan.png") });
+  const replacement = {
+    ...plan,
+    planText: "# Second plan fictif — test automatique\n\nAfficher le second contenu de test.",
+    planHtml:
+      "<h1>Second plan fictif — test automatique</h1><p>Afficher le second contenu de test.</p>",
+  };
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [replacement, question],
+    labels,
+  });
+  await expect(widget.locator(".markdown h1")).toHaveText("Second plan fictif — test automatique");
+  await expect(widget.locator(".markdown")).not.toContainText(
+    "Afficher le premier contenu de test.",
+  );
+  await widget.screenshot({ path: path.join(output, "plan-replaced.png") });
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [plan, question],
+    labels,
+  });
+  await expect(widget.locator(".markdown h1")).toHaveText("Plan fictif — test automatique");
   await widget.locator("#comment").press("Enter");
+  const activationAfterAction = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some(
+      (candidate) => candidate.getTitle() !== "Paseo" && candidate.isFocused(),
+    ),
+  );
+  expect(activationAfterAction).toEqual(activationBeforeAction);
   await expect(widget.locator(".notice.error")).toContainText("Réessayez");
   await expect(widget.locator("#comment")).toHaveValue("Garde le widget silencieux.");
   await widget.screenshot({ path: path.join(output, "error.png") });
@@ -154,7 +220,7 @@ try {
   await expect(widget.locator(".pill")).toBeVisible();
   const actions = await owner.evaluate(() => window.widgetActions);
   expect(actions.map((action) => action.type)).toEqual(["comment", "answer", "handoff"]);
-  expect(actions[2]).toMatchObject({ planCallId: "plan-call", planText: "# Exact plan" });
+  expect(actions[2]).toMatchObject({ planCallId: "plan-call", planText: plan.planText });
   expect(actions[1].selections).toEqual([[0], [0, 1], []]);
   expect(actions[1].texts).toEqual(["", "", "Ne pas interrompre la saisie."]);
   // A lagging owner snapshot cannot resurrect a handled request.
@@ -180,8 +246,7 @@ try {
     requests: [newPlan],
     labels,
   });
-  await expect(widget.locator(".pill")).toBeVisible();
-  await widget.locator("[data-action=restore]").click();
+  await expect(widget.locator("#comment")).toBeVisible();
   await expect(widget.locator("[data-action=approve]")).toBeDisabled();
   await expect(widget.locator(".notice")).toHaveText("Hôte déconnecté");
   await widget.screenshot({ path: path.join(output, "offline.png") });
@@ -191,11 +256,32 @@ try {
     requests: [newPlan],
     labels,
   });
-  await widget.locator("[data-action=reduce]").first().click();
+  await widget.locator("header button").click();
   await expect(widget.locator(".pill")).toBeVisible();
   await widget.screenshot({ path: path.join(output, "reduced.png") });
-  await widget.locator("[data-action=restore]").click();
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [newPlan],
+    labels,
+  });
+  await expect(widget.locator(".pill")).toBeVisible();
+  const nextPlan = { ...plan, key: JSON.stringify(["host", "agent", "plan3"]), requestId: "plan3" };
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [nextPlan],
+    labels,
+  });
+  await expect(widget.locator("#comment")).toBeVisible();
   await widget.locator("[data-action=approve]").click();
+  expect(
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .find((window) => window.getTitle() === "Paseo")
+        ?.isFocused(),
+    ),
+  ).toBe(false);
   await expect
     .poll(() =>
       app.evaluate(({ BrowserWindow }) =>
@@ -249,6 +335,13 @@ try {
     (snapshot) => window.paseoDesktop.agentWidget.publish(snapshot),
     sharedSnapshot,
   );
+  await expect(widget.locator("#comment")).toBeVisible();
+  await widget.locator("header button").click();
+  await expect(widget.locator(".pill")).toBeVisible();
+  await secondOwner.evaluate(
+    (snapshot) => window.paseoDesktop.agentWidget.publish(snapshot),
+    sharedSnapshot,
+  );
   await expect(widget.locator(".pill")).toBeVisible();
   await widget.locator("[data-action=restore]").click();
   await expect(widget.locator(".queue span")).toHaveText("1 / 1");
@@ -284,11 +377,24 @@ try {
     requests: [longPlan],
     labels,
   });
-  await expect(widget.locator(".pill")).toBeVisible();
-  await widget.locator("[data-action=restore]").click();
+  await expect(widget.locator("#comment")).toBeVisible();
   await widget.locator("#handoff").click();
   await expect(widget.locator("#handoff")).toBeDisabled();
   await expect.poll(() => secondOwner.evaluate(() => window.widgetActions.length)).toBe(2);
+  await widget.locator("header button").click();
+  await expect(widget.locator(".pill")).toBeVisible();
+  const duringSendPlan = {
+    ...plan,
+    key: JSON.stringify(["host", "agent", "during-send"]),
+    requestId: "during-send",
+  };
+  await secondOwner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [duringSendPlan],
+    labels,
+  });
+  await expect(widget.locator("#comment")).toBeVisible();
   await expect
     .poll(
       () =>
@@ -299,7 +405,8 @@ try {
         ),
       { timeout: 40_000 },
     )
-    .toBe(false);
+    .toBe(true);
+  await expect(widget.locator(".notice")).toHaveText("Réponse envoyée", { timeout: 40_000 });
   expect(await secondOwner.evaluate(() => window.widgetActions.length)).toBe(2);
 
   const silentPlan = {
@@ -314,8 +421,7 @@ try {
     requests: [silentPlan],
     labels,
   });
-  await expect(widget.locator(".pill")).toBeVisible();
-  await widget.locator("[data-action=restore]").click();
+  await expect(widget.locator("#comment")).toBeVisible();
   await widget.locator("#comment").fill("Brouillon à préserver");
   await widget.locator("#handoff").click();
   await expect(widget.locator(".notice.error")).toContainText("No confirmation", {
@@ -351,9 +457,12 @@ try {
     JSON.stringify({ passed: true, geometry, actions, pageErrors: errors }, null, 2),
   );
   console.log(
-    "PASS: native window, no focus theft, primary screen bounds, feedback failure/retry, questions, drafts, stale snapshots, offline, collapse, approval, multi-window deduplication and takeover, draft focus and screen sizes.",
+    "PASS: non-activating widget with a visible main window, primary screen bounds, feedback failure/retry, questions, drafts, stale snapshots, offline, collapse, approval, multi-window deduplication and takeover, draft focus and screen sizes.",
   );
 } finally {
   await app.close();
+  if (previousBundleId) {
+    execFileSync("osascript", ["-e", `tell application id "${previousBundleId}" to activate`]);
+  }
   await rm(home, { recursive: true, force: true });
 }

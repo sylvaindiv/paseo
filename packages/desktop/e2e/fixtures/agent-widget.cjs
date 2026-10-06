@@ -1,9 +1,8 @@
 const { app, BrowserWindow } = require("electron");
 const path = require("node:path");
 app.setPath("userData", process.env.PASEO_WIDGET_TEST_HOME);
-if (process.platform === "darwin") app.setActivationPolicy("accessory");
+if (process.platform === "darwin") app.setActivationPolicy("regular");
 app.whenReady().then(async () => {
-  app.dock?.hide();
   const {
     registerAgentWidget,
     widgetBounds,
@@ -12,7 +11,7 @@ app.whenReady().then(async () => {
   global.widgetBounds = widgetBounds;
   global.createWidgetOwner = async () => {
     const owner = new BrowserWindow({
-      show: false,
+      show: true,
       webPreferences: {
         preload: path.resolve(__dirname, "../../dist/preload.js"),
         sandbox: true,

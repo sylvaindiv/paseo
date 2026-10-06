@@ -14,6 +14,7 @@ export type MessageInputKeyboardActionKind =
   | "dictation-confirm"
   | "voice-toggle"
   | "voice-mute-toggle"
+  | "profile-next"
   | "mode-cycle";
 
 export type KeyboardActionId =

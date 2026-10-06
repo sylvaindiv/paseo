@@ -121,7 +121,7 @@ function requestContent(
   return `<div class="body"><p class="status">${escape(heading)}</p>${body}</div>${actions(item)}`;
 }
 function header(item: WidgetDisplayItem | undefined, labels: WidgetDisplay["labels"]) {
-  return `<header><span class="avatar">◈</span><div class="identity"><b>${escape(item?.agentTitle ?? "Paseo")}</b><small>${escape(item?.workspace ?? "")}</small></div><span class="brand">paseo</span><button class="icon" data-action="reduce" aria-label="${escape(labels.minimize)}">−</button></header>`;
+  return `<header><button class="header-collapse" data-action="reduce" aria-label="${escape(labels.minimize)}"><span class="avatar">◈</span><span class="identity"><b>${escape(item?.agentTitle ?? "Paseo")}</b><small>${escape(item?.workspace ?? "")}</small></span><span class="brand">paseo</span></button></header>`;
 }
 function footer(position: number, count: number, labels: WidgetDisplay["labels"]) {
   const disabled = count < 2 || busy !== null;
@@ -168,7 +168,6 @@ async function submit(action: WidgetAction) {
     display.requests = display.requests.filter((entry) => entry.key !== action.key);
     drafts.delete(action.key);
     notice = display.labels.sent;
-    await resize(true);
   } catch (error) {
     failed = true;
     notice = error instanceof Error ? error.message : display.labels.failed;
@@ -182,8 +181,6 @@ async function submit(action: WidgetAction) {
 }
 async function resize(value: boolean) {
   await ipcRenderer.invoke("paseo:agent-widget:reduce", value);
-  reduced = value;
-  render();
 }
 function move(direction: number) {
   if (!display?.requests.length || busy) return;

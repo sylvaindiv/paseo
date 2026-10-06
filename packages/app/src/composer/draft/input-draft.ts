@@ -26,6 +26,34 @@ import { toDraftInputIfReady } from "@/stores/draft-store/state";
 import { AfterPaintPublication } from "@/composer/after-paint-publication";
 import { isWeb } from "@/constants/platform";
 
+const DEFAULT_NEW_CONVERSATION_VALUES: CreateAgentInitialValues = {
+  provider: "codex",
+  model: "gpt-6-astra",
+  thinkingOptionId: "high",
+  modeId: "full-access",
+  modelRouting: "manual",
+};
+const DEFAULT_NEW_CONVERSATION_FEATURE_VALUES = { plan_mode: true };
+
+function resolveDefaultNewConversationSetup(
+  composerOptions: AgentInputDraftComposerOptions | null,
+): {
+  initialValues: CreateAgentInitialValues;
+  initialFeatureValues: Record<string, unknown>;
+} | null {
+  if (
+    !composerOptions ||
+    composerOptions.initialValues !== undefined ||
+    composerOptions.initialFeatureValues !== undefined
+  ) {
+    return null;
+  }
+  return {
+    initialValues: DEFAULT_NEW_CONVERSATION_VALUES,
+    initialFeatureValues: DEFAULT_NEW_CONVERSATION_FEATURE_VALUES,
+  };
+}
+
 type AttachmentUpdater =
   | UserComposerAttachment[]
   | ((prev: UserComposerAttachment[]) => UserComposerAttachment[]);
@@ -67,11 +95,12 @@ export interface AgentInputDraft {
 
 export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDraft {
   const composerOptions = input.composer ?? null;
+  const defaultSetup = resolveDefaultNewConversationSetup(composerOptions);
   const workingDir = composerOptions?.lockedWorkingDir?.trim() || "";
   const formState = useAgentFormState({
     workingDir,
     serverId: composerOptions?.initialServerId ?? null,
-    initialValues: composerOptions?.initialValues,
+    initialValues: composerOptions?.initialValues ?? defaultSetup?.initialValues,
     isVisible: composerOptions?.isVisible ?? false,
     isCreateFlow: true,
   });
@@ -255,7 +284,8 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     modeId: formState.selectedMode,
     modelId: effectiveModelId,
     thinkingOptionId: effectiveThinkingOptionId,
-    initialFeatureValues: composerOptions?.initialFeatureValues,
+    initialFeatureValues:
+      composerOptions?.initialFeatureValues ?? defaultSetup?.initialFeatureValues,
     hasPermissionModes: formState.modeOptions.some((mode) => mode.isUnattended),
   });
 
@@ -336,6 +366,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
 
 export const __private__ = {
   resolveDraftKey,
+  resolveDefaultNewConversationSetup,
   resolveEffectiveComposerModelId,
   resolveEffectiveComposerThinkingOptionId,
   buildDraftCommandConfig,
