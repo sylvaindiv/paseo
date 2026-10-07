@@ -927,6 +927,18 @@ describe("WorkspaceScriptsButton", () => {
         type: "service",
         port: 3000,
         lifecycle: "running",
+        health: null,
+        terminalId: "terminal-app",
+      }),
+    ]);
+    expect(onOpenPreviewMock).not.toHaveBeenCalled();
+
+    await current.rerender([
+      script({
+        scriptName: "app",
+        type: "service",
+        port: 3000,
+        lifecycle: "running",
         health: "healthy",
         terminalId: "terminal-app",
       }),

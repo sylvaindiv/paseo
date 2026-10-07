@@ -90,6 +90,8 @@ export const ptBR: TranslationResources = {
     },
   },
   composer: {
+    nextAttention: "Próxima ›",
+    nextAttentionAccessibility: "Abrir a próxima conversa que precisa de atenção",
     placeholders: {
       desktop: "Envie uma mensagem ao agente, marque @files ou use /commands e /skills",
       mobile: "Mensagem, @files, /commands",

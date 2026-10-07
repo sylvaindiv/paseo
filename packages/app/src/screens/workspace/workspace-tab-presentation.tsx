@@ -29,6 +29,7 @@ export interface WorkspaceTabPresentation {
   titleState: "ready" | "loading";
   icon: React.ComponentType<PanelIconProps>;
   statusBucket: SidebarStateBucket | null;
+  requiresAttention?: boolean;
 }
 
 const DEFAULT_STATUS_DOT_OFFSET = -2;
@@ -93,12 +94,14 @@ function WorkspaceTabPresentationResolverInner({
       titleState: descriptor.titleState,
       icon: descriptor.icon,
       statusBucket: descriptor.statusBucket,
+      requiresAttention: descriptor.requiresAttention ?? false,
     }),
     [
       descriptor.icon,
       descriptor.label,
       descriptor.tooltip,
       descriptor.statusBucket,
+      descriptor.requiresAttention,
       descriptor.subtitle,
       descriptor.titleState,
       tab.key,
@@ -233,7 +236,13 @@ export function WorkspaceTabOptionRow({
                 />
               </View>
               <View style={styles.optionContent}>
-                <Text numberOfLines={1} style={styles.optionLabel}>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.optionLabel,
+                    presentation.requiresAttention && styles.optionLabelUnread,
+                  ]}
+                >
                   {presentation.titleState === "loading"
                     ? t("workspace.tabs.loading")
                     : presentation.label}
@@ -337,6 +346,9 @@ const styles = StyleSheet.create((theme) => ({
   optionLabel: {
     fontSize: theme.fontSize.base,
     color: theme.colors.foreground,
+  },
+  optionLabelUnread: {
+    fontWeight: theme.fontWeight.bold,
   },
   optionTrailingSlot: {
     width: 16,

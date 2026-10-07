@@ -154,7 +154,7 @@ export function useKeyboardShortcuts({
     const shouldSkipTabInCapture = (event: KeyboardEvent, focusScope: KeyboardFocusScope) => {
       if (event.key !== "Tab") return false;
       if (focusScope === "message-input" && !isComposerTextInput(event)) return true;
-      // Let the composer accept an autocomplete suggestion before Tab changes the mode.
+      // The composer handles plain Tab after giving autocomplete priority.
       return !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
     };
 
@@ -379,32 +379,6 @@ export function useKeyboardShortcuts({
       });
     };
 
-    const handleTabKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.key !== "Tab" ||
-        event.shiftKey ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.defaultPrevented ||
-        isImeComposingKeyboardEvent(event) ||
-        !isComposerTextInput(event) ||
-        !shouldHandle()
-      ) {
-        return;
-      }
-      const store = useKeyboardShortcutsStore.getState();
-      if (store.capturingShortcut) return;
-      resolveAndPerformShortcut({
-        event,
-        focusScope: resolveKeyboardFocusScope({
-          target: event.target,
-          commandCenterOpen: store.commandCenterOpen,
-        }),
-        domEvent: event,
-      });
-    };
-
     const handleKeyUp = (event: KeyboardEvent) => {
       const key = event.key ?? "";
       if (key === badgeModifierKey) {
@@ -417,7 +391,6 @@ export function useKeyboardShortcuts({
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
-    window.addEventListener("keydown", handleTabKeyDown);
     window.addEventListener("keyup", handleKeyUp, true);
     window.addEventListener("blur", handleBlurOrHide);
     document.addEventListener("visibilitychange", handleBlurOrHide);
@@ -446,7 +419,6 @@ export function useKeyboardShortcuts({
         };
       }
       window.removeEventListener("keydown", handleKeyDown, true);
-      window.removeEventListener("keydown", handleTabKeyDown);
       window.removeEventListener("keyup", handleKeyUp, true);
       window.removeEventListener("blur", handleBlurOrHide);
       document.removeEventListener("visibilitychange", handleBlurOrHide);

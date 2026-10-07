@@ -92,6 +92,8 @@ export const fr: TranslationResources = {
     },
   },
   composer: {
+    nextAttention: "Suivant ›",
+    nextAttentionAccessibility: "Ouvrir la prochaine conversation nécessitant votre attention",
     placeholders: {
       desktop: "Envoyez un message à l’agent, mentionnez @files ou utilisez /commands et /skills",
       mobile: "Message, @files, /commands",

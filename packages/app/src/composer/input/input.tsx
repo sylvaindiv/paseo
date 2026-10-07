@@ -55,6 +55,8 @@ import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
 import { isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
+import { useKeyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher-context";
+import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { RenderProfile } from "@/utils/render-profiler";
 import { useComposerHeight } from "./height";
 import { resolveComposerInputMode, type ComposerInputMode } from "@/composer/input-mode";
@@ -202,6 +204,8 @@ type WebTextInputKeyPressEvent = NativeSyntheticEvent<
     metaKey?: boolean;
     ctrlKey?: boolean;
     shiftKey?: boolean;
+    altKey?: boolean;
+    repeat?: boolean;
     // Web-only: present on DOM KeyboardEvent during IME composition (CJK input).
     isComposing?: boolean;
     keyCode?: number;
@@ -385,6 +389,7 @@ function SendButtonContent({
 
 interface DesktopKeyPressContext {
   onKeyPressCallback: ((event: ComposerKeyPressEvent) => boolean) | undefined;
+  onProfileTab: (repeat: boolean) => boolean;
   input: ComposerKeyPressEvent["input"];
   submitOnEnter: boolean;
   isAgentRunning: boolean;
@@ -411,7 +416,14 @@ function handleDesktopKeyPressImpl(
     if (handled) return;
   }
 
-  const { shiftKey, metaKey, ctrlKey } = event.nativeEvent;
+  const { shiftKey, metaKey, ctrlKey, altKey, repeat } = event.nativeEvent;
+
+  // React Native Web stops keydown propagation at its root. Handle Tab here,
+  // after autocomplete, rather than waiting for it to bubble to window.
+  if (event.nativeEvent.key === "Tab" && ![shiftKey, metaKey, ctrlKey, altKey].some(Boolean)) {
+    if (ctx.onProfileTab(Boolean(repeat))) event.preventDefault();
+    return;
+  }
 
   if (event.nativeEvent.key !== "Enter") return;
   if (!ctx.submitOnEnter) return;
@@ -1220,6 +1232,8 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     const mode = resolveComposerInputMode(inputMode);
     const { t } = useTranslation();
     const isCompact = useIsCompactFormFactor();
+    const { isActiveComposer } = useComposerKeyboardScope();
+    const keyboardActionDispatcher = useKeyboardActionDispatcher();
     const { height: windowHeight } = useWindowDimensions();
     const maxInputHeight = resolveMaxInputHeight(windowHeight);
     const buttonIconSize = isWeb ? ICON_SIZE.md : ICON_SIZE.lg;
@@ -1630,6 +1644,26 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       if (!shouldHandleWebKeyPress) return;
       handleDesktopKeyPressImpl(event, {
         onKeyPressCallback,
+        onProfileTab: (repeat) => {
+          const { capturingShortcut, commandCenterOpen } = useKeyboardShortcutsStore.getState();
+          if (
+            event.defaultPrevented ||
+            disabled ||
+            isCompact ||
+            !isActiveComposer ||
+            capturingShortcut ||
+            commandCenterOpen
+          ) {
+            return false;
+          }
+          return (
+            repeat ||
+            keyboardActionDispatcher.dispatch({
+              id: "message-input.profile-next",
+              scope: "message-input",
+            })
+          );
+        },
         input: getComposerInputSnapshot(
           textInputRef.current,
           valueRef.current,

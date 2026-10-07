@@ -627,6 +627,9 @@ function resolvePreviewWaitDecision(input: {
   if (script.health === "unhealthy") {
     return { kind: "cancel", unhealthy: true };
   }
+  if (script.health !== "healthy") {
+    return { kind: "wait" };
+  }
   const url = resolvePreviewServiceUrl({
     script,
     preferredRouteKind: input.preferredRouteKind,

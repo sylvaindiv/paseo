@@ -90,6 +90,8 @@ export const ja: TranslationResources = {
     },
   },
   composer: {
+    nextAttention: "次へ ›",
+    nextAttentionAccessibility: "対応が必要な次の会話を開く",
     placeholders: {
       desktop: "エージェントにメッセージ、@ファイル、/コマンドや/スキルを入力",
       mobile: "メッセージ、@ファイル、/コマンド",

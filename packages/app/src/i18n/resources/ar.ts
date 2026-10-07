@@ -90,6 +90,8 @@ export const ar: TranslationResources = {
     },
   },
   composer: {
+    nextAttention: "التالي ›",
+    nextAttentionAccessibility: "افتح المحادثة التالية التي تتطلب الانتباه",
     placeholders: {
       desktop: "أرسل رسالة إلى الوكيل أو ضع علامة على @files أو استخدم /commands و /skills",
       mobile: "الرسالة، @files ، /commands",
