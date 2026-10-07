@@ -140,7 +140,11 @@ function ExplorerSidebarTab({
                 selectable={false}
                 numberOfLines={1}
                 ellipsizeMode="tail"
-                style={[styles.tabLabel, item.isActive ? styles.tabLabelActive : null]}
+                style={[
+                  styles.tabLabel,
+                  item.isActive ? styles.tabLabelActive : null,
+                  presentation.requiresAttention && styles.tabLabelUnread,
+                ]}
               >
                 {presentation.label}
               </Text>
@@ -435,6 +439,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   tabLabelActive: {
     color: theme.colors.foreground,
+  },
+  tabLabelUnread: {
+    fontWeight: theme.fontWeight.bold,
   },
   tabDragging: {
     opacity: 0.3,

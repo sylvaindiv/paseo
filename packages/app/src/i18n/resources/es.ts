@@ -90,6 +90,8 @@ export const es: TranslationResources = {
     },
   },
   composer: {
+    nextAttention: "Siguiente ›",
+    nextAttentionAccessibility: "Abrir la siguiente conversación que requiere atención",
     placeholders: {
       desktop: "Envíe un mensaje al agente, etiquete@fileso use/commandsy/skills",
       mobile: "Mensaje,@files,/commands",

@@ -87,6 +87,8 @@ export const en = {
     },
   },
   composer: {
+    nextAttention: "Next ›",
+    nextAttentionAccessibility: "Open next conversation needing attention",
     placeholders: {
       desktop: "Message the agent, tag @files, or use /commands and /skills",
       mobile: "Message, @files, /commands",

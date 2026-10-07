@@ -50,6 +50,7 @@ import {
 } from "@/constants/layout";
 import { isNative, isWeb } from "@/constants/platform";
 import { useAgentAttentionClear } from "@/hooks/use-agent-attention-clear";
+import { useNextAttentionAgent } from "@/hooks/use-next-attention-agent";
 import { useAgentInputDraft, type AgentInputDraft } from "@/composer/draft/input-draft";
 import {
   type AgentScreenAgent,
@@ -369,6 +370,8 @@ function useAgentPanelDescriptor(
     tooltip: label ?? `${formatProviderLabel(provider)} agent`,
     titleState: label ? "ready" : "loading",
     icon,
+    requiresAttention:
+      descriptorState.requiresAttention || descriptorState.pendingPermissionCount > 0,
     statusBucket: descriptorState.status
       ? deriveSidebarStateBucket({
           status: descriptorState.isTurnActive ? "running" : descriptorState.status,
@@ -1276,13 +1279,15 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     rows: subagentRows,
   });
   const hasPluginComposerPills = useHasPluginComposerPills(serverId, workspaceId, agentId);
+  const nextAttentionTarget = useNextAttentionAgent(serverId, agentId);
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
-  const hasVisibleAgentTracks = hasAgentTracks({
+  const hasOtherAgentTracks = hasAgentTracks({
     subagentRows,
     tasks,
     archiveFinishedStatus: archiveFinishedSubagents.status,
     hasPluginComposerPills,
   });
+  const hasVisibleAgentTracks = Boolean(nextAttentionTarget) || hasOtherAgentTracks;
   const rawAgentInputDraft = useAgentInputDraft({
     draftKey: buildDraftStoreKey({
       serverId,
@@ -1375,6 +1380,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           archiveFinishedStatus={archiveFinishedSubagents.status}
           onArchiveFinished={archiveFinishedSubagents.archiveFinished}
           hasPluginComposerPills={hasPluginComposerPills}
+          hasNextAttentionTarget={Boolean(nextAttentionTarget)}
         />
       ) : null}
     </View>

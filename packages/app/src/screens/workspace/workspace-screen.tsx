@@ -481,7 +481,13 @@ function ResolvedMobileActiveTabTrigger({
             <WorkspaceTabIcon presentation={presentation} active backdrop={backdrop} />
           </View>
 
-          <Text style={styles.switcherTriggerText} numberOfLines={1}>
+          <Text
+            style={[
+              styles.switcherTriggerText,
+              presentation.requiresAttention && styles.tabLabelUnread,
+            ]}
+            numberOfLines={1}
+          >
             {presentation.titleState === "loading"
               ? t("workspace.tabs.loading")
               : presentation.label}
@@ -4584,6 +4590,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   tabLabelActive: {
     color: theme.colors.foreground,
+  },
+  tabLabelUnread: {
+    fontWeight: theme.fontWeight.bold,
   },
   tabCloseButton: {
     width: 18,

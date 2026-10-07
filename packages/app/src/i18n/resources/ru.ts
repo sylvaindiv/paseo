@@ -90,6 +90,8 @@ export const ru: TranslationResources = {
     },
   },
   composer: {
+    nextAttention: "Далее ›",
+    nextAttentionAccessibility: "Открыть следующий разговор, требующий внимания",
     placeholders: {
       desktop: "Напишите агенту сообщение, отметьте @files или используйте /commands и /skills.",
       mobile: "Сообщение,@files,/commands",

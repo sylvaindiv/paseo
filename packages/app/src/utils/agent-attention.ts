@@ -21,7 +21,7 @@ const ATTENTION_REASON_PRIORITY = {
   finished: 2,
 } as const;
 
-function getAttentionPriority(reason: Agent["attentionReason"]): number | null {
+export function getAttentionPriority(reason: Agent["attentionReason"]): number | null {
   if (!reason) {
     return null;
   }

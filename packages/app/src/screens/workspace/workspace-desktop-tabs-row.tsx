@@ -192,20 +192,31 @@ function AgentTabTooltipBody({
 function TabLabelMeasurement({
   tabKey,
   label,
+  requiresAttention,
   onMeasure,
 }: {
   tabKey: string;
   label: string;
-  onMeasure: (tabKey: string, label: string, event: LayoutChangeEvent) => void;
+  requiresAttention: boolean;
+  onMeasure: (
+    tabKey: string,
+    label: string,
+    requiresAttention: boolean,
+    event: LayoutChangeEvent,
+  ) => void;
 }) {
   const handleLayout = useCallback(
-    (event: LayoutChangeEvent) => onMeasure(tabKey, label, event),
-    [label, onMeasure, tabKey],
+    (event: LayoutChangeEvent) => onMeasure(tabKey, label, requiresAttention, event),
+    [label, onMeasure, requiresAttention, tabKey],
   );
 
   return (
     <Text
-      style={[styles.tabLabel, styles.tabLabelMeasurement]}
+      style={[
+        styles.tabLabel,
+        styles.tabLabelMeasurement,
+        requiresAttention && styles.tabLabelUnread,
+      ]}
       numberOfLines={1}
       onLayout={handleLayout}
     >
@@ -439,6 +450,7 @@ interface ResolvedWorkspaceDesktopTabRowItem extends WorkspaceDesktopTabRowItem 
 interface WorkspaceTabLabel {
   key: string;
   label: string;
+  requiresAttention: boolean;
   modified: boolean;
   /** Tabs whose icon is part of the rendered row; its width rides along in the label width. */
   icon: boolean;
@@ -446,6 +458,7 @@ interface WorkspaceTabLabel {
 
 interface WorkspaceTabLabelMeasurement {
   label: string;
+  requiresAttention: boolean;
   width: number;
 }
 
@@ -465,9 +478,14 @@ function completeWorkspaceTabLabelWidths(
   measurements: Map<string, WorkspaceTabLabelMeasurement>,
 ): number[] | null {
   const widths: number[] = [];
-  for (const { key, label, modified, icon } of labels) {
+  for (const { key, label, modified, icon, requiresAttention } of labels) {
     const measurement = measurements.get(key);
-    if (!measurement || measurement.label !== label || measurement.width <= 0) {
+    if (
+      !measurement ||
+      measurement.label !== label ||
+      measurement.requiresAttention !== requiresAttention ||
+      measurement.width <= 0
+    ) {
       return null;
     }
     // The modified dot sits in the content row, so a modified tab needs that much more width
@@ -805,8 +823,12 @@ function TabChip({
     tab.target.kind === "new_tab" ? tab.tabId : buildDeterministicWorkspaceTabId(tab.target);
   const tabLabelSkeletonStyle = styles.tabLabelSkeleton;
   const tabLabelStyle = useMemo(
-    () => [styles.tabLabel, isHighlighted && styles.tabLabelActive],
-    [isHighlighted],
+    () => [
+      styles.tabLabel,
+      isHighlighted && styles.tabLabelActive,
+      presentation.requiresAttention && styles.tabLabelUnread,
+    ],
+    [isHighlighted, presentation.requiresAttention],
   );
 
   return (
@@ -1100,6 +1122,7 @@ function ResolvedWorkspaceDesktopTabsRow({
           key: tab.tab.key,
           label,
           modified: tab.presentation.modified,
+          requiresAttention: Boolean(tab.presentation.requiresAttention),
           icon: tab.tab.target.kind !== "agent" && tab.tab.target.kind !== "provider_subagent",
         };
       }),
@@ -1150,18 +1173,22 @@ function ResolvedWorkspaceDesktopTabsRow({
   }, [publishMeasuredTrack]);
 
   const handleTabLabelLayout = useCallback(
-    (key: string, label: string, event: LayoutChangeEvent) => {
+    (key: string, label: string, requiresAttention: boolean, event: LayoutChangeEvent) => {
       const width = Math.ceil(event.nativeEvent.layout.width);
       if (width <= 0) {
         return;
       }
       setLabelMeasurements((current) => {
         const measurement = current.get(key);
-        if (measurement?.label === label && measurement.width === width) {
+        if (
+          measurement?.label === label &&
+          measurement.requiresAttention === requiresAttention &&
+          measurement.width === width
+        ) {
           return current;
         }
         const next = new Map(current);
-        next.set(key, { label, width });
+        next.set(key, { label, requiresAttention, width });
         return next;
       });
     },
@@ -1324,11 +1351,12 @@ function ResolvedWorkspaceDesktopTabsRow({
         accessibilityElementsHidden
         importantForAccessibility="no-hide-descendants"
       >
-        {tabLabels.map(({ key, label }) => (
+        {tabLabels.map(({ key, label, requiresAttention }) => (
           <TabLabelMeasurement
-            key={`${key}:${label}`}
+            key={`${key}:${label}:${requiresAttention}`}
             tabKey={key}
             label={label}
+            requiresAttention={requiresAttention}
             onMeasure={handleTabLabelLayout}
           />
         ))}
@@ -1667,6 +1695,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   tabLabelMeasurement: {
     flexShrink: 0,
+  },
+  tabLabelUnread: {
+    fontWeight: theme.fontWeight.bold,
   },
   tabLabelSkeleton: {
     width: 96,
