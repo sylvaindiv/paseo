@@ -1114,13 +1114,15 @@ test.each(["review", "handoff"] as const)(
   },
 );
 
-test("handoff routes once, persists the decision, and launches one direct-config root with the original git and intent context", async () => {
+test("handoff routes once and delivers only the exact plan and original git context", async () => {
   const f = fixture();
+  const context = { ...plan, text: "  Execute this plan.\nNo commit or push authorized.\n" };
+  f.agents.get("planner")!.pendingPermissions[0].input = { plan: context.text };
   f.setClassifierResult(decisionFor("critical"));
   const controller = new WorkflowController(f.port);
   const results = await Promise.all([
-    preparedHandoff(controller, f, plan),
-    preparedHandoff(controller, f, plan),
+    preparedHandoff(controller, f, context),
+    preparedHandoff(controller, f, context),
   ]);
   expect(results).toEqual([{ agentId: "child-1" }, { agentId: "child-1" }]);
   expect(f.launches).toHaveLength(1);
@@ -1150,9 +1152,22 @@ test("handoff routes once, persists the decision, and launches one direct-config
     planId: plan.callId,
     role: f.launches[0]!.labels["paseo.workflow.role"],
   });
-  expect(f.prompts[0].text).toContain("abc123");
-  expect(f.prompts[0].text).toContain(" M existing.ts");
-  expect(f.prompts[0].text).toContain("Keep the user in control");
+  expect(f.prompts).toHaveLength(1);
+  const prompt = f.prompts[0].text;
+  expect(JSON.parse(prompt.slice(prompt.indexOf("\n{") + 1))).toEqual({
+    plan: context.text,
+    git: {
+      startHead: "abc123",
+      targetBase: "target-base",
+      branch: "feature",
+      dirty: " M existing.ts",
+    },
+  });
+  expect(prompt.split("\n")[2]).toBe(
+    "Execute the approved plan here without creating another agent. Follow its scope and explicit authorizations; handoff grants no additional permissions. Preserve pre-existing and concurrent changes. Run targeted validation and report results and blockers.",
+  );
+  expect(prompt).not.toContain("Keep the user in control");
+  expect(prompt).not.toContain("Build the requested feature");
   expect(f.decisions).toEqual(["permission-1"]);
   expect((await f.port.read()).workflows.planner.plans["plan-1"].routing?.decision).toMatchObject({
     model: "gpt-6-astra",
@@ -1160,7 +1175,7 @@ test("handoff routes once, persists the decision, and launches one direct-config
   });
 });
 
-test("handoff preserves the exact plan, its authority limits and projected clarification exchanges", async () => {
+test("plan review preserves the exact plan and projected clarification exchanges", async () => {
   const f = fixture();
   const context = {
     ...plan,
@@ -1208,7 +1223,7 @@ test("handoff preserves the exact plan, its authority limits and projected clari
       original[1],
     ];
   };
-  await preparedHandoff(new WorkflowController(f.port), f, context);
+  await new WorkflowController(f.port).review(context, "manual");
   const prompt = f.prompts[0].text;
   const body = JSON.parse(prompt.slice(prompt.indexOf("\n{") + 1));
   expect(body.plan).toBe(context.text);
@@ -1222,12 +1237,8 @@ test("handoff preserves the exact plan, its authority limits and projected clari
     },
     { role: "user", text: "Garde aussi le lien exact." },
   ]);
-  expect(prompt).toContain("Handoff grants no additional authorization");
-  expect(prompt).toContain(
-    "Local synchronization explicitly required by the approved plan is allowed",
-  );
-  expect(prompt).not.toContain("before the functional commit");
-  expect(prompt).not.toContain("Never push, merge");
+  expect(body.intention).toBe("Keep the user in control");
+  expect(body.request).toBe("Build the requested feature");
 });
 
 test("handoff accepts an actionable plan from an ordinary conversation while review stays Planner-only", async () => {

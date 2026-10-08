@@ -36,9 +36,12 @@ decision is ready, with direct provider, model and effort settings and no saved 
 Repeated preparation, clicks, reconnects and plugin reloads reuse the same classifier and executor.
 Handoff preserves the exact plan and its authorization limits. It does not authorize staging,
 committing, pushing or deployment. Local synchronization follows the approved plan; an execution
-without a commit is valid when no commit was authorized. The briefing uses projected conversation
-messages and includes question-tool records verbatim, including any recorded answers. A completed
-asynchronous question tool does not by itself prove that the user answered.
+without a commit is valid when no commit was authorized. The executor receives only the self-contained
+approved plan and Git state, with workflow identifiers and short execution instructions. The plan must
+contain all necessary context and decisions; handoff does not summarize or supplement it.
+Classification, planning and reviews retain the full briefing, including projected conversation
+messages and question-tool records verbatim with any recorded answers. A completed asynchronous
+question tool does not by itself prove that the user answered.
 
 New Codex conversations default to **Auto · JEV** on hosts that support initial routing, unless
 you saved a manual selection or explicitly chose a model or profile. Changing Plan mode preserves

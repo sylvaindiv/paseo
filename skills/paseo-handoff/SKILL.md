@@ -22,7 +22,8 @@ If both are available they must match; stop and report a mismatch.
 
 As receiver, execute the supplied plan **here**, in this agent and workspace:
 
-1. Read the intention, request, plan, git base and dirty-state rules.
+1. Read the approved, self-contained plan and the git base and dirty state. The plan contains
+   the task context and decisions; the original request and conversation are not included.
 2. Follow the approved plan and its explicit authorization limits; they take precedence
    over generic workflow instructions. Preserve pre-existing and concurrent changes.
 3. Run targeted checks, review the resulting diff, and report the local result and any blockers.

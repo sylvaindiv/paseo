@@ -681,7 +681,7 @@ test.each(["no-delta", "no-target"] as const)(
   60_000,
 );
 
-test("handoff delivers projected messages and recorded question answers through the real plugin", async () => {
+test("handoff delivers only the plan and git state through the real plugin", async () => {
   const f = await lifecycleFixture();
   try {
     const plan = await pendingPlan(f);
@@ -708,6 +708,44 @@ test("handoff delivers projected messages and recorded question answers through 
     await preparedHandoffRpc(f, plan);
     const prompt = f.prompts.find(({ text }) => text.startsWith("/paseo-handoff"))!.text;
     const body = JSON.parse(prompt.slice(prompt.indexOf("\n{") + 1));
+    const workflow = (await f.read()).values.workflows[plan.agentId]!;
+    expect(body).toEqual({ plan: plan.text, git: workflow.git });
+    expect(prompt).not.toContain("Je vérifie le hero existant.");
+    expect(prompt).not.toContain(question);
+    expect(prompt).not.toContain("contrast: Oui");
+    expect(prompt).toContain("handoff grants no additional permissions");
+  } finally {
+    await f.close();
+  }
+}, 60_000);
+
+test("plan review delivers projected messages and recorded question answers through the real plugin", async () => {
+  const f = await lifecycleFixture();
+  try {
+    const plan = await pendingPlan(f);
+    const manager = f.daemon.daemon.agentManager;
+    for (const text of ["Je vérifie", " le hero", " existant."])
+      await manager.appendTimelineItem(plan.agentId, {
+        type: "assistant_message",
+        messageId: "streamed-answer",
+        text,
+      });
+    const question = "Contraste: Garder le blanc ?\nOptions: Oui, Non";
+    for (const status of ["running", "completed"] as const)
+      await manager.appendTimelineItem(plan.agentId, {
+        type: "tool_call",
+        callId: "contrast-question",
+        name: "request_user_input",
+        status,
+        error: null,
+        detail: {
+          type: "plain_text",
+          text: status === "completed" ? `${question}\n\nAnswers:\ncontrast: Oui` : question,
+        },
+      });
+    await f.client.invokePluginRpc("paseo-workflow", "workflow.plan.review.request", plan);
+    const prompt = f.prompts.find(({ text }) => text.startsWith("Review this plan."))!.text;
+    const body = JSON.parse(prompt.slice(prompt.indexOf("\n{") + 1));
     expect(body.plan).toBe(plan.text);
     expect(
       body.plannerTranscript.filter(({ text }: { text: string }) => text.includes("hero")),
@@ -720,7 +758,6 @@ test("handoff delivers projected messages and recorded question answers through 
         text: `[request_user_input (completed)]\n${question}\n\nAnswers:\ncontrast: Oui`,
       },
     ]);
-    expect(prompt).toContain("Handoff grants no additional authorization");
   } finally {
     await f.close();
   }
@@ -1305,12 +1342,12 @@ test("unknown reviewer delivery leaves the plan pending without replay after plu
   }
 }, 60_000);
 
-test("Planner clarification after routing is transported in review, handoff and final manager prompts", async () => {
+test("Planner clarification stays in review and final manager prompts but is omitted from handoff", async () => {
   const f = await lifecycleFixture();
+  f.jev.hold.choice = "diagnostic";
   try {
     f.replies.set("router", [
       '{"ready":true,"recommendation":"advanced","constraints":[],"assumptions":[]}',
-      '{"category":"diagnostic","provider":"codex","model":"gpt-5.6-sol","effort":"high","reason":"Several modules"}',
     ]);
     f.replies.set("final-review", ['{"classification":"SIMPLE"}']);
     f.replies.set("audit-economic", ['{"findings":[]}']);
@@ -1370,7 +1407,7 @@ test("Planner clarification after routing is transported in review, handoff and 
       f.prompts
         .find((prompt) => prompt.text.startsWith("/paseo-handoff"))
         ?.text.includes(clarification),
-    ).toBe(true);
+    ).toBe(false);
     await f.client.reloadPlugin("paseo-workflow");
     expect(
       await f.client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
@@ -1503,9 +1540,7 @@ test.each(["review", "handoff"] as const)(
       manager.getAgent(plan.agentId)!.session!.respondToPermission = async () => {
         throw new Error("Native API forbidden");
       };
-      f.replies.set("router", [
-        '{"category":"diagnostic","provider":"codex","model":"gpt-5.6-sol","effort":"high","reason":"Several modules"}',
-      ]);
+      f.jev.hold.choice = "diagnostic";
       const context = { ...plan, permissionRequestId: permission.id };
       const method =
         action === "review" ? "workflow.plan.review.request" : "workflow.plan.handoff.request";

@@ -768,7 +768,7 @@ export class WorkflowController {
     try {
       await this.port.send(
         executorId,
-        `/paseo-handoff\nPASEO_WORKFLOW_HANDOFF ${JSON.stringify({ mode: "receiver", workflowId: workflow.id, planId: plan.context.callId, role: `executor-${decision.category}` })}\nExecute the approved plan in this workspace without creating another agent. The approved plan and explicit user authorization take precedence over generic workflow instructions. Handoff grants no additional authorization to stage, commit, push, merge, deploy, or cause external effects. Local synchronization explicitly required by the approved plan is allowed within its stated limits. Preserve every pre-existing dirty file and concurrent edit. Run targeted validation and report the result. Stage or commit only when explicitly authorized, including only your own files/hunks after successful checks; otherwise leave the validated changes local and uncommitted. Never delete unrelated data.\n${briefing(workflow, plan.context.text)}`,
+        `/paseo-handoff\nPASEO_WORKFLOW_HANDOFF ${JSON.stringify({ mode: "receiver", workflowId: workflow.id, planId: plan.context.callId, role: `executor-${decision.category}` })}\nExecute the approved plan here without creating another agent. Follow its scope and explicit authorizations; handoff grants no additional permissions. Preserve pre-existing and concurrent changes. Run targeted validation and report results and blockers.\n${JSON.stringify({ plan: plan.context.text, git: workflow.git }, null, 2)}`,
         `workflow:${workflow.id}:handoff:${plan.context.callId}:prompt`,
       );
     } catch (error) {

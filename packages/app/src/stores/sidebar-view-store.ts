@@ -65,6 +65,7 @@ interface SidebarViewStoreState {
   toggleHostFilter: (serverId: string) => void;
   clearHostFilters: () => void;
   toggleProjectFilter: (viewKey: string) => void;
+  includeProjectFilter: (viewKey: string) => void;
   clearProjectFilters: () => void;
   toggleLabelFilter: (name: string) => void;
   clearLabelFilter: () => void;
@@ -188,6 +189,12 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
       clearHostFilters: () => set({ hostFilters: [] }),
       toggleProjectFilter: (viewKey) =>
         set((state) => ({ projectFilters: toggleFilterEntry(state.projectFilters, viewKey) })),
+      includeProjectFilter: (viewKey) =>
+        set((state) => {
+          if (state.projectFilters.length === 0) return state;
+          if (state.projectFilters.includes(viewKey)) return state;
+          return { projectFilters: [...state.projectFilters, viewKey] };
+        }),
       clearProjectFilters: () => set({ projectFilters: [] }),
       toggleLabelFilter: (name) =>
         set((state) => {

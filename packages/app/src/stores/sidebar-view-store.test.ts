@@ -39,6 +39,23 @@ describe("sidebar view store", () => {
     });
   });
 
+  it("includes an added project while preserving the current selection and other filters", () => {
+    useSidebarViewStore.setState({
+      projectFilters: ["project-a"],
+      hostFilters: ["host-a"],
+      labelFilter: { labels: ["work"] },
+    });
+
+    useSidebarViewStore.getState().includeProjectFilter("project-c");
+    useSidebarViewStore.getState().includeProjectFilter("project-c");
+
+    expect(useSidebarViewStore.getState()).toMatchObject({
+      projectFilters: ["project-a", "project-c"],
+      hostFilters: ["host-a"],
+      labelFilter: { labels: ["work"] },
+    });
+  });
+
   it("toggles multiple hosts into and out of the filter", () => {
     const store = useSidebarViewStore.getState();
     store.toggleHostFilter("host-a");
@@ -53,6 +70,12 @@ describe("sidebar view store", () => {
     store.clearHostFilters();
 
     expect(useSidebarViewStore.getState().hostFilters).toEqual([]);
+  });
+
+  it("keeps all projects selected when including an added project without a filter", () => {
+    useSidebarViewStore.getState().includeProjectFilter("project-c");
+
+    expect(useSidebarViewStore.getState().projectFilters).toEqual([]);
   });
 
   it("keeps host filters that still point at available hosts", () => {
