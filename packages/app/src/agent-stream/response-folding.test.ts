@@ -160,6 +160,16 @@ describe("completed response folding", () => {
       expandedResponseIds: new Set(),
     });
     expect([...result.hiddenItemIds]).toEqual(["step-b"]);
+    expect([...result.hiddenMessageResponseIds]).toEqual([["step", "answer"]]);
+    const revealed = projectResponseFolding({
+      items,
+      isTurnActive: false,
+      activeTurnId: null,
+      expandedResponseIds: new Set(result.hiddenMessageResponseIds.values()),
+      previous: result,
+    });
+    expect(revealed.hiddenMessageResponseIds.size).toBe(0);
+    expect(revealed.hiddenItemIds.size).toBe(0);
     expect(result.headersByHostId.get("step-a")).toEqual({
       responseId: "answer",
       count: 1,

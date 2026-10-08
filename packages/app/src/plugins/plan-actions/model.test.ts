@@ -44,6 +44,28 @@ function input(overrides: Partial<PlanActionsInput> = {}): PlanActionsInput {
 }
 
 describe("plan actions", () => {
+  it("keeps native rejection outside compact overflow beside approval", () => {
+    const actions = resolvePlanActions(
+      input({
+        compact: true,
+        permissions: [
+          {
+            ...permission,
+            actions: [
+              ...permission.actions!,
+              { id: "reject", label: "Reject", behavior: "deny", variant: "secondary" },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(actions.filter((action) => !action.overflow).map((action) => action.id)).toEqual([
+      "deny",
+      "approve",
+    ]);
+    expect(actions.find((action) => action.id === "deny")?.permission?.id).toBe("permission-1");
+  });
+
   it("offers live undecided structured fallback plans and keeps old hosts/cache read-only", () => {
     const fallback = input({ permissions: [], fallbackAvailable: true });
     expect(resolvePlanActions(fallback).map((action) => action.id)).toEqual([

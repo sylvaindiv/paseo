@@ -90,6 +90,7 @@ async function openTouchWorkspaceList(page: Page, testInfo: TestInfo) {
   await gotoAppShell(page);
   await openMobileAgentSidebar(page);
   await expect(workspaceRow(page)).toBeVisible();
+  await toggleTrailing(page, "Diff stats", true);
   await page.mouse.move(0, 0);
   await page.screenshot({ path: testInfo.outputPath("sidebar.png") });
 }
@@ -109,6 +110,7 @@ async function openDesktopWorkspaceList(page: Page) {
   await gotoAppShell(page);
   const row = workspaceRow(page);
   await expect(row).toBeVisible();
+  await toggleTrailing(page, "Diff stats");
   const additions = row.getByText("+12.3k", { exact: true });
   const deletions = row.getByText("-1", { exact: true });
   await expect(additions).toBeVisible();

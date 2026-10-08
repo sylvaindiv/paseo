@@ -1,8 +1,17 @@
 export type {
+  UsageSourceRegistration,
+  UsageReport,
+  UsageWindow,
+  UsageBalance,
+  UsageDetail,
+} from "./usage.js";
+export type {
   PluginHandlerContext,
   PluginServerContext,
   PluginServerContribution,
   PluginSettingsHandle,
+  PluginSettings,
+  PluginSettingsState,
 } from "./contracts.js";
 export type {
   PluginHookContext,
@@ -14,3 +23,5 @@ export type {
   PluginBeforeRequests,
   PluginLifecycleRegistration,
 } from "./lifecycle.js";
+
+export { spawnProcess, execCommand, terminateProcess } from "./process.js";

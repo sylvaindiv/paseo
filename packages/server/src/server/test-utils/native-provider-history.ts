@@ -18,6 +18,7 @@ export async function claudeNativeHistory(records: readonly unknown[]) {
   ).ingestPersistedHistory(records.map((record) => JSON.stringify(record)).join("\n"), {
     restoredIds: new Set(),
     toolOwners: new Map(),
+    subagentToolCalls: new Map(),
   });
   const events: AgentStreamEvent[] = [];
   for await (const event of session.streamHistory()) events.push(event);
@@ -38,12 +39,15 @@ export async function codexNativeHistory(turns: readonly unknown[]) {
     false,
     false,
   );
+  const client = { request: async () => ({ thread: { turns } }) };
   Object.assign(session, {
     connected: true,
     currentThreadId: "native-history",
-    client: { request: async () => ({ thread: { turns } }) },
+    client,
   });
-  await (session as unknown as { loadPersistedHistory(): Promise<void> }).loadPersistedHistory();
+  await (
+    session as unknown as { loadPersistedHistory(historyClient: typeof client): Promise<void> }
+  ).loadPersistedHistory(client);
   const events: AgentStreamEvent[] = [];
   for await (const event of session.streamHistory()) events.push(event);
   return events;

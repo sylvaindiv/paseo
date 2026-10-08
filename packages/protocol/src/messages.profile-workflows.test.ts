@@ -4,6 +4,7 @@ import {
   AgentSnapshotPayloadSchema,
   CreateAgentRequestMessageSchema,
   MutableDaemonConfigPatchSchema,
+  WorkspaceCreateRequestSchema,
 } from "./messages.js";
 
 test("profiles round-trip optional post-approval modes with old and new schemas", () => {
@@ -34,4 +35,19 @@ test("old and new snapshots keep optional historical approval and completion pro
   expect(old.parse(snapshot)).toEqual(legacy);
   expect(CreateAgentRequestMessageSchema.shape).not.toHaveProperty("launchPostApprovalModeId");
   expect(CreateAgentRequestMessageSchema.shape).not.toHaveProperty("lastCompletedTurnId");
+});
+
+test("workspace creation keeps workflow intent and initial-agent policy", () => {
+  const request = {
+    type: "workspace.create.request",
+    requestId: "create-workflow",
+    source: { kind: "directory", path: "/project" },
+    intent: "Preserve local workflows",
+    agent: {
+      config: { provider: "codex", cwd: "/project", writePolicy: "read_only" },
+      launchProfileId: "planner",
+      modelRouting: { strategy: "jev", prompt: "Review this change" },
+    },
+  };
+  expect(WorkspaceCreateRequestSchema.parse(request)).toMatchObject(request);
 });

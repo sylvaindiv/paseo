@@ -270,7 +270,7 @@ test.each([
     },
   };
   const settings = {
-    read: async () => ({ revision: "1", values: structuredClone(state) }),
+    read: async () => ({ status: "ready", revision: "1", values: structuredClone(state) }),
     write: async (value: unknown) => {
       state = workflowSettings.schema.parse(value);
     },

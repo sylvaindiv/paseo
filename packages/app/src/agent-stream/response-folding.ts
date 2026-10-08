@@ -9,6 +9,7 @@ export interface ResponseFoldHeader {
 export interface ResponseFolding {
   headersByHostId: Map<string, ResponseFoldHeader>;
   hiddenItemIds: Set<string>;
+  hiddenMessageResponseIds: Map<string, string>;
 }
 
 function countMessages(steps: StreamItem[], toolCallCount?: (item: StreamItem) => number): number {
@@ -34,6 +35,7 @@ export function projectResponseFolding(input: {
 }): ResponseFolding {
   const headersByHostId = new Map<string, ResponseFoldHeader>();
   const hiddenItemIds = new Set<string>();
+  const hiddenMessageResponseIds = new Map<string, string>();
   let start = 0;
 
   const foldResponse = (end: number) => {
@@ -69,6 +71,11 @@ export function projectResponseFolding(input: {
     const count = countMessages(steps, input.toolCallCount);
     headersByHostId.set(host.id, { responseId, count, expanded });
     if (!expanded) {
+      for (const item of steps) {
+        const messageId =
+          item.kind === "assistant_message" ? (item.blockGroupId ?? item.id) : item.id;
+        hiddenMessageResponseIds.set(messageId, responseId);
+      }
       for (const item of steps.slice(1)) hiddenItemIds.add(item.id);
     }
   };
@@ -86,6 +93,10 @@ export function projectResponseFolding(input: {
     previous &&
     previous.headersByHostId.size === headersByHostId.size &&
     previous.hiddenItemIds.size === hiddenItemIds.size &&
+    previous.hiddenMessageResponseIds.size === hiddenMessageResponseIds.size &&
+    [...hiddenMessageResponseIds].every(
+      ([id, responseId]) => previous.hiddenMessageResponseIds.get(id) === responseId,
+    ) &&
     [...hiddenItemIds].every((id) => previous.hiddenItemIds.has(id)) &&
     [...headersByHostId].every(([id, header]) => {
       const old = previous.headersByHostId.get(id);
@@ -97,5 +108,5 @@ export function projectResponseFolding(input: {
     })
   )
     return previous;
-  return { headersByHostId, hiddenItemIds };
+  return { headersByHostId, hiddenItemIds, hiddenMessageResponseIds };
 }

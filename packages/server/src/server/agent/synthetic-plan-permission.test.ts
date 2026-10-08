@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, test } from "vitest";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage, parseStoredAgentRecord, type StoredAgentRecord } from "./agent-storage.js";
-import { AgentRequests } from "./requests/index.js";
+import { MessageReceipts } from "../message-receipts/index.js";
 import { claudeNativeHistory } from "../test-utils/native-provider-history.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import type { AgentSession, AgentStreamEvent } from "./agent-sdk-types.js";
@@ -293,7 +293,7 @@ test.each(["prepared", "mode-set"] as const)(
         await f.restart(captured);
         const resumed = await f.reloaded.ensurePlanPermission(f.input);
         expect(resumed.id).toBe(permission.id);
-        const receipts = new AgentRequests(path.join(f.agent.cwd, "receipts"));
+        const receipts = new MessageReceipts(path.join(f.agent.cwd, "receipts"));
         const delivered: string[] = [];
         const send = (prompt: string, messageId: string) =>
           receipts.send({

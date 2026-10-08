@@ -27,14 +27,11 @@ export interface PlanAction {
 export function resolvePlanActions(input: PlanActionsInput): PlanAction[] {
   const secondary = { overflow: input.compact === true };
   const actions: PlanAction[] = [{ id: "copy", ...secondary }];
-  const permission =
-    input.live && !input.readOnly
-      ? input.permissions.find(
-          (request) => request.kind === "plan" && request.sourcePlanCallId === input.callId,
-        )
-      : undefined;
-  if (!input.live || input.readOnly || input.resolved || (!permission && !input.fallbackAvailable))
-    return actions;
+  if (!input.live || input.readOnly || input.resolved) return actions;
+  const permission = input.permissions.find(
+    (request) => request.kind === "plan" && request.sourcePlanCallId === input.callId,
+  );
+  if (!permission && !input.fallbackAvailable) return actions;
   for (const { pluginId, contribution } of [...input.contributions].sort(
     (left, right) =>
       (left.contribution.order ?? 0) - (right.contribution.order ?? 0) ||
@@ -58,6 +55,8 @@ export function resolvePlanActions(input: PlanActionsInput): PlanAction[] {
       permission,
     });
   }
+  const denial = permission?.actions?.find((action) => action.behavior === "deny");
+  if (denial) actions.push({ id: "deny", title: denial.label, overflow: false, permission });
   const approval = permission?.actions?.find((action) => action.behavior === "allow");
   if (!permission?.actions?.length || approval)
     actions.push({ id: "approve", overflow: false, permission });

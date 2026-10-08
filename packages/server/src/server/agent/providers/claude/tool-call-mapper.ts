@@ -12,6 +12,8 @@ interface MapperParams {
   metadata?: Record<string, unknown>;
 }
 
+const ClaudePlanInputSchema = z.object({ plan: z.string() });
+
 const ClaudeToolCallStatusSchema = z.enum(["running", "completed", "failed", "canceled"]);
 type ClaudeToolCallStatus = z.infer<typeof ClaudeToolCallStatusSchema>;
 
@@ -113,31 +115,32 @@ function mapClaudeToolCall(
   }
 
   const trimmedName = raw.name.trim();
+  if (trimmedName === "ExitPlanMode") {
+    const plan = ClaudePlanInputSchema.safeParse(raw.input);
+    if (plan.success) {
+      // The permission callback and transcript tool_result describe the same call.
+      // Keep its native identity so resolution updates the proposal's original position.
+      return {
+        type: "tool_call",
+        callId,
+        // Older clients suppress the pending native call while showing its approval card.
+        name: status === "running" ? trimmedName : "plan_approval",
+        status: status === "failed" ? "completed" : status,
+        error: null,
+        detail: { type: "plan", text: plan.data.plan },
+        metadata: {
+          ...raw.metadata,
+          ...(status === "completed" || status === "failed"
+            ? { approved: status === "completed" }
+            : {}),
+        },
+      };
+    }
+  }
   const toolKind = resolveClaudeToolKind(trimmedName);
   const name = toolKind === "speak" ? "speak" : trimmedName;
   const input = raw.input ?? null;
   const output = raw.output ?? null;
-  if (name === "ExitPlanMode") {
-    const plan = z.object({ plan: z.string() }).safeParse(input);
-    if (plan.success) {
-      return {
-        type: "tool_call",
-        callId,
-        name: "plan_approval",
-        status: raw.status,
-        detail: { type: "plan", text: plan.data.plan },
-        error: null,
-        ...(raw.status !== "running"
-          ? {
-              metadata: {
-                ...raw.metadata,
-                approved: raw.status === "completed",
-              },
-            }
-          : {}),
-      };
-    }
-  }
   const detail = deriveClaudeToolDetail(resolveDetailName(toolKind, name), input, output);
 
   if (raw.status === "failed") {

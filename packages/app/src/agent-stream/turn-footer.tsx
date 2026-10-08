@@ -213,6 +213,12 @@ function TurnFooterRow({ children }: { children: ReactNode }) {
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
+  streamItemWrapper: {
+    width: "100%",
+    maxWidth: theme.contentMaxWidth,
+    alignSelf: "center",
+    paddingHorizontal: theme.spacing[2],
+  },
   turnFooterRow: {
     marginTop: theme.spacing[2] + 5,
   },

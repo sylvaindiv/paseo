@@ -18,7 +18,7 @@ import type {
 } from "../agent/agent-sdk-types.js";
 import { AgentTurnNotAcceptedError } from "../agent/agent-sdk-types.js";
 import { workflowNativeHistory } from "../test-utils/native-provider-history.js";
-import { AgentRequests, AgentRequestRejectedError } from "../agent/requests/index.js";
+import { MessageReceipts, AgentRequestRejectedError } from "../message-receipts/index.js";
 
 function nextRoleFor(role: string) {
   return role === "router" ? "planner" : "final-review";
@@ -2049,9 +2049,9 @@ test.each([false, true])(
       release = Promise.withResolvers<void>();
     const reviewer = Promise.withResolvers<void>();
     f.holds.set("plan-reviewer", reviewer.promise);
-    const send = AgentRequests.prototype.send;
+    const send = MessageReceipts.prototype.send;
     const intercept = vi
-      .spyOn(AgentRequests.prototype, "send")
+      .spyOn(MessageReceipts.prototype, "send")
       .mockImplementation(async function (input) {
         const request = input.request as { text?: string; prompt?: string };
         if ((request.text ?? request.prompt ?? "").startsWith("Revise the plan")) {
@@ -2227,10 +2227,10 @@ test("subprocess replay of a refused revision after a lost reply supersedes the 
   // The host verdict is tested with real timeline races above; here lose that
   // verdict after its journal write, before it can reach the plugin socket.
   const admission = vi.spyOn(manager, "sendPlanRevision").mockResolvedValue(false);
-  const send = AgentRequests.prototype.send;
+  const send = MessageReceipts.prototype.send;
   let loseReply = true;
   const receipt = vi
-    .spyOn(AgentRequests.prototype, "send")
+    .spyOn(MessageReceipts.prototype, "send")
     .mockImplementation(async function (input) {
       try {
         return await send.call(this, input);

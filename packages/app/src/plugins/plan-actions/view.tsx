@@ -20,9 +20,14 @@ import { createPluginAgentActionContext } from "../actions";
 import { createPluginClientStateSource } from "../client-state/source";
 import { createPluginNavigation } from "../navigation";
 import { useInstalledPlugins } from "../registry";
-import { createPluginSurfaceRuntime } from "../surface-runtime";
 import { PlanActionState, resolvePlanActions, type PlanAction } from "./model";
 import { runPlanContribution } from "./contribution";
+
+function planActionTestId(id: string): string {
+  if (id === "approve") return "permission-request-accept";
+  if (id === "deny") return "permission-request-deny";
+  return `plan-action-${id}`;
+}
 
 function PlanActionControl({
   action,
@@ -61,7 +66,7 @@ function PlanActionControl({
       disabled={disabled}
       aria-busy={busy}
       accessibilityLabel={label}
-      testID={action.id === "approve" ? "permission-request-accept" : `plan-action-${action.id}`}
+      testID={planActionTestId(action.id)}
     >
       <Text numberOfLines={1}>{label}</Text>
     </Button>
@@ -128,20 +133,14 @@ export function PlanActions({
         (entry) => entry.serverId === serverId && entry.id === action.pluginId,
       );
       if (!plugin || !workspaceId) continue;
-      const runtime = createPluginSurfaceRuntime(host?.client ?? null, plugin);
-      if (!runtime) continue;
       const context = createPluginAgentActionContext({
         plugin,
-        runtime,
         state: source,
         workspaceId,
         agentId,
         navigation: createPluginNavigation({ serverId, workspaceId }),
       });
-      if (!context) {
-        void runtime.paseo.dispose();
-        continue;
-      }
+      if (!context) continue;
       calls.add(plan.callId);
       availability.current.set(contribution, calls);
       void (async () => {
@@ -158,15 +157,12 @@ export function PlanActions({
           });
         } catch {
           // Availability is opportunistic; the action remains available for an explicit retry.
-        } finally {
-          await runtime.paseo.dispose();
         }
       })();
     }
   }, [
     actions,
     agentId,
-    host?.client,
     installed,
     lifetime,
     plan.callId,
@@ -197,16 +193,17 @@ export function PlanActions({
       const permission =
         action.permission ??
         (await client.ensurePlanPermission({ agentId, workspaceId, callId: plan.callId }));
-      if (id === "approve") {
+      if (id === "approve" || id === "deny") {
+        const behavior = id === "approve" ? "allow" : "deny";
         const nativeAction =
           permission.actions?.find(
-            (entry) => entry.behavior === "allow" && entry.variant === "primary",
-          ) ?? permission.actions?.find((entry) => entry.behavior === "allow");
+            (entry) => entry.behavior === behavior && entry.variant === "primary",
+          ) ?? permission.actions?.find((entry) => entry.behavior === behavior);
         await client.respondToPermissionAndWait(
           agentId,
           permission.id,
           {
-            behavior: "allow",
+            behavior,
             selectedActionId: nativeAction?.id ?? "accept",
           },
           15000,

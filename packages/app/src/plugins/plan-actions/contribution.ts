@@ -2,7 +2,6 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { InstalledPlugin } from "../types";
 import { createPluginAgentActionContext, type PluginNavigation } from "../actions";
 import { createPluginClientStateSource } from "../client-state/source";
-import { createPluginSurfaceRuntime } from "../surface-runtime";
 
 export async function runPlanContribution(input: {
   client: DaemonClient;
@@ -21,29 +20,22 @@ export async function runPlanContribution(input: {
   );
   if (!contribution || contribution.disabledReason || input.plugin.lifetime.signal.aborted)
     throw new Error(contribution?.disabledReason ?? "Handoff is unavailable.");
-  const runtime = createPluginSurfaceRuntime(input.client, input.plugin);
-  if (!runtime) throw new Error("Handoff is unavailable.");
-  try {
-    const context = createPluginAgentActionContext({
-      plugin: input.plugin,
-      runtime,
-      state: createPluginClientStateSource(input.serverId),
-      workspaceId: input.workspaceId,
-      agentId: input.agentId,
-      navigation: input.navigation,
-    });
-    if (!context) throw new Error("The plan's agent or workspace is unavailable.");
-    if (input.prepare && contribution.onAvailable) {
-      try {
-        await contribution.onAvailable({ signal: input.signal, ...context, plan: input.plan });
-      } catch {
-        // Preparation is opportunistic; the action itself reports a definitive failure.
-      }
+  const context = createPluginAgentActionContext({
+    plugin: input.plugin,
+    state: createPluginClientStateSource(input.serverId),
+    workspaceId: input.workspaceId,
+    agentId: input.agentId,
+    navigation: input.navigation,
+  });
+  if (!context) throw new Error("The plan's agent or workspace is unavailable.");
+  if (input.prepare && contribution.onAvailable) {
+    try {
+      await contribution.onAvailable({ signal: input.signal, ...context, plan: input.plan });
+    } catch {
+      // Preparation is opportunistic; the action itself reports a definitive failure.
     }
-    await contribution.onPress({ signal: input.signal, ...context, plan: input.plan });
-    if (input.signal.aborted)
-      throw new Error("Plan action interrupted. Retry to inspect its result.");
-  } finally {
-    await runtime.paseo.dispose();
   }
+  await contribution.onPress({ signal: input.signal, ...context, plan: input.plan });
+  if (input.signal.aborted)
+    throw new Error("Plan action interrupted. Retry to inspect its result.");
 }

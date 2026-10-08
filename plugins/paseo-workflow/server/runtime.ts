@@ -210,6 +210,7 @@ export function runtime(
     },
     read: async () => {
       const current = await settings.read();
+      if (current.status === "invalid") throw new Error(current.error);
       revision = current.revision;
       return current.values;
     },
