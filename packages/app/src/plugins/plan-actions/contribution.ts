@@ -14,12 +14,15 @@ export async function runPlanContribution(input: {
   signal: AbortSignal;
   navigation: PluginNavigation;
   prepare?: boolean;
+  profileId?: string;
 }): Promise<void> {
   const contribution = input.plugin.planActions.find(
     (action) => action.id === input.contributionId,
   );
   if (!contribution || contribution.disabledReason || input.plugin.lifetime.signal.aborted)
     throw new Error(contribution?.disabledReason ?? "Handoff is unavailable.");
+  if (contribution.requiresAgentProfile && !input.profileId)
+    throw new Error("Choose an agent profile to hand off this plan.");
   const context = createPluginAgentActionContext({
     plugin: input.plugin,
     state: createPluginClientStateSource(input.serverId),
@@ -35,7 +38,12 @@ export async function runPlanContribution(input: {
       // Preparation is opportunistic; the action itself reports a definitive failure.
     }
   }
-  await contribution.onPress({ signal: input.signal, ...context, plan: input.plan });
+  await contribution.onPress({
+    signal: input.signal,
+    ...context,
+    plan: input.plan,
+    profileId: input.profileId,
+  });
   if (input.signal.aborted)
     throw new Error("Plan action interrupted. Retry to inspect its result.");
 }

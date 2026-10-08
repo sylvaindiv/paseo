@@ -3,9 +3,9 @@ import type {
   PluginPlanActionContribution,
   PluginPlanActionContext,
 } from "@getpaseo/plugin/client";
-import { registerActions, waitForExecutor } from "./actions";
+import { registerActions } from "./actions";
 
-test("the client contributes Revue and one direct automatic Handoff", async () => {
+test("the client contributes Revue and an explicit profile Handoff", async () => {
   const actions: PluginPlanActionContribution[] = [];
   registerActions({
     addPlanAction: (action) => {
@@ -16,31 +16,24 @@ test("the client contributes Revue and one direct automatic Handoff", async () =
   expect(actions.map((action) => action.title)).toEqual(["Revue", "Handoff"]);
   expect(actions[0]?.query?.launchProfileId).toBe("paseo-workflow-planner");
   expect(actions[1]?.query).toBeUndefined();
-  expect(actions[1]?.choices).toBeUndefined();
+  expect(actions[1]?.requiresAgentProfile).toBe(true);
+  expect(actions[1]?.onAvailable).toBeUndefined();
   const calls: unknown[] = [];
   const context = {
     signal: new AbortController().signal,
+    profileId: "custom-profile",
     agent: { id: "agent" },
     workspace: { id: "workspace" },
     plan: { callId: "call", permissionRequestId: "permission", text: "Exact plan", turnId: "turn" },
     rpc: async (contract: { name: string }, input: unknown) => {
       calls.push({ rpc: contract.name, input });
-      if (contract.name === "workflow.status.get.request")
-        return {
-          plan: { callId: "call" },
-          routing: { phase: "complete" },
-          handoff: { phase: "running", agentId: "executor" },
-        };
-      return {};
+      return { agentId: "executor" };
     },
     navigation: {
       openAgent: ({ agentId }: { agentId: string }) => calls.push({ agentId }),
+      replaceAgent: ({ agentId }: { agentId: string }) => calls.push({ replacedAgentId: agentId }),
     },
   } as unknown as PluginPlanActionContext;
-  await actions[1].onAvailable?.({
-    ...context,
-    plan: { callId: "call", text: "Exact plan", turnId: "turn" },
-  });
   await actions[0].onPress(context);
   await actions[1].onPress(context);
   const expected = {
@@ -51,46 +44,32 @@ test("the client contributes Revue and one direct automatic Handoff", async () =
     text: "Exact plan",
   };
   expect(calls).toEqual([
-    {
-      rpc: "workflow.handoff.prepare.request",
-      input: {
-        workspaceId: "workspace",
-        agentId: "agent",
-        callId: "call",
-        text: "Exact plan",
-      },
-    },
     { rpc: "workflow.plan.review.request", input: expected },
-    { rpc: "workflow.handoff.enqueue.request", input: expected },
     {
-      rpc: "workflow.status.get.request",
-      input: { workspaceId: "workspace", agentId: "agent" },
+      rpc: "workflow.plan.handoffToProfile.request",
+      input: { ...expected, profileId: "custom-profile" },
     },
-    { agentId: "executor" },
+    { replacedAgentId: "executor" },
   ]);
 });
 
-test("executor tracking stops when the requesting plan view disappears", async () => {
-  const lifetime = new AbortController();
-  let polls = 0;
-  const context = {
-    signal: lifetime.signal,
-    agent: { id: "agent" },
-    workspace: { id: "workspace" },
-    plan: { callId: "call", permissionRequestId: "permission", text: "Exact plan" },
-    rpc: async () => {
-      polls++;
-      lifetime.abort();
-      return {
-        plan: { callId: "call" },
-        routing: { phase: "complete" },
-        handoff: { phase: "closed", agentId: "executor" },
-      };
+test("handoff requires an explicit profile before sending anything", async () => {
+  const actions: PluginPlanActionContribution[] = [];
+  registerActions({
+    addPlanAction: (action) => {
+      actions.push(action);
+      return () => {};
     },
-  } as unknown as PluginPlanActionContext;
-
-  await expect(waitForExecutor(context)).resolves.toBeUndefined();
-  expect(polls).toBe(1);
+  });
+  const rpc = async () => {
+    throw new Error("must not send");
+  };
+  await expect(
+    actions[1].onPress({
+      signal: new AbortController().signal,
+      rpc,
+    } as unknown as PluginPlanActionContext),
+  ).rejects.toThrow("Choose an agent profile");
 });
 
 test("an older host is rejected before the handoff is enqueued", async () => {

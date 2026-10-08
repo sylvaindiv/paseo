@@ -207,19 +207,20 @@ const chevronColor = (theme: Theme) => ({ color: theme.colors.foregroundMuted })
 const markdownRules = createPlanMarkdownRules();
 
 export function PlanCard(props: PlanCardProps) {
-  // A resolution starts its own presentation state; subsequent taps stay local.
-  return <PlanCardContent key={props.outcome ?? "proposed"} {...props} />;
+  const containerStyle = useMemo(
+    () => [styles.container, props.disableOuterSpacing && styles.containerCompact],
+    [props.disableOuterSpacing],
+  );
+  // Reset presentation on resolution without aborting actions still waiting for their result.
+  return (
+    <View testID={props.testID} style={containerStyle}>
+      <PlanCardContent key={props.outcome ?? "proposed"} {...props} />
+      {props.footer ? <View style={styles.footer}>{props.footer}</View> : null}
+    </View>
+  );
 }
 
-function PlanCardContent({
-  title,
-  description,
-  text,
-  outcome,
-  footer,
-  disableOuterSpacing = false,
-  testID,
-}: PlanCardProps) {
+function PlanCardContent({ title, description, text, outcome }: PlanCardProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(outcome !== "rejected" && outcome !== "canceled");
   const labels = {
@@ -235,17 +236,13 @@ function PlanCardContent({
     [expanded],
   );
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
-  const containerStyle = useMemo(
-    () => [styles.container, disableOuterSpacing && styles.containerCompact],
-    [disableOuterSpacing],
-  );
   const chevronStyle = useMemo(
     () => [styles.chevron, expanded && styles.chevronExpanded],
     [expanded],
   );
 
   return (
-    <View testID={testID} style={containerStyle}>
+    <>
       <Pressable
         {...webExpandedState}
         accessibilityRole="button"
@@ -265,8 +262,7 @@ function PlanCardContent({
           <MarkdownRenderer text={text} rules={markdownRules} markdownit={planMarkdownParser} />
         </View>
       ) : null}
-      {footer ? <View style={styles.footer}>{footer}</View> : null}
-    </View>
+    </>
   );
 }
 

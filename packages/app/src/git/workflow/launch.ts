@@ -1,4 +1,5 @@
 import type { WorkspaceGitWorkflowConfig } from "@getpaseo/protocol/messages";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { materializeAgentProfile, type AgentProfile } from "@/agent-profiles";
 import { generateDraftId } from "@/stores/draft-keys";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
@@ -296,8 +297,51 @@ function assertRepairChecksContext(input: {
   }
 }
 
-export function launchWorkspaceWorkflowAction(input: {
+interface WorkflowProfile {
+  launchProfileId?: string;
+  provider: string;
+  modelId: string;
+  modeId: string;
+  thinkingOptionId: string;
+  featureValues: Record<string, unknown>;
+}
+
+async function resolveWorkflowFeatureValues(input: {
   action: WorkspaceWorkflowAction;
+  client: Pick<DaemonClient, "listProviderFeatures"> | null;
+  cwd: string;
+  profile: WorkflowProfile;
+}): Promise<Record<string, unknown>> {
+  const { action, client, cwd, profile } = input;
+  if (action === "review") return profile.featureValues;
+  if (!client) throw new Error("The host is disconnected.");
+
+  const payload = await client.listProviderFeatures({
+    provider: profile.provider,
+    cwd,
+    ...(profile.modeId ? { modeId: profile.modeId } : {}),
+    ...(profile.modelId ? { model: profile.modelId } : {}),
+    ...(profile.thinkingOptionId ? { thinkingOptionId: profile.thinkingOptionId } : {}),
+    featureValues: profile.featureValues,
+  });
+  if (payload.error) throw new Error(payload.error);
+
+  const speed = payload.features?.find(
+    (feature) => feature.type === "select" && feature.id === "service_tier",
+  );
+  if (speed?.type === "select") {
+    const fast = speed.options.find((option) => option.label === "Fast");
+    if (fast) return { ...profile.featureValues, [speed.id]: fast.id };
+  }
+  const fastMode = payload.features?.find(
+    (feature) => feature.type === "toggle" && feature.id === "fast_mode",
+  );
+  return fastMode ? { ...profile.featureValues, [fastMode.id]: true } : profile.featureValues;
+}
+
+export async function launchWorkspaceWorkflowAction(input: {
+  action: WorkspaceWorkflowAction;
+  client: Pick<DaemonClient, "listProviderFeatures"> | null;
   serverId: string;
   workspaceId: string;
   cwd: string;
@@ -306,14 +350,12 @@ export function launchWorkspaceWorkflowAction(input: {
   prUrl?: string | null;
   profile?: AgentProfile;
   config: WorkspaceGitWorkflowConfig;
-}): { draftId: string; clientMessageId: string } {
+}): Promise<{ draftId: string; clientMessageId: string }> {
   assertRepairChecksContext(input);
   const launchKey = `${input.serverId}:${input.workspaceId}:${input.action}`;
   if (opening.has(launchKey)) {
     throw new Error("This workspace action is already opening.");
   }
-  opening.add(launchKey);
-  queueMicrotask(() => opening.delete(launchKey));
   const manual = input.action === "review" ? input.config.reviewModel : input.config.prModel;
   const legacyProfile = input.profile ? materializeAgentProfile(input.profile) : null;
   const profile = manual
@@ -330,61 +372,72 @@ export function launchWorkspaceWorkflowAction(input: {
   if (!profile.provider.trim()) {
     throw new Error("The selected agent profile has no provider.");
   }
-  const draftId = generateDraftId();
-  const clientMessageId = `workspace-draft:${input.serverId}:${input.workspaceId}:${draftId}:prompt`;
-  const prompt = [
-    actionPrompt(input.action, input.config, input),
-    "",
-    `Requested action: ${input.action}`,
-    `Workspace directory: ${input.cwd}`,
-    `Current branch base: ${input.baseRef}`,
-    ...(input.prUrl ? [`Existing PR: ${input.prUrl}`] : []),
-    ...(input.action === "review" || input.action === "resolve-conflicts"
-      ? []
-      : [
-          "Preserve work outside scope. Do not force-push, reset, rebase, pull, merge, archive, or deploy silently. If the situation changed, stop and explain it.",
-        ]),
-  ].join("\n");
-  const timestamp = Date.now();
-  const setup = {
-    ...(profile.launchProfileId ? { launchProfileId: profile.launchProfileId } : {}),
-    provider: profile.provider,
-    cwd: input.cwd,
-    modeId: profile.modeId || null,
-    model: profile.modelId || null,
-    thinkingOptionId: profile.thinkingOptionId || null,
-    featureValues: profile.featureValues,
-  };
-  useCreateFlowStore.getState().setPending({
-    serverId: input.serverId,
-    workspaceId: input.workspaceId,
-    draftId,
-    agentId: null,
-    clientMessageId,
-    text: prompt,
-    timestamp,
-  });
-  useWorkspaceDraftSubmissionStore.getState().setPending({
-    ...(profile.launchProfileId ? { launchProfileId: profile.launchProfileId } : {}),
-    serverId: input.serverId,
-    workspaceId: input.workspaceId,
-    draftId,
-    text: prompt,
-    attachments: [],
-    cwd: input.cwd,
-    provider: profile.provider,
-    clientMessageId,
-    timestamp,
-    ...(profile.modeId ? { modeId: profile.modeId } : {}),
-    ...(profile.modelId ? { model: profile.modelId } : {}),
-    ...(profile.thinkingOptionId ? { thinkingOptionId: profile.thinkingOptionId } : {}),
-    featureValues: profile.featureValues,
-  });
-  navigateToWorkspace({
-    serverId: input.serverId,
-    workspaceId: input.workspaceId,
-    target: { kind: "draft", draftId, setup },
-    pin: true,
-  });
-  return { draftId, clientMessageId };
+  opening.add(launchKey);
+  try {
+    const featureValues = await resolveWorkflowFeatureValues({
+      action: input.action,
+      client: input.client,
+      cwd: input.cwd,
+      profile,
+    });
+    const draftId = generateDraftId();
+    const clientMessageId = `workspace-draft:${input.serverId}:${input.workspaceId}:${draftId}:prompt`;
+    const prompt = [
+      actionPrompt(input.action, input.config, input),
+      "",
+      `Requested action: ${input.action}`,
+      `Workspace directory: ${input.cwd}`,
+      `Current branch base: ${input.baseRef}`,
+      ...(input.prUrl ? [`Existing PR: ${input.prUrl}`] : []),
+      ...(input.action === "review" || input.action === "resolve-conflicts"
+        ? []
+        : [
+            "Preserve work outside scope. Do not force-push, reset, rebase, pull, merge, archive, or deploy silently. If the situation changed, stop and explain it.",
+          ]),
+    ].join("\n");
+    const timestamp = Date.now();
+    const setup = {
+      ...(profile.launchProfileId ? { launchProfileId: profile.launchProfileId } : {}),
+      provider: profile.provider,
+      cwd: input.cwd,
+      modeId: profile.modeId || null,
+      model: profile.modelId || null,
+      thinkingOptionId: profile.thinkingOptionId || null,
+      featureValues,
+    };
+    useCreateFlowStore.getState().setPending({
+      serverId: input.serverId,
+      workspaceId: input.workspaceId,
+      draftId,
+      agentId: null,
+      clientMessageId,
+      text: prompt,
+      timestamp,
+    });
+    useWorkspaceDraftSubmissionStore.getState().setPending({
+      ...(profile.launchProfileId ? { launchProfileId: profile.launchProfileId } : {}),
+      serverId: input.serverId,
+      workspaceId: input.workspaceId,
+      draftId,
+      text: prompt,
+      attachments: [],
+      cwd: input.cwd,
+      provider: profile.provider,
+      clientMessageId,
+      timestamp,
+      ...(profile.modeId ? { modeId: profile.modeId } : {}),
+      ...(profile.modelId ? { model: profile.modelId } : {}),
+      ...(profile.thinkingOptionId ? { thinkingOptionId: profile.thinkingOptionId } : {}),
+      featureValues,
+    });
+    navigateToWorkspace({
+      serverId: input.serverId,
+      workspaceId: input.workspaceId,
+      target: { kind: "draft", draftId, setup },
+      pin: true,
+    });
+    return { draftId, clientMessageId };
+  } finally {
+    opening.delete(launchKey);
+  }
 }

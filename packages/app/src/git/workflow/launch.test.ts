@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { launchWorkspaceWorkflowAction } from "./launch";
 
-const calls = vi.hoisted(() => ({ pending: vi.fn(), submitting: vi.fn(), navigate: vi.fn() }));
+const calls = vi.hoisted(() => ({
+  pending: vi.fn(),
+  submitting: vi.fn(),
+  navigate: vi.fn(),
+  features: vi.fn(),
+}));
 vi.mock("@/stores/create-flow-store", () => ({
   useCreateFlowStore: { getState: () => ({ setPending: calls.pending }) },
 }));
@@ -15,6 +20,7 @@ vi.mock("@/stores/draft-keys", () => ({ generateDraftId: () => "draft" }));
 vi.mock("@/agent-profiles", async () => import("@/agent-profiles/internal/materialize-profile"));
 
 const context = {
+  client: { listProviderFeatures: calls.features },
   serverId: "host",
   workspaceId: "workspace",
   cwd: "/repo",
@@ -32,11 +38,15 @@ const profile = {
 };
 
 describe("workspace workflow launch", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    calls.features.mockResolvedValue({ provider: "codex", features: [], fetchedAt: "now" });
+  });
 
-  it("uses the manual review choice without a profile or JEV routing", () => {
-    launchWorkspaceWorkflowAction({
+  it("uses the manual review choice without a profile or JEV routing", async () => {
+    await launchWorkspaceWorkflowAction({
       ...context,
+      client: null,
       action: "review",
       config: { reviewModel: { provider: "codex", model: "review", thinkingOptionId: "low" } },
     });
@@ -59,8 +69,8 @@ describe("workspace workflow launch", () => {
 
   it.each(["create-pr", "commit-and-push"] as const)(
     "uses PR choice for %s without inheriting profile mode",
-    (action) => {
-      launchWorkspaceWorkflowAction({
+    async (action) => {
+      await launchWorkspaceWorkflowAction({
         ...context,
         action,
         profile,
@@ -77,8 +87,8 @@ describe("workspace workflow launch", () => {
     },
   );
 
-  it("preserves the existing profile when no manual choice is configured", () => {
-    launchWorkspaceWorkflowAction({
+  it("preserves the existing profile when no manual choice is configured", async () => {
+    await launchWorkspaceWorkflowAction({
       ...context,
       action: "review",
       profile,
@@ -94,8 +104,8 @@ describe("workspace workflow launch", () => {
     });
   });
 
-  it("launches local check repair with the PR model and a local-only prompt", () => {
-    launchWorkspaceWorkflowAction({
+  it("launches local check repair with the PR model and a local-only prompt", async () => {
+    await launchWorkspaceWorkflowAction({
       ...context,
       action: "repair-checks",
       prUrl: "https://example.com/pr/8",
@@ -119,16 +129,16 @@ describe("workspace workflow launch", () => {
     expect(prompt).not.toContain("COMMIT_PUSH_SENTINEL");
   });
 
-  it("refuses to launch check repair without a pull request or branch", () => {
-    expect(() =>
+  it("refuses to launch check repair without a pull request or branch", async () => {
+    await expect(
       launchWorkspaceWorkflowAction({
         ...context,
         action: "repair-checks",
         prUrl: null,
         config: { prModel: { provider: "codex", model: "pr" } },
       }),
-    ).toThrow();
-    expect(() =>
+    ).rejects.toThrow();
+    await expect(
       launchWorkspaceWorkflowAction({
         ...context,
         action: "repair-checks",
@@ -136,11 +146,11 @@ describe("workspace workflow launch", () => {
         prUrl: "https://example.com/pr/8",
         config: { prModel: { provider: "codex", model: "pr" } },
       }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 
-  it("launches conflict resolution with the PR model and explicit local merge and push scope", () => {
-    launchWorkspaceWorkflowAction({
+  it("launches conflict resolution with the PR model and explicit local merge and push scope", async () => {
+    await launchWorkspaceWorkflowAction({
       ...context,
       action: "resolve-conflicts",
       prUrl: "https://example.com/pr/8",
@@ -163,5 +173,171 @@ describe("workspace workflow launch", () => {
     expect(prompt).toContain("Si la branche cible réelle est main");
     expect(prompt).not.toContain("COMMIT_PUSH_SENTINEL");
     expect(calls.navigate.mock.calls[0][0]).toMatchObject({ target: { kind: "draft" }, pin: true });
+  });
+
+  it.each(["create-pr", "commit-and-push", "repair-checks", "resolve-conflicts"] as const)(
+    "enables the advertised Codex Fast tier for %s",
+    async (action) => {
+      calls.features.mockResolvedValue({
+        provider: "codex",
+        fetchedAt: "now",
+        features: [
+          {
+            type: "select",
+            id: "service_tier",
+            label: "Speed",
+            value: "default",
+            options: [
+              { id: "default", label: "Normal" },
+              { id: "priority-v2", label: "Fast" },
+            ],
+          },
+        ],
+      });
+
+      await launchWorkspaceWorkflowAction({
+        ...context,
+        action,
+        prUrl: "https://example.com/pr/8",
+        config: { prModel: { provider: "codex", model: "pr" } },
+      });
+
+      expect(calls.submitting.mock.calls[0][0].featureValues).toEqual({
+        service_tier: "priority-v2",
+      });
+      expect(calls.navigate.mock.calls[0][0].target.setup.featureValues).toEqual({
+        service_tier: "priority-v2",
+      });
+    },
+  );
+
+  it("enables a fast_mode toggle while preserving legacy profile options", async () => {
+    calls.features.mockResolvedValue({
+      provider: "claude",
+      fetchedAt: "now",
+      features: [{ type: "toggle", id: "fast_mode", label: "Fast", value: false }],
+    });
+
+    await launchWorkspaceWorkflowAction({
+      ...context,
+      action: "create-pr",
+      profile,
+      config: {},
+    });
+
+    expect(calls.features).toHaveBeenCalledWith({
+      provider: "claude",
+      cwd: "/repo",
+      modeId: "plan",
+      model: "legacy-model",
+      thinkingOptionId: "high",
+      featureValues: { plan_mode: true },
+    });
+    expect(calls.submitting.mock.calls[0][0]).toMatchObject({
+      modeId: "plan",
+      thinkingOptionId: "high",
+      launchProfileId: "legacy",
+      featureValues: { plan_mode: true, fast_mode: true },
+    });
+  });
+
+  it("replaces an explicit normal speed and preserves unrelated direct-model options", async () => {
+    calls.features.mockResolvedValue({
+      provider: "codex",
+      fetchedAt: "now",
+      features: [
+        {
+          type: "select",
+          id: "service_tier",
+          label: "Speed",
+          value: "default",
+          options: [
+            { id: "default", label: "Normal" },
+            { id: "provider-fast-id", label: "Fast" },
+          ],
+        },
+      ],
+    });
+    const directProfile = {
+      ...profile,
+      provider: "codex",
+      featureValues: { service_tier: "default", plan_mode: true },
+    };
+
+    await launchWorkspaceWorkflowAction({
+      ...context,
+      action: "commit-and-push",
+      profile: directProfile,
+      config: {},
+    });
+
+    expect(calls.submitting.mock.calls[0][0].featureValues).toEqual({
+      service_tier: "provider-fast-id",
+      plan_mode: true,
+    });
+  });
+
+  it("keeps existing options when the selected model has no fast feature", async () => {
+    await launchWorkspaceWorkflowAction({
+      ...context,
+      action: "create-pr",
+      profile,
+      config: {},
+    });
+
+    expect(calls.submitting.mock.calls[0][0].featureValues).toEqual({ plan_mode: true });
+  });
+
+  it("leaves review options unchanged and skips feature discovery", async () => {
+    await launchWorkspaceWorkflowAction({
+      ...context,
+      action: "review",
+      profile,
+      config: {},
+    });
+
+    expect(calls.features).not.toHaveBeenCalled();
+    expect(calls.submitting.mock.calls[0][0].featureValues).toEqual({ plan_mode: true });
+  });
+
+  it("does not launch when feature discovery fails", async () => {
+    calls.features.mockResolvedValue({
+      provider: "codex",
+      fetchedAt: "now",
+      error: "Feature discovery failed",
+    });
+
+    await expect(
+      launchWorkspaceWorkflowAction({
+        ...context,
+        action: "create-pr",
+        config: { prModel: { provider: "codex", model: "pr" } },
+      }),
+    ).rejects.toThrow("Feature discovery failed");
+    expect(calls.pending).not.toHaveBeenCalled();
+    expect(calls.submitting).not.toHaveBeenCalled();
+    expect(calls.navigate).not.toHaveBeenCalled();
+  });
+
+  it("blocks a duplicate launch while feature discovery is pending", async () => {
+    let resolveFeatures!: (value: { provider: string; features: []; fetchedAt: string }) => void;
+    calls.features.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFeatures = resolve;
+      }),
+    );
+    const input = {
+      ...context,
+      action: "create-pr" as const,
+      config: { prModel: { provider: "codex", model: "pr" } },
+    };
+
+    const first = launchWorkspaceWorkflowAction(input);
+    await expect(launchWorkspaceWorkflowAction(input)).rejects.toThrow("already opening");
+    resolveFeatures({ provider: "codex", features: [], fetchedAt: "now" });
+    await first;
+
+    expect(calls.features).toHaveBeenCalledTimes(1);
+    expect(calls.navigate).toHaveBeenCalledTimes(1);
   });
 });

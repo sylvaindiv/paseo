@@ -86,6 +86,7 @@ import {
   useHorizontalScrollBoundary,
 } from "@/components/ui/horizontal-scroll-boundary";
 import { useSessionStore } from "@/stores/session-store";
+import { SyncedLoader } from "@/components/synced-loader";
 
 const DROPDOWN_WIDTH = 220;
 const DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH = 36;
@@ -122,6 +123,7 @@ const TAB_CLOSE_BUTTON_RESERVED_WIDTH = 0;
 const TAB_LABEL_LAYOUT_ALLOWANCE = 4;
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const ThemedSyncedLoader = withUnistyles(SyncedLoader);
 const ThemedX = withUnistyles(X);
 const ThemedCopy = withUnistyles(Copy);
 
@@ -233,6 +235,7 @@ interface WorkspaceNewTabButtonProps {
   paneId?: string;
   shortcutKeys: ShortcutKey[][] | null;
   placement: "inline" | "toolbar";
+  onCreateNewTab: () => void;
 }
 
 function WorkspaceNewTabButton({
@@ -243,31 +246,43 @@ function WorkspaceNewTabButton({
   paneId,
   shortcutKeys,
   placement,
+  onCreateNewTab,
 }: WorkspaceNewTabButtonProps) {
   const { t } = useTranslation();
   const tooltipText = t("workspace.tabs.actions.newTab");
-  const menu = (
-    <DropdownMenu>
+  const button =
+    host === "main" ? (
       <ToolbarButton
-        kind="menu"
         label={tooltipText}
         shortcut={shortcutKeys}
         testID="workspace-new-tab-button"
         style={placement === "inline" ? styles.inlineNewTabButton : undefined}
+        onPress={onCreateNewTab}
       >
         <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
       </ToolbarButton>
-      <WorkspaceNewTabMenuContent
-        serverId={serverId}
-        purpose={launchPurpose}
-        host={host}
-        panePanelKinds={panePanelKinds}
-        paneId={paneId}
-      />
-    </DropdownMenu>
-  );
+    ) : (
+      <DropdownMenu>
+        <ToolbarButton
+          kind="menu"
+          label={tooltipText}
+          shortcut={shortcutKeys}
+          testID="workspace-new-tab-button"
+          style={placement === "inline" ? styles.inlineNewTabButton : undefined}
+        >
+          <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
+        </ToolbarButton>
+        <WorkspaceNewTabMenuContent
+          serverId={serverId}
+          purpose={launchPurpose}
+          host={host}
+          panePanelKinds={panePanelKinds}
+          paneId={paneId}
+        />
+      </DropdownMenu>
+    );
 
-  return placement === "inline" ? <View style={styles.inlineAddButton}>{menu}</View> : menu;
+  return placement === "inline" ? <View style={styles.inlineAddButton}>{button}</View> : button;
 }
 
 function WorkspacePaneToolbarActions({
@@ -281,6 +296,7 @@ function WorkspacePaneToolbarActions({
   newTabShortcutKeys,
   serverId,
   paneId,
+  onCreateNewTab,
   onSplitRight,
   onSplitDown,
   onTogglePaneMaximized,
@@ -295,6 +311,7 @@ function WorkspacePaneToolbarActions({
   newTabShortcutKeys: ShortcutKey[][] | null;
   serverId: string;
   paneId?: string;
+  onCreateNewTab: () => void;
   onSplitRight?: () => void;
   onSplitDown?: () => void;
   onTogglePaneMaximized?: () => void;
@@ -333,6 +350,7 @@ function WorkspacePaneToolbarActions({
           serverId={serverId}
           paneId={paneId}
           shortcutKeys={newTabShortcutKeys}
+          onCreateNewTab={onCreateNewTab}
         />
       ) : null}
       {maximizeActionVisible && onTogglePaneMaximized ? (
@@ -696,6 +714,7 @@ function TabHandleContent({
   tabLabelSkeletonStyle,
   tabLabelStyle,
   modifiedTestId,
+  runningTestId,
 }: {
   presentation: WorkspaceTabPresentation;
   isHighlighted: boolean;
@@ -704,6 +723,7 @@ function TabHandleContent({
   tabLabelSkeletonStyle: React.ComponentProps<typeof View>["style"];
   tabLabelStyle: React.ComponentProps<typeof Text>["style"];
   modifiedTestId: string;
+  runningTestId: string;
 }) {
   const { t } = useTranslation();
   const tabHandleDataSet = useMemo(
@@ -712,9 +732,23 @@ function TabHandleContent({
   );
   // Conversations read as their title alone; files, terminals and browsers keep their icon.
   const showIcon = presentation.kind !== "agent" && presentation.kind !== "provider_subagent";
+  const showRunningLoader = !showIcon && presentation.statusBucket === "running";
 
   return (
     <View style={styles.tabHandle} dataSet={tabHandleDataSet}>
+      {showRunningLoader ? (
+        <View
+          style={styles.tabIcon}
+          accessibilityRole="progressbar"
+          accessibilityLabel="Agent running"
+          testID={runningTestId}
+        >
+          <ThemedSyncedLoader
+            size={14}
+            uniProps={isHighlighted ? foregroundColorMapping : mutedColorMapping}
+          />
+        </View>
+      ) : null}
       {showIcon ? (
         <View style={styles.tabIcon}>
           <WorkspaceTabIcon
@@ -899,6 +933,7 @@ function TabChip({
                 tabLabelSkeletonStyle={tabLabelSkeletonStyle}
                 tabLabelStyle={tabLabelStyle}
                 modifiedTestId={`workspace-tab-modified-${testIdentity}`}
+                runningTestId={`workspace-tab-running-${testIdentity}`}
               />
               {isActive ? (
                 <View
@@ -1443,6 +1478,7 @@ function ResolvedWorkspaceDesktopTabsRow({
               serverId={normalizedServerId}
               paneId={paneId}
               shortcutKeys={newTabKeys}
+              onCreateNewTab={createNewTab}
             />
           ) : null}
         </Animated.ScrollView>
@@ -1465,6 +1501,7 @@ function ResolvedWorkspaceDesktopTabsRow({
         newTabShortcutKeys={newTabKeys}
         serverId={normalizedServerId}
         paneId={paneId}
+        onCreateNewTab={createNewTab}
         onSplitRight={onSplitRight}
         onSplitDown={onSplitDown}
         onTogglePaneMaximized={onTogglePaneMaximized}

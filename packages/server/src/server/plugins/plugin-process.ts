@@ -92,7 +92,7 @@ export function createPluginWorker(options: {
 
   function validateMethod(method: string): string {
     const normalized = method.trim();
-    if (!/^[a-z][a-z0-9._-]*$/.test(normalized)) {
+    if (!/^[a-z][a-zA-Z0-9._-]*$/.test(normalized)) {
       throw new Error(`Invalid plugin RPC method: ${method}`);
     }
     if (handlers.has(normalized)) {

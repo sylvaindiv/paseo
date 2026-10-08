@@ -83,6 +83,7 @@ test.describe("Agent profiles in the model picker", () => {
       await page.keyboard.press("Shift+Tab");
       await expect(page.getByTestId("message-input-plan-stripe")).toHaveCount(0);
       await expect(input).toBeFocused();
+      await expect(input).toHaveValue("Keep the draft focused");
       await expectWorkspaceAgentConfiguration(workspace, {
         provider: "mock",
         model: "ten-second-stream",

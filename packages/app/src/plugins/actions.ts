@@ -13,6 +13,7 @@ import type { InstalledPlugin } from "./types";
 
 export interface PluginNavigation {
   openAgent?(agentId: string): void;
+  replaceAgent?(sourceAgentId: string, targetAgentId: string): void;
   openSettings(pluginId: string, screenId: string): void;
   openSurface(pluginId: string, surfaceId: string, params?: PluginScreenParams): void;
   openWorkspacePanel(pluginId: string, panelId: string, location: PluginPanelLocation): void;
@@ -63,7 +64,12 @@ export function createPluginAgentActionContext(input: {
     workspace,
     agent,
     navigation: navigation.openAgent
-      ? { openAgent: ({ agentId: targetAgentId }) => navigation.openAgent?.(targetAgentId) }
+      ? {
+          openAgent: ({ agentId: targetAgentId }) => navigation.openAgent?.(targetAgentId),
+          replaceAgent: navigation.replaceAgent
+            ? ({ agentId: targetAgentId }) => navigation.replaceAgent?.(agentId, targetAgentId)
+            : undefined,
+        }
       : undefined,
     openPanel(panelId, options) {
       const panel = plugin.workspacePanels.find((candidate) => candidate.id === panelId);

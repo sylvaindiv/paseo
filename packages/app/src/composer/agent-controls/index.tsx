@@ -25,6 +25,7 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useShallow } from "zustand/shallow";
 import { Settings2 } from "lucide-react-native";
 import { getAgentFeatureIcon, ThinkingIcon } from "@/agent-controls/icons";
+import { PLAN_MODE_FEATURE_ID } from "@/agent-controls/policy";
 import { formatThinkingOptionLabel } from "@/agent-controls/labels";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
 import { CombinedModelSelector } from "@/components/combined-model-selector";
@@ -57,6 +58,7 @@ import {
   getFeatureHighlightColor,
   isFeatureActive,
   getFeatureTooltip,
+  getFeatureToggleValue,
   getAgentControlHintKey,
   resolveAgentModelSelection,
 } from "@/composer/agent-controls/utils";
@@ -1372,6 +1374,11 @@ function DesktopFeatureItem({
   onActionComplete?: () => void;
 }) {
   const { theme } = useUnistyles();
+  const toggleValue = getFeatureToggleValue(feature);
+  const accessibilityState = useMemo(
+    () => ({ checked: isFeatureActive(feature), disabled }),
+    [feature, disabled],
+  );
   const featureSelector: AgentControlSelector = `feature-${feature.id}`;
   const featureAnchorRef = useRef<View>(null);
 
@@ -1385,11 +1392,11 @@ function DesktopFeatureItem({
   );
 
   const handleTogglePress = useCallback(() => {
-    if (feature.type === "toggle") {
-      onSetFeature?.(feature.id, !feature.value);
+    if (toggleValue !== null) {
+      onSetFeature?.(feature.id, toggleValue);
       onActionComplete?.();
     }
-  }, [feature, onActionComplete, onSetFeature]);
+  }, [feature.id, toggleValue, onActionComplete, onSetFeature]);
 
   const handleSelectOption = useCallback(
     (optionId: string) => {
@@ -1405,7 +1412,7 @@ function DesktopFeatureItem({
     [feature],
   );
 
-  if (feature.type === "toggle") {
+  if (toggleValue !== null) {
     const FeatureIcon = getAgentFeatureIcon(feature.icon);
     return (
       <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
@@ -1422,6 +1429,7 @@ function DesktopFeatureItem({
             showToolbarLabel={false}
             disabled={disabled}
             onPress={handleTogglePress}
+            accessibilityState={accessibilityState}
             accessibilityLabel={getFeatureTooltip(feature)}
             testID={`agent-feature-${feature.id}`}
           />
@@ -1527,39 +1535,33 @@ function SheetFeatureItem({
     ];
   }, [feature, t]);
 
-  if (feature.type === "toggle") {
+  const toggleValue = getFeatureToggleValue(feature);
+  const accessibilityState = useMemo(
+    () => ({ checked: isFeatureActive(feature), disabled }),
+    [feature, disabled],
+  );
+  const handleTogglePress = useCallback(() => {
+    if (toggleValue !== null) onSetFeature?.(feature.id, toggleValue);
+  }, [feature.id, onSetFeature, toggleValue]);
+  if (toggleValue !== null) {
     const FeatureIcon = getAgentFeatureIcon(feature.icon);
     return (
-      <>
-        <AgentControlTrigger
-          ref={featureAnchorRef}
-          icon={FeatureIcon}
-          iconColor={getFeatureIconColor(
-            feature,
-            theme.colors.palette,
-            theme.colors.foregroundMuted,
-          )}
-          surface="sheet"
-          label={feature.label}
-          value={feature.value ? t("agentControls.features.on") : t("agentControls.features.off")}
-          open={openSelector === featureSelector}
-          disabled={disabled}
-          onPress={handleSelectPress}
-          accessibilityLabel={getFeatureTooltip(feature)}
-          testID={`agent-feature-${feature.id}`}
-        />
-        <Combobox
-          options={comboboxOptions}
-          value={String(feature.value)}
-          onSelect={handleSelectOption}
-          open={openSelector === featureSelector}
-          onOpenChange={handleFeatureOpenChange}
-          anchorRef={featureAnchorRef}
-          presentation="push"
-          searchable={false}
-          header={sheetHeader}
-        />
-      </>
+      <AgentControlTrigger
+        icon={FeatureIcon}
+        iconColor={getFeatureIconColor(feature, theme.colors.palette, theme.colors.foregroundMuted)}
+        surface="sheet"
+        label={feature.label}
+        value={
+          isFeatureActive(feature)
+            ? t("agentControls.features.on")
+            : t("agentControls.features.off")
+        }
+        disabled={disabled}
+        onPress={handleTogglePress}
+        accessibilityState={accessibilityState}
+        accessibilityLabel={getFeatureTooltip(feature)}
+        testID={`agent-feature-${feature.id}`}
+      />
     );
   }
 
@@ -1974,6 +1976,15 @@ export function DraftAgentControls({
   const profileEditor = useAgentProfileEditor(modelSelectorServerId);
   const profileActions = resolveAgentProfileEditorActions(agentProfiles !== null, profileEditor);
 
+  const planFeature = features?.find(
+    (feature) => feature.id === PLAN_MODE_FEATURE_ID && feature.type === "toggle",
+  );
+  const handleTogglePlan = useCallback(() => {
+    if (planFeature?.type === "toggle") {
+      onSetFeature?.(PLAN_MODE_FEATURE_ID, !planFeature.value);
+    }
+  }, [onSetFeature, planFeature]);
+
   const modeControl = useMemo<AgentModeControlValue | null>(
     () =>
       selectedProvider && modeOptions.length > 0
@@ -1983,10 +1994,21 @@ export function DraftAgentControls({
             modeOptions,
             selectedModeId: selectedMode,
             onSelectMode,
+            onTogglePlan: planFeature && onSetFeature ? handleTogglePlan : undefined,
             disabled,
           }
         : null,
-    [selectedProvider, providerDefinitions, modeOptions, selectedMode, onSelectMode, disabled],
+    [
+      selectedProvider,
+      providerDefinitions,
+      modeOptions,
+      selectedMode,
+      onSelectMode,
+      disabled,
+      planFeature,
+      onSetFeature,
+      handleTogglePlan,
+    ],
   );
 
   return (

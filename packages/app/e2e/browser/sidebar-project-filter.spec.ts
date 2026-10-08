@@ -25,6 +25,70 @@ import {
 test.describe("Sidebar project filter", () => {
   test.describe.configure({ timeout: 180_000 });
 
+  test("hides the only project across reloads and restores it from the project filter", async ({
+    page,
+  }, testInfo) => {
+    const project = await seedWorkspace({ repoPrefix: "hide-project-", title: "Preserved work" });
+    const serverId = getServerId();
+    const projectRow = page.getByTestId(`sidebar-project-row-${project.projectKey}`);
+    const workspaceRow = page.getByTestId(
+      `sidebar-workspace-row-${serverId}:${project.workspaceId}`,
+    );
+    try {
+      await gotoAppShell(page);
+      await expect(projectRow).toBeVisible({ timeout: 30_000 });
+      await projectRow.click({ button: "right" });
+      const hide = page.getByTestId(`sidebar-project-menu-hide-${project.projectKey}`);
+      await expect(hide).toBeVisible();
+      await expect(page.locator('[data-menu-surface="true"]').filter({ has: hide })).toHaveCSS(
+        "opacity",
+        "1",
+      );
+      await page.screenshot({
+        animations: "disabled",
+        clip: { x: 0, y: 100, width: 500, height: 300 },
+        path: testInfo.outputPath("hide-project-menu.png"),
+      });
+      await hide.click();
+      await expect(projectRow).toHaveCount(0);
+      await expect(workspaceRow).toHaveCount(0);
+      await page.reload();
+      await expect(page.getByTestId("sidebar-display-preferences-menu")).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(projectRow).toHaveCount(0);
+      await openSidebarProjectFilter(page);
+      const restore = page.getByTestId(`sidebar-project-filter-${project.projectKey}`);
+      await expect(restore).toContainText("Show ");
+      await expect(page.getByTestId("sidebar-project-filter-all")).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      await page.screenshot({
+        animations: "disabled",
+        clip: { x: 0, y: 100, width: 500, height: 300 },
+        path: testInfo.outputPath("hidden-project-restore.png"),
+      });
+      await closeSidebarDisplayPreferences(page);
+      await selectSidebarStatusGrouping(page);
+      await closeSidebarDisplayPreferences(page);
+      await expect(workspaceRow).toHaveCount(0);
+      await openSidebarProjectFilter(page);
+      await restore.click();
+      await closeSidebarDisplayPreferences(page);
+      await expect(workspaceRow).toBeVisible({ timeout: 15_000 });
+      await page.reload();
+      await expect(workspaceRow).toBeVisible({ timeout: 30_000 });
+      await page.screenshot({
+        animations: "disabled",
+        clip: { x: 0, y: 100, width: 500, height: 300 },
+        path: testInfo.outputPath("restored-project.png"),
+      });
+    } finally {
+      await project.cleanup();
+    }
+  });
+
   for (const method of ["directory-search", "new-directory"] as const) {
     test(`includes a project added through ${method} without revealing excluded projects`, async ({
       page,

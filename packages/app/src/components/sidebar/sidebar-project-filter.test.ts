@@ -77,6 +77,30 @@ describe("filterWorkspacesByProjects", () => {
     expect(filtered(["alpha", "beta"])).toEqual(["one", "two", "three"]);
   });
 
+  test("excludes hidden projects even when selected, without hiding future projects", () => {
+    expect(
+      filterWorkspacesByProjects({
+        workspaces,
+        projectFilters: [],
+        hiddenProjectKeys: ["alpha"],
+      }).map((entry) => entry.workspaceId),
+    ).toEqual(["three"]);
+    expect(
+      filterWorkspacesByProjects({
+        workspaces,
+        projectFilters: ["alpha"],
+        hiddenProjectKeys: ["alpha"],
+      }),
+    ).toEqual([]);
+    expect(
+      filterWorkspacesByProjects({
+        workspaces,
+        projectFilters: [],
+        hiddenProjectKeys: ["alpha", "beta"],
+      }),
+    ).toEqual([]);
+  });
+
   test("keeps nothing for a project with no workspaces", () => {
     expect(filtered(["gamma"])).toEqual([]);
   });

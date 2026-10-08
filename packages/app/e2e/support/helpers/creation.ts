@@ -4,7 +4,7 @@ import { daemonWsRoutePattern } from "./daemon-port";
 import { gotoAppShell } from "./app";
 import { gotoWorkspace } from "./launcher";
 import { fillComposerDraft } from "./composer";
-import { createAgentTabFromMenu } from "./workspace-tabs";
+import { createAgentTab } from "./workspace-tabs";
 import {
   openNewWorkspaceComposer,
   selectWorkspaceIsolation,
@@ -151,10 +151,10 @@ export async function createCreationScenario(page: Page) {
     },
     async openAgentDraft() {
       await gotoWorkspace(page, project.workspaceId);
-      await createAgentTabFromMenu(page);
+      await createAgentTab(page);
     },
     async startAnotherDraft() {
-      await createAgentTabFromMenu(page);
+      await createAgentTab(page);
     },
     async submitPrompt(prompt: string, button = "Send message") {
       await fillComposerDraft(page, prompt);

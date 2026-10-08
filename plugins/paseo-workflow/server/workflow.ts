@@ -60,6 +60,7 @@ interface Handoff {
   selection?: "standard" | "advanced";
   phase: "closing" | "closed" | "running" | "outcome_unknown";
   agentId?: string;
+  profileId?: string;
 }
 interface Routing {
   attempt: number;
@@ -113,11 +114,6 @@ const UNCONFIRMED_APPROVAL =
   "Approval follow-up outcome_unknown. Inspect this conversation before continuing; automatic completion is suspended.";
 export interface WorkflowPort {
   profiles(): Promise<AgentProfile[]>;
-  models(
-    provider: string,
-    cwd: string,
-  ): Promise<Array<{ id: string; thinkingOptions?: Array<{ id: string }> }>>;
-  classify(briefing: string, signal: AbortSignal): Promise<ExecutionDecision>;
   agent(id: string): Promise<WorkflowAgent>;
   workspace(id: string): Promise<{ cwd: string; intent?: string | null }>;
   timeline(id: string, projection?: "canonical" | "projected"): Promise<AgentTimelineItem[]>;
@@ -139,6 +135,7 @@ export interface WorkflowPort {
   revise(context: PlanContext, text: string, messageId: string): Promise<boolean>;
   respond(agentId: string, requestId: string, response: AgentPermissionResponse): Promise<void>;
   claimReview(context: PlanContext, active: boolean): Promise<void>;
+  ensurePlanPermission(context: StoredPlanContext): Promise<AgentPermissionRequest>;
   read(): Promise<WorkflowState>;
   write(state: WorkflowState): Promise<void>;
 }
@@ -380,17 +377,9 @@ function planCandidates(plan: Workflow["plans"][string]): string[] {
 
 export class WorkflowController {
   private queue: Promise<unknown> = Promise.resolve();
-  private jobs = new Map<string, Promise<void>>();
-  private routingControllers = new Set<AbortController>();
-  private runningRoutingAttempts = new Set<string>();
-  private rescheduled = new Set<string>();
-  private disposed = false;
   constructor(private readonly port: WorkflowPort) {}
 
-  dispose() {
-    this.disposed = true;
-    for (const controller of this.routingControllers) controller.abort();
-  }
+  dispose() {}
 
   async planRequested(context: PlanContext, automaticReview = true) {
     const automatic = await this.serial(async () => {
@@ -431,209 +420,12 @@ export class WorkflowController {
     });
   }
 
-  prepareHandoff(context: StoredPlanContext) {
-    return this.serial(async () => {
-      const agent = await this.available(context);
-      const state = await this.port.read();
-      const workflow = await this.workflow(state, agent);
-      const previous = workflow.plans[context.callId];
-      if (previous && !samePlan(previous.context, context))
-        throw new Error("Plan calls are append-only.");
-      workflow.plans[context.callId] ??= { context };
-      const plan = workflow.plans[context.callId];
-      if (context.permissionRequestId)
-        plan.context.permissionRequestId = context.permissionRequestId;
-      if (plan.review || plan.approved)
-        throw new Error("This plan is already reviewed or approved.");
-      workflow.preparedPlanId = context.callId;
-      if (!plan.routing) {
-        await this.refreshPlannerTranscript(state, workflow);
-        plan.routing = { attempt: 1, phase: "running", promptStarted: false };
-      }
-      await this.port.write(state);
-      this.schedule(workflow.id, context.callId);
-      return { recommendation: workflow.recommendation };
-    });
+  async prepareHandoff(_context: StoredPlanContext): Promise<{ recommendation: null }> {
+    throw new Error("Choose an agent profile explicitly to hand off this plan.");
   }
 
-  enqueueHandoff(context: PlanContext) {
-    return this.serial(async () => {
-      const state = await this.port.read();
-      const agent = await this.port.agent(context.agentId);
-      const workflow = await this.workflow(state, agent);
-      const previous = workflow.plans[context.callId];
-      if (previous && !samePlan(previous.context, context))
-        throw new Error("This plan context does not match the recorded plan.");
-      if (previous?.handoff && previous.handoff.phase !== "closed")
-        return { handoffRequested: true };
-      if (previous?.handoff?.phase === "closed")
-        isResumingClosedHandoff(
-          workflow,
-          previous,
-          latestPlanItem(await this.port.timeline(context.agentId)),
-        );
-      else await this.available(context);
-      if (previous?.review || previous?.approved)
-        throw new Error("This plan is already reviewed or approved.");
-      const plan = previous ?? (workflow.plans[context.callId] = { context });
-      plan.context = context;
-      plan.handoffRequested = true;
-      workflow.preparedPlanId = context.callId;
-      if (!plan.routing || plan.routing.phase === "failed")
-        plan.routing = {
-          attempt: (plan.routing?.attempt ?? 0) + 1,
-          phase: "running",
-          promptStarted: false,
-        };
-      else if (plan.routing.phase === "complete") delete plan.routing.error;
-      await this.port.write(state);
-      this.schedule(workflow.id, context.callId);
-      return { handoffRequested: true };
-    });
-  }
-
-  /** Classifies the final plan and persists the fixed execution route. */
-  private schedule(workflowId: string, callId: string) {
-    const key = `${workflowId}:${callId}`;
-    if (this.disposed) return;
-    if (this.jobs.has(key)) {
-      this.rescheduled.add(key);
-      return;
-    }
-    const job = this.runRouting(workflowId, callId)
-      .catch(() => undefined)
-      .finally(() => {
-        this.jobs.delete(key);
-        if (this.rescheduled.delete(key)) this.schedule(workflowId, callId);
-      });
-    this.jobs.set(key, job);
-  }
-
-  private async routingSnapshot(workflowId: string, callId: string) {
-    return this.serial(async () => {
-      if (this.disposed) return undefined;
-      const workflow = (await this.port.read()).workflows[workflowId];
-      const plan = workflow?.plans[callId];
-      return workflow && plan ? { workflow, plan } : undefined;
-    });
-  }
-
-  private async updateRouting(
-    workflowId: string,
-    callId: string,
-    attempt: number,
-    update: Partial<Routing>,
-  ) {
-    return this.serial(async () => {
-      if (this.disposed) return false;
-      const state = await this.port.read();
-      const routing = state.workflows[workflowId]?.plans[callId]?.routing;
-      if (!routing || routing.attempt !== attempt) return false;
-      Object.assign(routing, update);
-      if ("error" in update && update.error === undefined) delete routing.error;
-      await this.port.write(state);
-      return true;
-    });
-  }
-
-  private async runRouting(workflowId: string, callId: string) {
-    const snapshot = await this.routingSnapshot(workflowId, callId);
-    if (!snapshot) return;
-    const { workflow, plan } = snapshot;
-    const routing = plan.routing;
-    if (!routing || routing.phase === "failed") return;
-    if (routing.phase === "outcome_unknown") return;
-    const update = (change: Partial<Routing>) =>
-      this.updateRouting(workflowId, callId, routing.attempt, change);
-    if (routing.phase !== "complete") {
-      if (routing.promptStarted) {
-        await this.failRouting(
-          workflowId,
-          callId,
-          routing.attempt,
-          "La classification JEV a été interrompue. Relancez le handoff explicitement.",
-        );
-        return;
-      }
-      try {
-        if (!(await update({ promptStarted: true }))) return;
-        const controller = new AbortController();
-        const attemptKey = `${workflowId}:${callId}:${routing.attempt}`;
-        this.routingControllers.add(controller);
-        this.runningRoutingAttempts.add(attemptKey);
-        let decision: ExecutionDecision;
-        try {
-          decision = await this.port.classify(
-            briefing(workflow, plan.context.text),
-            controller.signal,
-          );
-        } finally {
-          this.routingControllers.delete(controller);
-          this.runningRoutingAttempts.delete(attemptKey);
-        }
-        const cwd = (await this.port.workspace(workflow.workspaceId)).cwd;
-        await this.executionModel(decision, cwd);
-        if (!(await update({ phase: "complete", decision, error: undefined }))) return;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        await this.failRouting(
-          workflowId,
-          callId,
-          routing.attempt,
-          `${message} Le plan reste disponible pour une relance explicite.`,
-        );
-        return;
-      }
-    }
-    await this.finishQueuedHandoff(workflowId, callId);
-  }
-
-  private async failRouting(workflowId: string, callId: string, attempt: number, error: string) {
-    return this.serial(async () => {
-      if (this.disposed) return false;
-      const state = await this.port.read();
-      const plan = state.workflows[workflowId]?.plans[callId];
-      if (!plan?.routing || plan.routing.attempt !== attempt) return false;
-      plan.routing.phase = "failed";
-      plan.routing.error = error;
-      plan.handoffRequested = false;
-      await this.port.write(state);
-      return true;
-    });
-  }
-
-  private async finishQueuedHandoff(workflowId: string, callId: string) {
-    const current = await this.routingSnapshot(workflowId, callId);
-    if (
-      !current?.plan.handoffRequested ||
-      (current.plan.handoff && current.plan.handoff.phase !== "closed") ||
-      this.disposed
-    )
-      return;
-    try {
-      await this.handoff(actionContext(current.plan.context));
-    } catch (error) {
-      await this.serial(async () => {
-        if (this.disposed) return;
-        const state = await this.port.read();
-        const pending = state.workflows[workflowId]?.plans[callId];
-        if (!pending) return;
-        pending.handoffRequested = false;
-        if (pending.routing)
-          pending.routing.error = error instanceof Error ? error.message : String(error);
-        await this.port.write(state);
-      });
-    }
-  }
-
-  private async executionModel(decision: ExecutionDecision, cwd: string) {
-    const model = (await this.port.models(decision.provider, cwd)).find(
-      (entry) => entry.id === decision.model,
-    );
-    if (!model?.thinkingOptions?.some((option) => option.id === decision.effort))
-      throw new Error(
-        `The provider does not expose ${decision.model}/${decision.effort}. Update the provider and retry.`,
-      );
+  async enqueueHandoff(_context: PlanContext): Promise<{ handoffRequested: boolean }> {
+    throw new Error("Choose an agent profile explicitly to hand off this plan.");
   }
 
   status(agentId: string, workspaceId: string) {
@@ -652,14 +444,54 @@ export class WorkflowController {
         await this.port.write(state);
       }
       if (workflow) await this.reconcile(state, workflow);
-      return this.statusView(workflow);
+      const latest = latestPlanItem(await this.port.timeline(agentId));
+      let context = await this.currentPlanContext(agent, latest);
+      const closed = latest && workflow?.plans[latest.callId];
+      if (
+        !context &&
+        closed?.handoff?.phase === "closed" &&
+        isClosureDecision(workflow!, closed, latest, "handoff") &&
+        closed.context.permissionRequestId
+      )
+        context = actionContext(closed.context);
+      return {
+        ...this.statusView(workflow, context, latest?.callId),
+        profiles: (await this.port.profiles()).map(({ id, name }) => ({ id, name })),
+      };
     });
   }
 
-  private statusView(workflow: Workflow | undefined) {
-    const prepared = workflow?.preparedPlanId ? workflow.plans[workflow.preparedPlanId] : undefined;
+  private async currentPlanContext(agent: WorkflowAgent, latest: PlanItem | undefined) {
+    if (!agent.workspaceId || latest?.detail.type !== "plan") return undefined;
+    const permission = agent.pendingPermissions.find(
+      (entry) => entry.kind === "plan" && entry.sourcePlanCallId === latest.callId,
+    );
+    const candidate = {
+      workspaceId: agent.workspaceId,
+      agentId: agent.id,
+      callId: latest.callId,
+      text: latest.detail.text,
+      permissionRequestId: permission?.id,
+    };
+    try {
+      await this.available(candidate);
+      const permissionRequestId =
+        permission?.id ?? (await this.port.ensurePlanPermission(candidate)).id;
+      return { ...candidate, permissionRequestId };
+    } catch {
+      // Status hides stale, resolved, reviewed or busy proposals; actions revalidate admission.
+      return undefined;
+    }
+  }
+
+  private statusView(
+    workflow: Workflow | undefined,
+    context?: PlanContext,
+    currentCallId?: string,
+  ) {
+    const prepared = workflow?.plans[context?.callId ?? currentCallId ?? ""];
     return {
-      plan: prepared?.context.permissionRequestId ? actionContext(prepared.context) : null,
+      plan: context ?? null,
       recommendation: workflow?.recommendation ?? null,
       routing: prepared?.routing ?? null,
       handoffRequested: prepared?.handoffRequested ?? false,
@@ -681,7 +513,7 @@ export class WorkflowController {
         })),
     };
   }
-  handoff(context: PlanContext) {
+  handoff(context: PlanContext, selectedProfileId?: string) {
     return this.serial(async () => {
       const state = await this.port.read();
       const agent = await this.port.agent(context.agentId);
@@ -699,16 +531,11 @@ export class WorkflowController {
       if (plan.handoff?.phase !== "closed") await this.available(context);
       if (plan.review || plan.approved)
         throw new Error("This plan is already reviewed or approved.");
-      const decision = plan.routing?.phase === "complete" ? plan.routing.decision : undefined;
-      if (!decision)
-        throw new Error(
-          "Executor preparation is required. Use workflow.handoff.prepare and workflow.handoff.enqueue; this request never waits for classification.",
-        );
-      await this.executionModel(decision, (await this.port.workspace(workflow.workspaceId)).cwd);
+      const profile = await this.handoffProfile(plan.handoff, selectedProfileId);
       if (plan.handoff?.phase !== "closed") {
         await this.available(context);
         plan.context = context;
-        plan.handoff = { phase: "closing" };
+        plan.handoff = { phase: "closing", profileId: profile!.id };
         await this.port.write(state);
         await this.port.respond(context.agentId, context.permissionRequestId, {
           behavior: "deny",
@@ -718,17 +545,33 @@ export class WorkflowController {
         plan.handoff.phase = "closed";
         await this.port.write(state);
       }
+      if (!plan.handoff.agentId && profile) {
+        plan.handoff.profileId = profile.id;
+        await this.port.write(state);
+      }
       return {
-        agentId: await this.startHandoff(state, workflow, plan, decision, resumingClosed),
+        agentId: await this.startHandoff(state, workflow, plan, profile, resumingClosed),
       };
     });
+  }
+
+  private async handoffProfile(handoff: Handoff | undefined, selectedProfileId?: string) {
+    if (handoff?.agentId) return undefined;
+    const profile = (await this.port.profiles()).find((entry) => entry.id === selectedProfileId);
+    if (!profile)
+      throw new Error(
+        selectedProfileId
+          ? "The selected agent profile is no longer available."
+          : "Choose an agent profile explicitly to hand off this plan.",
+      );
+    return profile;
   }
 
   private async startHandoff(
     state: WorkflowState,
     workflow: Workflow,
     plan: Workflow["plans"][string],
-    decision: ExecutionDecision,
+    profile: AgentProfile | undefined,
     resume = false,
   ) {
     const handoff = plan.handoff!;
@@ -737,29 +580,17 @@ export class WorkflowController {
       if (!isClosureDecision(workflow, plan, record, "handoff"))
         throw new Error("This handoff was superseded by a newer plan.");
     }
-    const cwd = (await this.port.workspace(workflow.workspaceId)).cwd;
-    const model = (await this.port.models(decision.provider, cwd)).find(
-      (entry) => entry.id === decision.model,
-    );
-    if (!model?.thinkingOptions?.some((option) => option.id === decision.effort))
-      throw new Error(
-        `The provider does not expose ${decision.model}/${decision.effort}. Update the provider and retry.`,
-      );
     const executorId =
       handoff.agentId ??
       (await this.port.create({
         workspaceId: workflow.workspaceId,
         idempotencyKey: `workflow:${workflow.id}:handoff:${plan.context.callId}`,
-        config: {
-          provider: `${decision.provider}/${decision.model}`,
-          modeId: "auto",
-          thinkingOptionId: decision.effort,
-          writePolicy: "read_write",
-        },
+        launchProfileId: profile!.id,
+        config: profileConfig(profile!, false),
         labels: {
           "paseo.workflow.id": workflow.id,
           "paseo.workflow.plan": plan.context.callId,
-          "paseo.workflow.role": `executor-${decision.category}`,
+          "paseo.workflow.role": "executor",
         },
       }));
     handoff.agentId = executorId;
@@ -768,7 +599,7 @@ export class WorkflowController {
     try {
       await this.port.send(
         executorId,
-        `/paseo-handoff\nPASEO_WORKFLOW_HANDOFF ${JSON.stringify({ mode: "receiver", workflowId: workflow.id, planId: plan.context.callId, role: `executor-${decision.category}` })}\nExecute the approved plan here without creating another agent. Follow its scope and explicit authorizations; handoff grants no additional permissions. Preserve pre-existing and concurrent changes. Run targeted validation and report results and blockers.\n${JSON.stringify({ plan: plan.context.text, git: workflow.git }, null, 2)}`,
+        `/paseo-handoff\nPASEO_WORKFLOW_HANDOFF ${JSON.stringify({ mode: "receiver", workflowId: workflow.id, planId: plan.context.callId, role: "executor" })}\nExecute the approved plan here without creating another agent. Follow its scope and explicit authorizations; handoff grants no additional permissions. Preserve pre-existing and concurrent changes. Run targeted validation and report results and blockers.\n${JSON.stringify({ plan: plan.context.text, git: workflow.git }, null, 2)}`,
         `workflow:${workflow.id}:handoff:${plan.context.callId}:prompt`,
       );
     } catch (error) {
@@ -797,7 +628,10 @@ export class WorkflowController {
     timeline: readonly AgentTimelineItem[],
   ): Promise<boolean> {
     const agentId = agent.id;
-    if (agent.launchProfileId === profileId("router"))
+    if (
+      agent.launchProfileId === profileId("router") &&
+      agent.labels["paseo.workflow.role"] !== "executor"
+    )
       return this.routerFinished(agent, state, text);
     const workflow = state.workflows[agent.labels["paseo.workflow.id"] ?? agent.id];
     if (!workflow) return false;
@@ -822,10 +656,6 @@ export class WorkflowController {
       if (!turnId) return;
       const state = await this.port.read();
       const agent = await this.port.agent(agentId);
-      if (agent.labels["paseo.workflow.role"] === "execution-router") {
-        this.schedule(agent.labels["paseo.workflow.id"], agent.labels["paseo.workflow.plan"]);
-        return;
-      }
       await this.consumeTurn(state, agent, turnId);
     });
   }
@@ -850,6 +680,7 @@ export class WorkflowController {
       .join("");
     if (
       agent.launchProfileId === profileId("router") &&
+      agent.labels["paseo.workflow.role"] !== "executor" &&
       !text.trim().startsWith("{") &&
       !text.trim().startsWith("```")
     )
@@ -926,7 +757,7 @@ export class WorkflowController {
 
   private async reconcile(state: WorkflowState, workflow: Workflow) {
     // One bounded pass over existing operations, never replay arbitrary agent history.
-    const latestPlan = await this.reconcilePlanTimeline(state, workflow);
+    await this.reconcilePlanTimeline(state, workflow);
     const candidates = new Set<string>();
     if (
       !workflow.routed &&
@@ -937,16 +768,7 @@ export class WorkflowController {
     const activePlan = workflow.plans[workflow.activePlanId ?? ""];
     if (activePlan?.approved && !activePlan.final) candidates.add(workflow.plannerId);
     for (const plan of Object.values(workflow.plans)) {
-      await this.reconcileRouting(state, workflow, plan);
-      await this.resumePlan(state, workflow, plan, latestPlan);
-      if (
-        plan.routing &&
-        (plan.routing.phase === "running" ||
-          (plan.routing.phase === "complete" &&
-            plan.handoffRequested &&
-            (!plan.handoff || plan.handoff.phase === "closed")))
-      )
-        this.schedule(workflow.id, plan.context.callId);
+      await this.resumePlan(state, workflow, plan);
       for (const id of planCandidates(plan)) candidates.add(id);
     }
     for (const agentId of candidates) {
@@ -954,44 +776,14 @@ export class WorkflowController {
     }
   }
 
-  private async reconcileRouting(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-  ) {
-    const routing = plan.routing;
-    if (!routing) return;
-    const legacy = routing.agentId && routing.phase !== "complete";
-    const interrupted =
-      routing.phase === "running" &&
-      routing.promptStarted &&
-      !this.runningRoutingAttempts.has(`${workflow.id}:${plan.context.callId}:${routing.attempt}`);
-    if (!legacy && !interrupted) return;
-    routing.phase = "failed";
-    routing.error = legacy
-      ? "Ancien classificateur Codex interrompu. Relancez le handoff explicitement."
-      : "La classification JEV a été interrompue. Relancez le handoff explicitement.";
-    plan.handoffRequested = false;
-    await this.port.write(state);
-  }
-
   private async resumePlan(
     state: WorkflowState,
     workflow: Workflow,
     plan: Workflow["plans"][string],
-    latestPlan: PlanItem | undefined,
   ) {
     if (plan.review?.phase === "closed" && plan.review.agentId && plan.review.promptSent) {
       plan.review.phase = "running";
       await this.port.write(state);
-    }
-    if (
-      plan.handoff?.phase === "closed" &&
-      !plan.handoff.agentId &&
-      isClosureDecision(workflow, plan, latestPlan, "handoff")
-    ) {
-      const decision = plan.routing?.decision;
-      if (decision) await this.startHandoff(state, workflow, plan, decision, true);
     }
     if (plan.review?.phase === "complete")
       await this.port.claimReview(actionContext(plan.context), false);

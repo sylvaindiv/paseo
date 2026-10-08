@@ -21,6 +21,7 @@ interface RequestInput {
   workspace: string;
   workspaceId?: string;
   handoffDisabledReason?: string;
+  handoffProfiles?: { id: string; name: string }[];
 }
 function handoffDisabledReason(input: RequestInput, plan: unknown): string | undefined {
   if (input.handoffDisabledReason) return input.handoffDisabledReason;
@@ -49,6 +50,7 @@ export function projectWidgetRequest(input: RequestInput): WidgetRequest | null 
     planCallId: request.sourcePlanCallId,
     planText: typeof plan === "string" ? plan : undefined,
     handoffDisabledReason: handoffDisabledReason(input, plan),
+    handoffProfiles: input.handoffProfiles,
     agentTitle,
     workspace,
     kind: request.kind,

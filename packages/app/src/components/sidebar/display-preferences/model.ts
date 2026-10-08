@@ -32,6 +32,8 @@ export interface SidebarDisplayPreferences {
   clearHostFilters: () => void;
   /** Raw stored selection. For anything the user sees, use the model's resolved list instead. */
   projectFilters: readonly string[];
+  hiddenProjectKeys: readonly string[];
+  showProject: (viewKey: string) => void;
   toggleProjectFilter: (viewKey: string) => void;
   clearProjectFilters: () => void;
   labelFilter: SidebarLabelFilter;
@@ -53,6 +55,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
   const hostFilters = useSidebarViewStore((state) => state.hostFilters);
   const toggleHostFilter = useSidebarViewStore((state) => state.toggleHostFilter);
   const clearHostFilters = useSidebarViewStore((state) => state.clearHostFilters);
+  const hiddenProjectKeys = useSidebarViewStore((state) => state.hiddenProjectKeys);
+  const showProject = useSidebarViewStore((state) => state.includeProjectFilter);
   const projectFilters = useSidebarViewStore((state) => state.projectFilters);
   const toggleProjectFilter = useSidebarViewStore((state) => state.toggleProjectFilter);
   const clearProjectFilters = useSidebarViewStore((state) => state.clearProjectFilters);
@@ -118,6 +122,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       toggleHostFilter,
       clearHostFilters,
       projectFilters,
+      hiddenProjectKeys,
+      showProject,
       toggleProjectFilter,
       clearProjectFilters,
       labelFilter,
@@ -139,6 +145,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       toggleHostFilter,
       clearHostFilters,
       projectFilters,
+      hiddenProjectKeys,
+      showProject,
       toggleProjectFilter,
       clearProjectFilters,
       labelFilter,

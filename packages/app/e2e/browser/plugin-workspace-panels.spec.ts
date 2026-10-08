@@ -1,3 +1,5 @@
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
 import { pluginRequirements } from "../support/helpers/plugin-fixture";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,7 +11,11 @@ import { openCommandCenter } from "../support/helpers/command-center";
 import { submitMessage } from "../support/helpers/composer";
 import { addConnectedHostAndReload } from "../support/helpers/hosts";
 import { startIsolatedHostDaemon } from "../support/helpers/isolated-host-daemon";
-import { buildAgentRoute } from "../support/helpers/mock-agent";
+import {
+  seedMockAgentWorkspace,
+  openAgentRoute,
+  buildAgentRoute,
+} from "../support/helpers/mock-agent";
 import { connectNewWorkspaceDaemonClient } from "../support/helpers/new-workspace";
 import { seedWorkspace } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
@@ -498,4 +504,102 @@ test.describe("plugin workspace panels and Command Center", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+test("workflow profile panel transfers the exact plan with the selected host profile", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const client = await connectDaemonClient<DaemonClient>({
+    clientIdPrefix: "workflow-profile-panel",
+  });
+  const previous = await client.getDaemonConfig();
+  const profiles = [
+    {
+      id: "workflow-panel-first",
+      name: "Implementation",
+      provider: "mock",
+      model: "e2e-fast-stream",
+      modeId: "load-test",
+    },
+    {
+      id: "paseo-workflow-planner",
+      name: "Deep review",
+      provider: "mock",
+      model: "ten-second-stream",
+      modeId: "load-test",
+      thinkingOptionId: "high",
+    },
+  ];
+  const session = await seedMockAgentWorkspace({
+    repoPrefix: "workflow-profile-panel-",
+    title: "Workflow panel source",
+    initialPrompt: "Emit synthetic plan approval.",
+  });
+  try {
+    await client.patchDaemonConfig({ pluginsEnabled: true, agentProfiles: profiles });
+    await client.installDirectoryPlugin(
+      path.resolve(__dirname, "../../../../plugins/paseo-workflow"),
+    );
+    await page.setViewportSize(WIDE_VIEWPORT);
+    await openAgentRoute(page, session);
+    await runCommand(page, "Open workflow review");
+    const row = page.getByTestId("workflow-handoff-profiles");
+    await expect(row).toBeVisible();
+    await expect(row.getByRole("button")).toHaveText(profiles.map((profile) => profile.name));
+    await capture(page, testInfo, "workflow-profile-panel-desktop");
+    const before = (await client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
+      workspaceId: session.workspaceId,
+      agentId: session.agentId,
+    })) as {
+      plan: {
+        workspaceId: string;
+        agentId: string;
+        permissionRequestId: string;
+        callId: string;
+        text: string;
+      };
+    };
+    expect(before.plan.text).toBeTruthy();
+    await row.getByRole("button", { name: profiles[1].name, exact: true }).click();
+    await expect(row).toHaveCount(0);
+    const status = (await client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
+      workspaceId: session.workspaceId,
+      agentId: session.agentId,
+    })) as { handoff: { agentId: string } };
+    const executorId = status.handoff.agentId;
+    const executor = await client.fetchAgent(executorId);
+    expect(executor!.agent).toMatchObject({
+      workspaceId: session.workspaceId,
+      launchProfileId: profiles[1].id,
+      provider: "mock",
+      model: profiles[1].model,
+      currentModeId: profiles[1].modeId,
+      thinkingOptionId: profiles[1].thinkingOptionId,
+      labels: { "paseo.workflow.role": "executor" },
+    });
+    const resumed = (await client.invokePluginRpc(
+      "paseo-workflow",
+      "workflow.plan.handoffToProfile.request",
+      {
+        ...before.plan,
+        profileId: profiles[1].id,
+      },
+    )) as { agentId: string };
+    expect(resumed.agentId).toBe(executorId);
+    await expect(page.getByTestId(`workspace-tab-agent_${executorId}`).first()).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  } finally {
+    await client.removePlugin("paseo-workflow").catch(() => undefined);
+    await client
+      .patchDaemonConfig({
+        pluginsEnabled: previous.config.pluginsEnabled ?? false,
+        agentProfiles: previous.config.agentProfiles ?? [],
+      })
+      .catch(() => undefined);
+    await client.close();
+    await session.cleanup();
+  }
 });

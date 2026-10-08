@@ -1,5 +1,6 @@
 import { ASSISTANT_IMAGE_DEFAULT_ASPECT_RATIO } from "@/utils/assistant-image-metadata";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { Button } from "@/components/ui/button";
 import { TaskListRow } from "@/components/task-list-row";
 import {
   View,
@@ -81,6 +82,7 @@ import { setAssistantMarkdownBlockHeight } from "@/utils/assistant-message-heigh
 import { isRenderProfileEnabled } from "@/utils/render-profiler";
 import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
 import { PlanCard } from "./plan-card";
+import { parseHandoffMessage } from "./handoff-message";
 import { useToolCallSheet } from "./tool-call-sheet";
 import { ToolCallDetailsContent } from "./tool-call-details";
 import {
@@ -339,6 +341,11 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     maxWidth: { xs: "100%", md: "90%" },
     cursor: "auto",
   },
+  handoffContent: {
+    alignItems: "stretch",
+    maxWidth: "100%",
+    width: "100%",
+  },
   containerSpacing: {
     marginBottom: theme.spacing[1],
   },
@@ -357,6 +364,44 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     paddingVertical: theme.spacing[2],
     minWidth: 0,
     flexShrink: 1,
+  },
+  handoffPresentation: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
+  handoffCopyButton: {
+    alignSelf: "flex-start",
+  },
+  handoffDetails: {
+    gap: theme.spacing[2],
+  },
+  handoffDetailsHeader: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    minHeight: 24,
+  },
+  handoffDetailsChevron: {},
+  handoffDetailsChevronExpanded: {
+    transform: [{ rotate: "90deg" }],
+  },
+  handoffDetailsTitle: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+  },
+  handoffDetailsBody: {
+    gap: theme.spacing[2],
+  },
+  handoffDetailsText: {
+    color: theme.colors.foregroundMuted,
+    fontFamily: theme.fontFamily.mono,
+    fontSize: theme.fontSize.sm,
+    lineHeight: Math.round(theme.fontSize.sm * 1.4),
+    ...(isWeb ? { overflowWrap: "anywhere" as const } : {}),
   },
   text: {
     color: theme.colors.workspace.foreground,
@@ -427,6 +472,104 @@ function UserMessageImagePill({ image, onOpen, accessibilityLabel }: UserMessage
 
 const MESSAGE_TEXT_DATASET = { messageText: "true" };
 
+function HandoffCopyButton({
+  text,
+  label,
+  testID,
+}: {
+  text: string;
+  label: string;
+  testID?: string;
+}) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(async () => {
+    await writeMarkdownToRichClipboard(text, getDefaultMarkdownClipboardEnvironment());
+    setCopied(true);
+  }, [text]);
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      leftIcon={copied ? Check : Copy}
+      onPress={handleCopy}
+      accessibilityLabel={copied ? t("message.actions.copied") : label}
+      style={userMessageStylesheet.handoffCopyButton}
+      testID={testID}
+    >
+      {copied ? t("message.actions.copied") : label}
+    </Button>
+  );
+}
+
+function HandoffMessage({ plan, message }: { plan: string; message: string }) {
+  const { t } = useTranslation();
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const accessibilityState = useMemo(() => ({ expanded: detailsExpanded }), [detailsExpanded]);
+  const webExpandedState = useMemo(
+    () => (isWeb ? ({ "aria-expanded": detailsExpanded } as const) : null),
+    [detailsExpanded],
+  );
+  const chevronStyle = useMemo(
+    () => [
+      userMessageStylesheet.handoffDetailsChevron,
+      detailsExpanded && userMessageStylesheet.handoffDetailsChevronExpanded,
+    ],
+    [detailsExpanded],
+  );
+  const toggleDetails = useCallback(() => setDetailsExpanded((value) => !value), []);
+  const copyPlanButton = useMemo(
+    () => <HandoffCopyButton text={plan} label={t("message.handoff.copyPlan")} />,
+    [plan, t],
+  );
+
+  return (
+    <>
+      <PlanCard
+        title={t("message.handoff.planTitle")}
+        text={plan}
+        testID="handoff-plan-card"
+        disableOuterSpacing
+        footer={copyPlanButton}
+      />
+      <View style={userMessageStylesheet.handoffDetails}>
+        <Pressable
+          {...webExpandedState}
+          accessibilityRole="button"
+          accessibilityLabel={t("message.handoff.details")}
+          accessibilityState={accessibilityState}
+          onPress={toggleDetails}
+          style={userMessageStylesheet.handoffDetailsHeader}
+        >
+          <View style={chevronStyle}>
+            <ThemedChevronRightIcon size={16} uniProps={foregroundMutedColorMapping} />
+          </View>
+          <Text style={userMessageStylesheet.handoffDetailsTitle}>
+            {t("message.handoff.details")}
+          </Text>
+        </Pressable>
+        {detailsExpanded ? (
+          <View style={userMessageStylesheet.handoffDetailsBody}>
+            <Text
+              selectable
+              style={userMessageStylesheet.handoffDetailsText}
+              dataSet={MESSAGE_TEXT_DATASET}
+            >
+              {message}
+            </Text>
+            <HandoffCopyButton
+              text={message}
+              label={t("message.actions.copyMessage")}
+              testID="handoff-copy-message"
+            />
+          </View>
+        ) : null}
+      </View>
+    </>
+  );
+}
+
 export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
@@ -461,6 +604,7 @@ export const UserMessage = memo(function UserMessage({
     [timestamp],
   );
   const rewindMutation = useRewindAgentMutation({ serverId, agentId, client, messageId });
+  const handoff = useMemo(() => parseHandoffMessage(message), [message]);
 
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
@@ -482,6 +626,14 @@ export const UserMessage = memo(function UserMessage({
       ],
     ],
     [resolvedDisableOuterSpacing, isFirstInGroup, isLastInGroup],
+  );
+  const contentStyle = useMemo(
+    () => [userMessageStylesheet.content, handoff && userMessageStylesheet.handoffContent],
+    [handoff],
+  );
+  const bubbleStyle = useMemo(
+    () => [userMessageStylesheet.bubble, handoff && userMessageStylesheet.handoffPresentation],
+    [handoff],
   );
   const imagePreviewContainerStyle = useMemo(
     () => [
@@ -506,15 +658,25 @@ export const UserMessage = memo(function UserMessage({
     ],
     [showTrailingRow],
   );
+  let messageContent: ReactNode = null;
+  if (handoff) {
+    messageContent = <HandoffMessage plan={handoff.plan} message={message} />;
+  } else if (hasText) {
+    messageContent = (
+      <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
+        {message}
+      </Text>
+    );
+  }
 
   return (
     <View style={containerStyle} testID="user-message" aria-busy={isPending}>
       <View
-        style={userMessageStylesheet.content}
+        style={contentStyle}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
       >
-        <View style={userMessageStylesheet.bubble}>
+        <View style={bubbleStyle}>
           {hasImages ? (
             <View style={imagePreviewContainerStyle}>
               {images.map((image) => (
@@ -545,11 +707,7 @@ export const UserMessage = memo(function UserMessage({
               })}
             </View>
           ) : null}
-          {hasText ? (
-            <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
-              {message}
-            </Text>
-          ) : null}
+          {messageContent}
         </View>
         {hasText ? (
           <View

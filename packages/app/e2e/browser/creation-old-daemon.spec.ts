@@ -17,7 +17,7 @@ import {
 } from "../support/helpers/new-workspace";
 import { fillComposerDraft } from "../support/helpers/composer";
 import { pressSubmitBeforeTheNextRender } from "../support/helpers/creation";
-import { createAgentTabFromMenu } from "../support/helpers/workspace-tabs";
+import { createAgentTab } from "../support/helpers/workspace-tabs";
 
 for (const version of ["0.2.5", "0.7.2", "0.8.0"]) {
   let daemon: Awaited<ReturnType<typeof startIsolatedHostDaemon>>;
@@ -124,7 +124,7 @@ for (const version of ["0.2.5", "0.7.2", "0.8.0"]) {
         page.getByTestId(`workspace-tab-agent_${first.id}`).filter({ visible: true }),
       ).toHaveText(prompt);
 
-      await createAgentTabFromMenu(page);
+      await createAgentTab(page);
       const secondPrompt = "Create another agent: emit 1 coalesced agent stream updates";
       await fillComposerDraft(page, secondPrompt);
       await pressSubmitBeforeTheNextRender(page, "Send message");

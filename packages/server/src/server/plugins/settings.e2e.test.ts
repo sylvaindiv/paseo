@@ -24,7 +24,7 @@ test("a plugin server can persist workflow state through its registered settings
       import { z } from "zod";
       export default function(server) {
         const state = server.registerSettings(defineSettings({ id: "workflow", scope: "host", version: 1, schema: z.object({ count: z.number().default(0) }) }));
-        server.handle(defineRpc({ name: "workflow.increment.request", input: z.object({}), output: z.number() }), async () => {
+        server.handle(defineRpc({ name: "workflow.incrementCount.request", input: z.object({}), output: z.number() }), async () => {
           if (!state) return -1;
           const current = await state.read();
           await state.write({ count: current.values.count + 1 }, current.revision);
@@ -38,11 +38,11 @@ test("a plugin server can persist workflow state through its registered settings
     await client.patchDaemonConfig({ pluginsEnabled: true });
     await client.installDirectoryPlugin(directory);
     expect(
-      await client.invokePluginRpc("workflow-settings", "workflow.increment.request", {}),
+      await client.invokePluginRpc("workflow-settings", "workflow.incrementCount.request", {}),
     ).toBe(1);
     await client.reloadPlugin("workflow-settings");
     expect(
-      await client.invokePluginRpc("workflow-settings", "workflow.increment.request", {}),
+      await client.invokePluginRpc("workflow-settings", "workflow.incrementCount.request", {}),
     ).toBe(2);
   } finally {
     await client.close();

@@ -208,6 +208,11 @@ export function runPluginClientBundle(
         throw new Error(`Plan action ${actionId} has invalid availability callback`);
       if (contribution.order !== undefined && !Number.isFinite(contribution.order))
         throw new Error(`Plan action ${actionId} has invalid order`);
+      if (
+        contribution.requiresAgentProfile !== undefined &&
+        typeof contribution.requiresAgentProfile !== "boolean"
+      )
+        throw new Error(`Plan action ${actionId} has invalid profile requirement`);
       const profileId = contribution.query?.launchProfileId;
       if (profileId !== undefined && (typeof profileId !== "string" || !profileId.trim()))
         throw new Error(`Plan action ${actionId} has invalid launch profile`);

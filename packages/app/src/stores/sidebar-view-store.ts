@@ -9,7 +9,7 @@ export type SidebarGroupMode = "project" | "status";
 
 const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
 const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
-const SIDEBAR_VIEW_STORE_VERSION = 6;
+const SIDEBAR_VIEW_STORE_VERSION = 7;
 
 /**
  * The key standing for "this workspace carries no labels at all".
@@ -60,6 +60,7 @@ interface SidebarViewStoreState {
    * `resolveActiveProjectFilters`.
    */
   projectFilters: string[];
+  hiddenProjectKeys: string[];
   labelFilter: SidebarLabelFilter;
   setGroupMode: (mode: SidebarGroupMode) => void;
   toggleHostFilter: (serverId: string) => void;
@@ -67,6 +68,7 @@ interface SidebarViewStoreState {
   toggleProjectFilter: (viewKey: string) => void;
   includeProjectFilter: (viewKey: string) => void;
   clearProjectFilters: () => void;
+  hideProject: (viewKey: string) => void;
   toggleLabelFilter: (name: string) => void;
   clearLabelFilter: () => void;
   reconcileLabelFilter: (labels: readonly string[]) => void;
@@ -77,6 +79,7 @@ interface SidebarViewPersistedState {
   groupMode: SidebarGroupMode;
   hostFilters: string[];
   projectFilters: string[];
+  hiddenProjectKeys: string[];
   labelFilter: SidebarLabelFilter;
 }
 
@@ -89,6 +92,7 @@ const SidebarViewPersistedStateSchema = z.strictObject({
   hostFilters: z.array(z.string()).optional(),
   hostFilter: z.string().nullable().optional(),
   projectFilters: z.array(z.string()).optional(),
+  hiddenProjectKeys: z.array(z.string()).optional(),
   groupModeByServerId: z.record(z.string(), PersistedSidebarGroupModeSchema).optional(),
   labelFilter: SidebarLabelFilterSchema.optional(),
 });
@@ -126,6 +130,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
       groupMode: "project",
       hostFilters: [],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: emptyLabelFilter(),
     };
   }
@@ -137,6 +142,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
       groupMode: legacyGroupMode,
       hostFilters: [],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: emptyLabelFilter(),
     };
   }
@@ -145,6 +151,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
     groupMode: state.groupMode === "status" ? "status" : "project",
     hostFilters: readHostFilters(state),
     projectFilters: state.projectFilters ?? [],
+    hiddenProjectKeys: state.hiddenProjectKeys ?? [],
     labelFilter: state.labelFilter
       ? normalizeSidebarLabelFilter(state.labelFilter)
       : emptyLabelFilter(),
@@ -182,6 +189,7 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
       groupMode: "project",
       hostFilters: [],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: emptyLabelFilter(),
       setGroupMode: (mode) => set({ groupMode: mode }),
       toggleHostFilter: (serverId) =>
@@ -190,12 +198,20 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
       toggleProjectFilter: (viewKey) =>
         set((state) => ({ projectFilters: toggleFilterEntry(state.projectFilters, viewKey) })),
       includeProjectFilter: (viewKey) =>
-        set((state) => {
-          if (state.projectFilters.length === 0) return state;
-          if (state.projectFilters.includes(viewKey)) return state;
-          return { projectFilters: [...state.projectFilters, viewKey] };
-        }),
-      clearProjectFilters: () => set({ projectFilters: [] }),
+        set((state) => ({
+          hiddenProjectKeys: state.hiddenProjectKeys.filter((key) => key !== viewKey),
+          projectFilters:
+            state.projectFilters.length === 0 || state.projectFilters.includes(viewKey)
+              ? state.projectFilters
+              : [...state.projectFilters, viewKey],
+        })),
+      clearProjectFilters: () => set({ projectFilters: [], hiddenProjectKeys: [] }),
+      hideProject: (viewKey) =>
+        set((state) => ({
+          hiddenProjectKeys: state.hiddenProjectKeys.includes(viewKey)
+            ? state.hiddenProjectKeys
+            : [...state.hiddenProjectKeys, viewKey],
+        })),
       toggleLabelFilter: (name) =>
         set((state) => {
           const key = workspaceLabelKey(name);
@@ -238,6 +254,7 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
         groupMode: state.groupMode,
         hostFilters: state.hostFilters,
         projectFilters: state.projectFilters,
+        hiddenProjectKeys: state.hiddenProjectKeys,
         labelFilter: state.labelFilter,
       }),
       migrate: migrateSidebarViewState,

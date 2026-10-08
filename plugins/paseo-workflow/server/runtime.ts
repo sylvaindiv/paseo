@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import type { PluginSettingsHandle, PluginBeforeRequests } from "@getpaseo/plugin/server";
 import { profileId, roles } from "../shared/profiles";
 import { WorkflowController, type WorkflowPort } from "./workflow";
-import { classifyExecution, classifyInitialExecution } from "./execution-routing";
+import { classifyInitialExecution } from "./execution-routing";
 import { workflowSettings } from "./state";
 import type { PaseoApi } from "./types";
 
@@ -57,12 +57,6 @@ export function runtime(
   };
   const port: WorkflowPort = {
     profiles: async () => (await paseo.config.get()).config.agentProfiles ?? [],
-    models: async (provider, cwd) => {
-      const result = await paseo.providers.listModels(provider, { cwd });
-      if (result.error) throw new Error(result.error);
-      return result.models ?? [];
-    },
-    classify: classifyExecution,
     agent: async (id) => {
       const handle = paseo.agents.ref(id);
       const snapshot = await handle.refresh();
@@ -203,6 +197,8 @@ export function runtime(
       const agent = paseo.agents.ref(id);
       await agent.respondToPermission({ requestId, response });
     },
+    ensurePlanPermission: async ({ agentId, workspaceId, callId }) =>
+      paseo.agents.ref(agentId).ensurePlanPermission({ workspaceId, callId }),
     claimReview: async ({ agentId, workspaceId, permissionRequestId, callId }, active) => {
       await paseo.agents
         .ref(agentId)
@@ -242,6 +238,7 @@ export async function prepareAgent(
     if (role) throw new Error("A workflow agent requires a workspace.");
     return request;
   }
+  if (request.labels?.["paseo.workflow.role"] === "executor") return prepareExecutor(request, role);
   const workspace = await paseo.workspaces.ref(request.workspaceId).refresh();
   if (!workspace) throw new Error("The workflow workspace is unavailable.");
   if (request.modelRouting?.strategy === "jev") {
@@ -273,6 +270,12 @@ export async function prepareAgent(
         .join("\n\n"),
     },
   };
+}
+
+function prepareExecutor(request: PluginBeforeRequests["agent.create"], role: string | undefined) {
+  return isReadOnlyRole(role)
+    ? { ...request, config: { ...request.config, writePolicy: "read_only" as const } }
+    : request;
 }
 
 function isReadOnlyRole(role: string | undefined): boolean {

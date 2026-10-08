@@ -19,6 +19,7 @@ export const WidgetRequestSchema = z.object({
   planCallId: z.string().optional(),
   planText: z.string().optional(),
   handoffDisabledReason: z.string().optional(),
+  handoffProfiles: z.array(z.object({ id: z.string().min(1), name: z.string() })).optional(),
   agentTitle: z.string(),
   workspace: z.string(),
   kind: z.enum(["plan", "question"]),
@@ -34,6 +35,7 @@ export const WidgetLabelsSchema = z.object({
   comment: z.string(),
   sendComment: z.string(),
   handoff: z.string(),
+  noProfiles: z.string().optional(),
   submit: z.string(),
   next: z.string(),
   close: z.string(),
@@ -60,6 +62,7 @@ export const WidgetActionSchema = z.discriminatedUnion("type", [
   z.object({
     ...actionKey,
     type: z.literal("handoff"),
+    profileId: z.string().min(1).optional(),
     planCallId: z.string().min(1),
     planText: z.string(),
   }),

@@ -27,8 +27,14 @@ interface ViewedTimelineScenario {
   cleanup(): Promise<void>;
 }
 
+function readLoaderDotOpacities(element: HTMLElement): string[] {
+  return Array.from(element.querySelectorAll<HTMLElement>("div"))
+    .filter((child) => child.childElementCount === 0)
+    .map((dot) => getComputedStyle(dot).opacity);
+}
+
 async function seedViewedTimelineScenario(
-  options: { firstAgentModel?: string } = {},
+  options: { firstAgentModel?: string; firstAgentTitle?: string } = {},
 ): Promise<ViewedTimelineScenario> {
   const workspace = await seedWorkspace({ repoPrefix: "viewed-timelines-" });
   const createAgent = (title: string, model = "ten-second-stream") =>
@@ -41,7 +47,7 @@ async function seedViewedTimelineScenario(
       model,
     });
   const [firstAgent, secondAgent] = await Promise.all([
-    createAgent("First viewed chat", options.firstAgentModel),
+    createAgent(options.firstAgentTitle ?? "First viewed chat", options.firstAgentModel),
     createAgent("Second viewed chat"),
   ]);
   return {
@@ -255,6 +261,60 @@ async function expectCurrentChatWithoutCatchUp(page: Page, message: string) {
 }
 
 test.describe("Viewed agent timelines", () => {
+  test("agent tab loader follows active, hidden, completed, and permission states", async ({
+    page,
+  }) => {
+    const longTitle = "A deliberately long running conversation title that must stay closable";
+    const scenario = await seedViewedTimelineScenario({ firstAgentTitle: longTitle });
+    try {
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await openAgent(page, scenario, scenario.firstAgentId);
+      await startVisibleTurn(page, scenario, "Show tab activity while this response runs.");
+
+      const tab = page.getByTestId(`workspace-tab-agent_${scenario.firstAgentId}`).first();
+      const loader = page.getByTestId(`workspace-tab-running-agent_${scenario.firstAgentId}`);
+      await expect(loader).toBeVisible();
+      const title = tab.getByText(longTitle);
+      await expect(title).toBeVisible();
+      expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+        true,
+      );
+
+      const reducedMotionOpacities = await loader.evaluate(readLoaderDotOpacities);
+      expect(reducedMotionOpacities).toHaveLength(6);
+      await page.waitForTimeout(200);
+      expect(await loader.evaluate(readLoaderDotOpacities)).toEqual(reducedMotionOpacities);
+
+      await tab.hover();
+      await expect(
+        page.getByTestId(`workspace-agent-close-${scenario.firstAgentId}`),
+      ).toBeVisible();
+      await page.screenshot({ path: "../../.context/handoff-tab-running.png" });
+
+      await selectAgent(page, "Second viewed chat");
+      await expect(tab).toHaveAttribute("aria-selected", "false");
+      await expect(loader).toBeVisible();
+
+      expect((await scenario.client.waitForFinish(scenario.firstAgentId, 30_000)).status).toBe(
+        "idle",
+      );
+      await expect(loader).toHaveCount(0);
+      await page.screenshot({ path: "../../.context/handoff-tab-finished.png" });
+
+      await scenario.client.sendAgentMessage(
+        scenario.firstAgentId,
+        "Emit synthetic plan approval.",
+      );
+      expect((await scenario.client.waitForFinish(scenario.firstAgentId, 15_000)).status).toBe(
+        "permission",
+      );
+      await expect(tab.locator('[data-status-bucket="needs_input"]')).toBeVisible();
+      await expect(loader).toHaveCount(0);
+    } finally {
+      await scenario.cleanup();
+    }
+  });
+
   test("a reloaded layout subscribes only the chat it restores into", async ({ page }) => {
     test.setTimeout(120_000);
     const subscriptions = observeTimelineSubscriptions(page);

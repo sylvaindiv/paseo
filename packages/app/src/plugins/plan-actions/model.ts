@@ -47,7 +47,7 @@ export function resolvePlanActions(input: PlanActionsInput): PlanAction[] {
     actions.push({
       id: `${pluginId}/${contribution.id}`,
       title: contribution.title,
-      overflow: input.compact === true,
+      overflow: input.compact === true && !contribution.requiresAgentProfile,
       disabled: Boolean(contribution.disabledReason),
       disabledReason: contribution.disabledReason,
       pluginId,

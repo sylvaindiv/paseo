@@ -316,6 +316,11 @@ export const en = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "Handed-off plan",
+      details: "Handoff details",
+      copyPlan: "Copy plan",
+    },
     diagram: {
       diagram: "Diagram",
       zoomIn: "Zoom in",
@@ -1256,6 +1261,7 @@ export const en = {
         all: "All hosts",
       },
       projectFilter: {
+        show: "Show {{projectName}}",
         label: "Project",
         all: "All projects",
       },
@@ -1308,6 +1314,7 @@ export const en = {
     project: {
       actions: {
         menu: "Project actions",
+        hide: "Hide project",
         openSettings: "Open project settings",
         openNewWindow: "Open in new window",
         openNewWindowFailed: "Couldn't open a new window",

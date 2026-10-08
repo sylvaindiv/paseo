@@ -30,6 +30,44 @@ afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
+test.each(["router", "planner", "plan-reviewer", "audit-deep", "final-review"])(
+  "handoff executor preserves selected %s profile config without source-role preparation",
+  async (role) => {
+    const request: Parameters<typeof prepareAgent>[0] = {
+      workspaceId: "workspace",
+      launchProfileId: `paseo-workflow-${role}`,
+      labels: { "paseo.workflow.role": "executor" },
+      config: {
+        provider: "codex",
+        cwd: "/workspace",
+        modeId: "default",
+        featureValues: { plan_mode: true },
+        writePolicy: "read_write",
+      },
+    };
+    const api = { config: { get: async () => ({ config: { agentProfiles: profiles } }) } };
+    const result = await prepareAgent(request, api as Parameters<typeof prepareAgent>[1]);
+    expect(result).toEqual(
+      ["router", "plan-reviewer", "audit-deep"].includes(role)
+        ? { ...request, config: { ...request.config, writePolicy: "read_only" } }
+        : request,
+    );
+  },
+);
+
+test("handoff cannot launch a deleted workflow profile", async () => {
+  const request: Parameters<typeof prepareAgent>[0] = {
+    workspaceId: "workspace",
+    launchProfileId: "paseo-workflow-audit-deep",
+    labels: { "paseo.workflow.role": "executor" },
+    config: { provider: "codex", cwd: "/workspace" },
+  };
+  const api = { config: { get: async () => ({ config: { agentProfiles: [] } }) } };
+  await expect(prepareAgent(request, api as Parameters<typeof prepareAgent>[1])).rejects.toThrow(
+    "is missing",
+  );
+});
+
 test.each([true, false])(
   "initial routing passes plan_mode=%s and preserves the session mode",
   async (planMode) => {

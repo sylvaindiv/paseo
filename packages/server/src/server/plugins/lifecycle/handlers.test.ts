@@ -13,6 +13,7 @@ test("agent-create hooks receive launch provenance and can change config and env
     config: { provider: "codex", cwd: "/project" },
     workspaceId: "workspace",
     launchProfileId: "planner",
+    labels: { "paseo.workflow.role": "executor" },
   };
   hooks.before("agent.create", ({ request }) => {
     expect(request).toEqual(input);
@@ -23,6 +24,45 @@ test("agent-create hooks receive launch provenance and can change config and env
     config: { ...input.config, model: "gpt-5.4" },
     env: { PLAN: "1" },
   });
+});
+
+test.each([undefined, {}, { "paseo.workflow.role": "planner" }])(
+  "agent-create hooks cannot remove or rewrite launch labels (%j)",
+  async (labels) => {
+    const hooks = new PluginHookHandlers(() => {});
+    hooks.before("agent.create", ({ request }) => ({ ...request, labels }));
+    await expect(
+      hooks.invoke(
+        "create",
+        "before",
+        "agent.create",
+        {
+          config: { provider: "codex", cwd: "/project" },
+          labels: { "paseo.workflow.role": "executor" },
+        },
+        paseo,
+      ),
+    ).rejects.toThrow("cannot change labels");
+  },
+);
+
+test("agent-create hooks cannot inject executor provenance", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  hooks.before("agent.create", ({ request }) => ({
+    ...request,
+    labels: { "paseo.workflow.role": "executor" },
+  }));
+  await expect(
+    hooks.invoke(
+      "create",
+      "before",
+      "agent.create",
+      {
+        config: { provider: "codex", cwd: "/project" },
+      },
+      paseo,
+    ),
+  ).rejects.toThrow("cannot change labels");
 });
 
 test("agent-create hooks can only acknowledge unchanged model routing", async () => {

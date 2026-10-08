@@ -319,6 +319,11 @@ export const ar: TranslationResources = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "الخطة المنقولة",
+      details: "تفاصيل التسليم",
+      copyPlan: "نسخ الخطة",
+    },
     diagram: {
       diagram: "مخطط",
       zoomIn: "تكبير",
@@ -1248,6 +1253,7 @@ export const ar: TranslationResources = {
         all: "كل المضيفين",
       },
       projectFilter: {
+        show: "إظهار {{projectName}}",
         label: "المشروع",
         all: "كل المشاريع",
       },
@@ -1300,6 +1306,7 @@ export const ar: TranslationResources = {
     project: {
       actions: {
         menu: "إجراءات المشروع",
+        hide: "إخفاء المشروع",
         openSettings: "افتح إعدادات المشروع",
         openNewWindow: "Open in new window",
         openNewWindowFailed: "Couldn't open a new window",

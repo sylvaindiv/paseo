@@ -3,6 +3,7 @@ import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
+import { useAgentProfiles } from "@/agent-profiles";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -73,6 +74,38 @@ function PlanActionControl({
   );
 }
 
+function ProfileButton({
+  actionId,
+  profile,
+  busy,
+  disabled,
+  compact,
+  run,
+}: {
+  actionId: string;
+  profile: { id: string; name: string };
+  busy: boolean;
+  disabled: boolean;
+  compact: boolean;
+  run: (actionId: string, profileId: string) => void;
+}) {
+  const onPress = useCallback(() => run(actionId, profile.id), [run, actionId, profile.id]);
+  return (
+    <Button
+      size={compact ? "md" : "sm"}
+      variant="secondary"
+      onPress={onPress}
+      loading={busy}
+      disabled={disabled}
+      aria-busy={busy}
+      accessibilityLabel={profile.name}
+      testID={`plan-handoff-profile-${profile.id}`}
+    >
+      <Text numberOfLines={1}>{profile.name}</Text>
+    </Button>
+  );
+}
+
 export function PlanActions({
   serverId,
   workspaceId,
@@ -91,6 +124,8 @@ export function PlanActions({
   const { t } = useTranslation();
   const compact = useIsCompactFormFactor();
   const host = useHostRuntimeSnapshot(serverId);
+  const { profiles } = useAgentProfiles(serverId);
+  const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);
   const supportsStructuredPlans = useHostFeature(serverId, "structuredPlanApproval");
   const installed = useInstalledPlugins();
   const source = useMemo(() => createPluginClientStateSource(serverId), [serverId]);
@@ -172,9 +207,11 @@ export function PlanActions({
     source,
     workspaceId,
   ]);
-  const run = useStableEvent((id: string) => {
+  const run = useStableEvent((id: string, profileId?: string) => {
     const action = actions.find((candidate) => candidate.id === id);
-    if (!action || action.disabled) return;
+    if (!action || action.disabled || (id !== "copy" && model.getSnapshot().pending)) return;
+    if (action.contribution?.requiresAgentProfile && !profileId) return;
+    if (profileId) setPendingProfileId(profileId);
     void model.run(id, async () => {
       if (id === "copy") {
         await writeMarkdownToRichClipboard(plan.text, getDefaultMarkdownClipboardEnvironment());
@@ -224,6 +261,7 @@ export function PlanActions({
         agentId,
         navigation: createPluginNavigation({ serverId, workspaceId }),
         signal: lifetime.signal,
+        profileId,
         plan: { ...plan, permissionRequestId: permission.id },
       });
     });
@@ -237,6 +275,7 @@ export function PlanActions({
     action.id === "copy" ? state.copying : state.pending === action.id;
   const disabled = (action: PlanAction) =>
     Boolean(action.disabled) || (action.id === "copy" ? state.copying : state.pending !== null);
+  const profileActions = actions.filter((action) => action.contribution?.requiresAgentProfile);
   const overflow = actions.filter((action) => action.overflow);
   const status =
     [...new Set([state.error, state.copyError].filter(Boolean))].join(" · ") ||
@@ -273,7 +312,7 @@ export function PlanActions({
           </DropdownMenu>
         ) : null}
         {actions
-          .filter((action) => !action.overflow)
+          .filter((action) => !action.overflow && !action.contribution?.requiresAgentProfile)
           .map((action) => (
             <PlanActionControl
               key={action.id}
@@ -286,6 +325,28 @@ export function PlanActions({
             />
           ))}
       </View>
+      {profileActions.map((action) => (
+        <View key={action.id} testID="plan-handoff-profiles" style={styles.profiles}>
+          <Text style={styles.profileLabel}>{action.title} :</Text>
+          {profiles?.length ? (
+            profiles.map((profile) => (
+              <ProfileButton
+                key={profile.id}
+                actionId={action.id}
+                profile={profile}
+                compact={compact}
+                run={run}
+                busy={state.pending === action.id && pendingProfileId === profile.id}
+                disabled={disabled(action)}
+              />
+            ))
+          ) : (
+            <Text style={styles.profileLabel}>
+              {profiles ? t("workspace.git.workflow.noProfiles") : t("common.states.loading")}
+            </Text>
+          )}
+        </View>
+      ))}
       <Text
         accessibilityRole={state.error || state.copyError ? "alert" : undefined}
         accessibilityLiveRegion="polite"
@@ -311,6 +372,14 @@ const styles = StyleSheet.create((theme) => {
       gap: theme.spacing[2],
       minWidth: 0,
     },
+    profiles: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "center",
+      gap: theme.spacing[2],
+      minWidth: 0,
+    },
+    profileLabel: { fontSize: theme.fontSize.sm, color: theme.colors.foregroundMuted },
     more: {
       minHeight: 44,
       paddingHorizontal: theme.spacing[3],

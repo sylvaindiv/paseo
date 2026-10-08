@@ -25,10 +25,7 @@ import {
 } from "../support/helpers/composer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 import { seedWorkspace } from "../support/helpers/seed-client";
-import {
-  createAgentTabFromMenu,
-  waitForWorkspaceTabsVisible,
-} from "../support/helpers/workspace-tabs";
+import { createAgentTab, waitForWorkspaceTabsVisible } from "../support/helpers/workspace-tabs";
 import { getServerId } from "../support/helpers/server-id";
 import { buildHostWorkspaceRoute } from "@/utils/host-routes";
 import { WORKSPACE_DECK_MAX_MOUNTED_WORKSPACES } from "@/screens/workspace/workspace-deck-retention";
@@ -834,7 +831,7 @@ async function expectRenderedBefore(first: Locator, second: Locator): Promise<vo
 async function openWorkspaceDraft(page: Page, workspaceId: string): Promise<void> {
   await page.goto(buildHostWorkspaceRoute(getServerId(), workspaceId));
   await waitForWorkspaceTabsVisible(page);
-  await createAgentTabFromMenu(page);
+  await createAgentTab(page);
   await expectComposerVisible(page);
 }
 

@@ -26,14 +26,14 @@ the role profiles' provider, model, mode and effort in Agent profiles.
 
 The workflow uses the existing plan actions and an agent panel for review status. Any live,
 unresolved structured plan — from the Workflow Router, the Workflow Planner, or an ordinary
-conversation — can be handed off with one action. Handoff classifies the exact final plan through a
-JEV classification request as soon as the plan becomes actionable. Set `TYPESAFE_API_KEY` (or
-`JEV-API-KEY`) in the daemon environment or in `$PASEO_HOME/paseo-workflow.env`; the plugin reads
-that file again on each retry. The validated decision
-is persisted before any executor starts, so status and other workflow actions stay responsive while
-classification runs. Pressing Handoff records the request immediately; the executor starts once the
-decision is ready, with direct provider, model and effort settings and no saved executor profile.
-Repeated preparation, clicks, reconnects and plugin reloads reuse the same classifier and executor.
+conversation — can be handed off by choosing a host agent profile. The dedicated Handoff row
+shows every host profile in its normal order, with no preselection, on the plan card, desktop widget
+and Workflow panel. The server revalidates the exact current plan and the selected profile before
+closing the plan permission. The executor starts as a root agent in the same workspace with that
+profile's provider, model, mode, effort and feature settings. Handoff never calls the classifier.
+Concurrent clicks and retries reuse the existing executor; a definitive prompt rejection permits an
+explicit retry on that same agent. Older queued transfers without an executor require a fresh
+explicit profile choice and never resume automatically after reload.
 Handoff preserves the exact plan and its authorization limits. It does not authorize staging,
 committing, pushing or deployment. Local synchronization follows the approved plan; an execution
 without a commit is valid when no commit was authorized. The executor receives only the self-contained
@@ -51,12 +51,12 @@ of its existing Codex model and effort routes. The live conversation's existing 
 the selected model and effort. The plugin receives the prompt and workspace intention, not
 repository files or attachment contents. A missing plugin or key, an invalid decision, or an
 unavailable model rejects creation and leaves the draft available for retry or manual selection.
-A manual model selection never contacts JEV. Auto only affects this first creation; handoff keeps
-classifying the completed plan.
-A replaced, resolved or reviewed plan cancels a queued transfer. Failure keeps the plan actionable,
-shows the routing error and never selects a silent fallback. The early Router recommendation is
+A manual model selection never contacts JEV. Auto only affects this first creation.
+A replaced, resolved or reviewed plan cannot be transferred. Failure keeps the error visible under
+the profile row and never selects a fallback profile. The early Router recommendation is
 retained only as context. Plan review remains limited to workflow Planner conversations. Workflow
-settings retain plan IDs, routing decisions, queued transfers and review limits across reloads. Review
+settings retain plan IDs, existing executor IDs and review limits across reloads. Legacy routing
+decisions remain readable but do not select a handoff profile. Review
 creates and sends the read-only reviewer before closing the planner's permission. A definitive
 pre-acceptance failure leaves the plan retryable; an uncertain delivery requires manual inspection
 without replay. Planner clarification is transported verbatim and without truncation, not inferred constraints.
@@ -78,7 +78,7 @@ The exact captured proposal is revalidated before approval. The host's private d
 survives provider-history refresh and daemon restart; see [plan persistence](data-model.md#plan-persistence).
 
 Lifecycle hooks are best-effort notifications, not durable delivery. An uncertain handoff prompt
-is not replayed; reopen its existing executor to inspect it. Status reconciles routing,
+is not replayed; reopen its existing executor to inspect it. Status reconciles
 approved implementation, handoff and review/audit operations against the expected prompt and the
 host's completed-turn evidence.
 Stored closed agents can supply that evidence after history hydration. Native turn IDs or the

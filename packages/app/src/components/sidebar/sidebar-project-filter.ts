@@ -30,11 +30,16 @@ export function resolveActiveProjectFilters(
 export function filterWorkspacesByProjects(input: {
   workspaces: readonly SidebarWorkspaceEntry[];
   projectFilters: readonly string[];
+  hiddenProjectKeys?: readonly string[];
 }): SidebarWorkspaceEntry[] {
-  const { workspaces, projectFilters } = input;
-  if (projectFilters.length === 0) return [...workspaces];
+  const { workspaces, projectFilters, hiddenProjectKeys = [] } = input;
+  const hidden = new Set(hiddenProjectKeys);
   const included = new Set(projectFilters);
-  return workspaces.filter((workspace) => included.has(workspace.projectViewKey));
+  return workspaces.filter(
+    (workspace) =>
+      !hidden.has(workspace.projectViewKey) &&
+      (included.size === 0 || included.has(workspace.projectViewKey)),
+  );
 }
 
 const EMPTY_PROJECT_FILTERS: readonly string[] = [];

@@ -39,6 +39,12 @@ export function getFeatureTooltip(feature: Pick<AgentFeature, "label" | "tooltip
   return feature.tooltip ?? feature.label;
 }
 
+export function getFeatureToggleValue(feature: AgentFeature): boolean | string | null {
+  if (feature.type === "toggle") return !feature.value;
+  if (feature.id !== SPEED_FEATURE_ID || feature.options.length !== 2) return null;
+  return feature.options.find((option) => option.id !== feature.value)?.id ?? null;
+}
+
 export function isFeatureActive(feature: AgentFeature): boolean {
   if (feature.type === "toggle") return feature.value;
   const selectedOption = feature.options.find((option) => option.id === feature.value);

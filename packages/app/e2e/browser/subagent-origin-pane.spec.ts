@@ -13,7 +13,6 @@ async function openParentInRightPane(page: Page, parentId: string, workspaceId: 
   await openAgentRoute(page, { workspaceId, agentId: parentId });
   await expect(page.getByTestId(`workspace-tab-agent_${parentId}`)).toBeVisible();
   await page.getByTestId("workspace-pane-main").getByTestId("workspace-new-tab-button").click();
-  await page.getByTestId("workspace-new-tab-menu-agent").click();
   await page.getByTestId(`workspace-tab-agent_${parentId}`).click();
   await runWorkspaceActionFromCommandCenter(page, "Split pane right");
   await page

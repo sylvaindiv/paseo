@@ -108,3 +108,39 @@ test("opening Explorer keeps the agent composer focused while its shell starts",
     await agent.cleanup();
   }
 });
+
+test("French empty composer keeps dictation without a voice chat button", async ({
+  page,
+}, testInfo) => {
+  const agent = await seedMockAgentWorkspace({
+    repoPrefix: "composer-french-",
+    title: "Conversation",
+  });
+  try {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "@paseo:app-settings",
+        JSON.stringify({ language: "fr", theme: "light" }),
+      );
+    });
+    await openAgentRoute(page, agent);
+    const input = page.getByTestId("message-input-surface").getByRole("textbox");
+    await expect(input).toHaveAttribute("placeholder", "Envoyez un message à l'agent...");
+    await expect(
+      page.getByRole("button", { name: "Activer le mode vocal", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Démarrer la dictée", exact: true }),
+    ).toBeVisible();
+    await input.blur();
+    await page.screenshot({ path: testInfo.outputPath("french-desktop.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(input).toHaveAttribute("placeholder", "Envoyez un message à l'agent...");
+    await expect(
+      page.getByRole("button", { name: "Démarrer la dictée", exact: true }),
+    ).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("french-compact.png") });
+  } finally {
+    await agent.cleanup();
+  }
+});

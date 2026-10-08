@@ -771,11 +771,11 @@ type PluginTurnOutcome =
 
 ### Before hooks
 
-| Name                 | Request fields                                                          | Editable                                                         |
-| -------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `agent.create`       | `config`, optional `env`, `modelRouting`                                | Public agent config except `cwd`; `env`; routing acknowledgement |
-| `agent.session_open` | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | Only `env`                                                       |
-| `workspace.create`   | `source`, optional `title`, `firstAgentContext`                         | Entire explicit creation request                                 |
+| Name                 | Request fields                                                                       | Editable                                                         |
+| -------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| `agent.create`       | `config`, optional `env`, `modelRouting`, `workspaceId`, `launchProfileId`, `labels` | Public agent config except `cwd`; `env`; routing acknowledgement |
+| `agent.session_open` | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env`              | Only `env`                                                       |
+| `workspace.create`   | `source`, optional `title`, `firstAgentContext`                                      | Entire explicit creation request                                 |
 
 **`agent.create.config`** uses `AgentSessionConfig`:
 
@@ -792,6 +792,7 @@ type PluginTurnOutcome =
 
 The host validates the effective write policy against the final provider before spawning and
 persists it with the agent. Session-open hooks cannot change it on resume.
+`workspaceId`, `launchProfileId` and `labels` are read-only creation context; hooks must preserve them.
 
 `modelRouting` is present only when the client asks the host to route its first model selection.
 It contains an opaque strategy and prompt. A hook must preserve both values and may only return
@@ -1297,6 +1298,7 @@ client.addPlanAction({
 | `order?`                 | Finite number, ascending; defaults to `0`. Ties sort by plugin ID and action ID       |
 | `query.launchProfileId?` | Exact match against the agent's immutable launch profile; omitted matches any profile |
 | `disabledReason?`        | Nonempty reason shown by the host while the action is unavailable                     |
+| `requiresAgentProfile?`  | Render a dedicated wrapping row of host profiles; pass the chosen ID to `onPress`     |
 | `onAvailable?(context)`  | Runs when the live, unresolved action becomes available; no permission is created     |
 | `onPress(context)`       | Synchronous or async business callback; reject or throw to show a retryable error     |
 
@@ -1305,13 +1307,16 @@ client.addPlanAction({
 already exists. The callback can run again after a plugin reload, so its effects must be idempotent.
 It never materializes a native permission.
 
-`PluginPlanActionContext` adds the correlated `permissionRequestId` for `onPress`. The agent
+`PluginPlanActionContext` adds the correlated `permissionRequestId` for `onPress`. Profile actions
+also receive `profileId`, chosen explicitly from the host’s saved profiles. The agent
 snapshot exposes optional `launchProfileId`. Use these IDs directly; do not look up the latest plan
 by text or position. Both contexts expose a `signal`; stop background work when it is aborted because
 the requesting plan view is gone.
 
 Paseo shows Copy first, matching contributions next, and Approve last. Compact layouts put the
-secondary actions in the existing menu and keep Approve visible. Business actions and approval
+secondary actions in the existing menu and keep Approve visible. Actions with `requiresAgentProfile`
+remain in a separate row below the action bar on every layout, using secondary buttons in host
+profile order. No profile is preselected; an empty list shows an empty-state label. Business actions and approval
 share one lock per mounted plan card; Copy stays independent. Errors release the lock, and pressing
 the same action retries. Changing the plan's `callId` clears local action state.
 
@@ -1532,15 +1537,16 @@ export function DisplaySettings() {
 }
 ```
 
-| Component                          | Props and behavior                                                                                                                       |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `SettingsGroup`, `SettingsSection` | Required `title`, `children`; optional `info` tooltip, `trailing` content, `testID`. Own section spacing and headings.                   |
-| `SettingsCard`                     | `children`, optional `testID`. Owns the card surface and dividers between direct children. Give mapped rows stable React keys.           |
-| `SettingsRow`                      | Required `label`; optional `hint`, `error`, `children`, `testID`. Wrap any custom control or content.                                    |
-| `SettingsSwitch`                   | Row props plus required `value: boolean`, `onValueChange`; optional `disabled`.                                                          |
-| `SettingsSelect`                   | Row props plus required string `value`, `options: { label, value }[]`, `onValueChange`; optional `disabled`. Uses Paseo's adaptive menu. |
-| `SettingsInput`                    | Row props plus required `onChangeText`; optional `initialValue`, `placeholder`, `disabled`, `secureTextEntry`, `ref`.                    |
-| `SettingsAction`                   | Row props plus required `actionLabel`, `onPress`; optional `disabled`.                                                                   |
+| Component                          | Props and behavior                                                                                                                           |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SettingsGroup`, `SettingsSection` | Required `title`, `children`; optional `info` tooltip, `trailing` content, `testID`. Own section spacing and headings.                       |
+| `SettingsCard`                     | `children`, optional `testID`. Owns the card surface and dividers between direct children. Give mapped rows stable React keys.               |
+| `SettingsRow`                      | Required `label`; optional `hint`, `error`, `children`, `testID`. Wrap any custom control or content.                                        |
+| `SettingsSwitch`                   | Row props plus required `value: boolean`, `onValueChange`; optional `disabled`.                                                              |
+| `SettingsSelect`                   | Row props plus required string `value`, `options: { label, value }[]`, `onValueChange`; optional `disabled`. Uses Paseo's adaptive menu.     |
+| `SettingsInput`                    | Row props plus required `onChangeText`; optional `initialValue`, `placeholder`, `disabled`, `secureTextEntry`, `ref`.                        |
+| `SettingsAction`                   | Row props plus required `actionLabel`, `onPress`; optional `disabled`.                                                                       |
+| `Button`                           | Required `children`, `onPress`; optional `variant` (`secondary`), `size` (`sm`/`md`), `disabled`, `loading`, `accessibilityLabel`, `testID`. |
 
 `SettingsInput` owns in-progress text. `initialValue` seeds it when mounted. Its ref exposes
 `focus()`, `blur()`, `getText()`, and `replaceText(text)` for explicit programmatic changes.
@@ -2210,7 +2216,7 @@ export default function contribute(server: PluginServerContext) {
 }
 ```
 
-Inputs and outputs are validated on both sides. RPC names start with a lowercase letter and contain lowercase letters, numbers, dots, hyphens, or underscores. `useRpc()` returns a typed async function. Use TanStack Query for request state, caching, and mutations.
+Inputs and outputs are validated on both sides. RPC names start with a lowercase letter and contain letters, numbers, dots, hyphens, or underscores. `useRpc()` returns a typed async function. Use TanStack Query for request state, caching, and mutations.
 
 Backend handlers receive the same `PaseoApi` as `{ paseo }`. Their connection belongs to the subprocess and closes when the plugin stops. It does not subscribe to timelines or catalog events until plugin code subscribes. Follow the [SDK event contract](../../sdk/events.md) for cleanup and timeline replacements. Backend code can use Node APIs and dependencies installed in the plugin directory.
 
