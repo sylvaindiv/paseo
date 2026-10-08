@@ -24,6 +24,7 @@ function input(overrides: Partial<PlanActionsInput> = {}): PlanActionsInput {
         contribution: {
           id: "handoff",
           title: "Transférer le plan",
+          requiresAgentProfile: true,
           order: 20,
           onPress() {},
         },
@@ -60,6 +61,7 @@ describe("plan actions", () => {
       }),
     );
     expect(actions.filter((action) => !action.overflow).map((action) => action.id)).toEqual([
+      "workflow/handoff",
       "deny",
       "approve",
     ]);
@@ -84,7 +86,7 @@ describe("plan actions", () => {
         "copy",
       ]);
   });
-  it("orders copy, matching plugin actions, then approval; only approval stays outside compact overflow", () => {
+  it("orders copy, matching plugin actions, then approval; profile actions stay outside compact overflow", () => {
     const actions = resolvePlanActions(input());
     expect(actions.map((action) => action.id)).toEqual([
       "copy",
@@ -102,7 +104,7 @@ describe("plan actions", () => {
       resolvePlanActions(input({ compact: true }))
         .filter((action) => !action.overflow)
         .map((action) => action.id),
-    ).toEqual(["approve"]);
+    ).toEqual(["workflow/handoff", "approve"]);
   });
 
   it("matches the launch profile exactly and never borrows another plan's permission", () => {

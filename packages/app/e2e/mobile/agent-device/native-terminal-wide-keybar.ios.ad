@@ -2,10 +2,12 @@ context platform=ios timeout=90000 retries=1
 env APP_ID=sh.paseo.debug
 
 open "${APP_ID}"
-wait "id=\"workspace-new-tab-button\"" 30000
-press "id=\"workspace-new-tab-button\""
-wait "id=\"workspace-new-tab-menu-terminal\"" 10000
-press "id=\"workspace-new-tab-menu-terminal\""
+wait "id=\"workspace-split-pane-menu\"" 30000
+press "id=\"workspace-split-pane-menu\""
+wait "id=\"workspace-split-pane-right\"" 10000
+press "id=\"workspace-split-pane-right\""
+wait "id=\"workspace-new-tab-terminal\"" 10000
+press "id=\"workspace-new-tab-terminal\""
 wait "id=\"terminal-virtual-keyboard-native-wide\"" 10000
 is visible "id=\"terminal-key-esc\""
 is visible "id=\"terminal-key-enter\""

@@ -461,7 +461,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
   const openNewWorkspaceForProject = useCallback(
     (serverId: string, project: WorkspaceProjectDescriptorPayload) => {
       const sidebarView = useSidebarViewStore.getState();
-      if (sidebarView.projectFilters.length > 0) {
+      if (sidebarView.projectFilters.length > 0 || sidebarView.hiddenProjectKeys.length > 0) {
         const projects = selectWorkspaceStructureProjects(useSessionStore.getState(), hostIds);
         const addedProject = projects.find((candidate) =>
           candidate.hosts.some(

@@ -40,6 +40,11 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly serverId?: string;
     }) => void;
     readonly openAgent: (input: { readonly agentId: string; readonly serverId?: string }) => void;
+    /** Replace the current agent tab. Undefined on hosts that predate agent-tab replacement. */
+    readonly replaceAgent?: (input: {
+      readonly agentId: string;
+      readonly serverId?: string;
+    }) => void;
     readonly openWorkspace: (input: {
       readonly workspaceId: string;
       readonly serverId?: string;
@@ -254,11 +259,15 @@ export interface PluginAgentCommandContext extends PluginCommandCapabilities {
   context: "agent";
   workspace: PluginWorkspaceSnapshot;
   agent: PluginAgentSnapshot;
-  navigation?: Pick<NonNullable<PluginNavigableHostProps["navigation"]>, "openAgent">;
+  navigation?: Pick<
+    NonNullable<PluginNavigableHostProps["navigation"]>,
+    "openAgent" | "replaceAgent"
+  >;
   openPanel(id: string, options?: PluginOpenPanelOptions): void;
 }
 
 export interface PluginPlanActionContext extends PluginAgentCommandContext {
+  profileId?: string;
   signal: AbortSignal;
   plan: {
     callId: string;
@@ -282,6 +291,7 @@ export interface PluginPlanActionContribution {
   order?: number;
   query?: { launchProfileId?: string };
   disabledReason?: string;
+  requiresAgentProfile?: boolean;
   onAvailable?(context: PluginPlanActionAvailableContext): void | Promise<void>;
   onPress(context: PluginPlanActionContext): void | Promise<void>;
 }

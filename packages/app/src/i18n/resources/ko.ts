@@ -320,6 +320,11 @@ export const ko: TranslationResources = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "전달된 계획",
+      details: "핸드오프 세부 정보",
+      copyPlan: "계획 복사",
+    },
     diagram: {
       diagram: "다이어그램",
       zoomIn: "확대",
@@ -1255,6 +1260,7 @@ export const ko: TranslationResources = {
         all: "모든 호스트",
       },
       projectFilter: {
+        show: "{{projectName}} 표시",
         label: "프로젝트",
         all: "모든 프로젝트",
       },
@@ -1307,6 +1313,7 @@ export const ko: TranslationResources = {
     project: {
       actions: {
         menu: "프로젝트 작업",
+        hide: "프로젝트 숨기기",
         openSettings: "프로젝트 설정 열기",
         openNewWindow: "새 창에서 열기",
         openNewWindowFailed: "새 창을 열 수 없습니다",

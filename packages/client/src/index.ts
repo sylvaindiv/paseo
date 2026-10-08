@@ -1,7 +1,10 @@
 import type { OwnedSubscription } from "./connection/index.js";
 export type { OwnedSubscription, SubscriptionObserver } from "./connection/index.js";
 import type { DaemonClientConfig } from "./daemon-client.js";
-import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
+import type {
+  AgentPermissionRequest,
+  AgentPermissionResponse,
+} from "@getpaseo/protocol/agent-types";
 import type {
   AgentSnapshotPayload,
   CreationSnapshot,
@@ -366,6 +369,10 @@ export interface PaseoAgentHandle {
   refresh(requestId?: string): Promise<PaseoAgentRefetchResult | null>;
   send(text: string, options?: PaseoAgentSendOptions): Promise<void>;
   respondToPermission(options: PaseoAgentRespondToPermissionOptions): Promise<void>;
+  ensurePlanPermission(options: {
+    workspaceId: string;
+    callId: string;
+  }): Promise<AgentPermissionRequest>;
   setPlanReviewClaim(options: {
     workspaceId: string;
     permissionRequestId: string;
@@ -964,6 +971,8 @@ function createAgentHandleFactory(
       respondToPermission: async ({ requestId, response }) => {
         await daemonClient.respondToPermissionAndWait(id, requestId, response);
       },
+      ensurePlanPermission: async (input) =>
+        daemonClient.ensurePlanPermission({ ...input, agentId: id }),
       setPlanReviewClaim: async (input) =>
         daemonClient.setPlanReviewClaim({ ...input, agentId: id }),
       sendPlanRevision: async (input) => daemonClient.sendPlanRevision({ ...input, agentId: id }),

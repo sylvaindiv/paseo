@@ -3,7 +3,7 @@ import { router } from "expo-router";
 import type { PluginPanelLocation } from "@getpaseo/plugin/client";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
-import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
+import { collectAllTabs, useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { buildPluginSurfaceRoute } from "./routes";
 import type { PluginNavigation } from "./actions";
 
@@ -23,6 +23,35 @@ export function createPluginNavigation(input: {
   return {
     openAgent(agentId) {
       navigateToAgent({ serverId, agentId });
+    },
+    replaceAgent(sourceAgentId, targetAgentId) {
+      if (!workspaceId) throw new Error("No active workspace");
+      const workspaceKey = `${serverId}:${workspaceId}`;
+      const store = useWorkspaceLayoutStore.getState();
+      const layout = store.layoutByWorkspace[workspaceKey];
+      const tabs = layout ? collectAllTabs(layout.root) : [];
+      const sourceTab = tabs.find(
+        (tab) => tab.target.kind === "agent" && tab.target.agentId === sourceAgentId,
+      );
+      const targetTab = tabs.find(
+        (tab) => tab.target.kind === "agent" && tab.target.agentId === targetAgentId,
+      );
+      if (sourceTab) {
+        store.unpinAgent(workspaceKey, sourceAgentId);
+        store.hideAgent(workspaceKey, sourceAgentId);
+      }
+      if (sourceTab && targetTab) {
+        store.closeTab(workspaceKey, sourceTab.tabId);
+        store.focusTab(workspaceKey, targetTab.tabId);
+        return;
+      }
+      const replaced = sourceTab
+        ? store.replaceTab(workspaceKey, sourceTab.tabId, {
+            kind: "agent",
+            agentId: targetAgentId,
+          })
+        : null;
+      if (!replaced) navigateToAgent({ serverId, agentId: targetAgentId });
     },
     openSettings(pluginId, screenId) {
       router.push(buildPluginSettingsRoute(serverId, pluginId, screenId));

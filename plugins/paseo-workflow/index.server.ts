@@ -1,5 +1,13 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { installRpc, reviewRpc, handoffRpc, prepareRpc, enqueueRpc, statusRpc } from "./shared/rpc";
+import {
+  installRpc,
+  reviewRpc,
+  handoffRpc,
+  handoffToProfileRpc,
+  prepareRpc,
+  enqueueRpc,
+  statusRpc,
+} from "./shared/rpc";
 import { profileId } from "./shared/profiles";
 import { installProfiles } from "./server/install";
 import { workflowSettings } from "./server/state";
@@ -28,6 +36,13 @@ export default function contribute(server: PluginServerContext) {
     type: "workflow.plan.handoff.response" as const,
     ...(await workflow(paseo).handoff(context)),
   }));
+  server.handle(
+    handoffToProfileRpc,
+    async ({ profileId: selectedProfileId, ...context }, { paseo }) => ({
+      type: "workflow.plan.handoffToProfile.response" as const,
+      ...(await workflow(paseo).handoff(context, selectedProfileId)),
+    }),
+  );
   server.handle(enqueueRpc, async (input, { paseo }) => ({
     type: "workflow.handoff.enqueue.response" as const,
     ...(await workflow(paseo).enqueueHandoff(input)),
@@ -41,6 +56,7 @@ export default function contribute(server: PluginServerContext) {
   );
   server.on("agent.permission_requested", async ({ agent, request }, { paseo }) => {
     if (
+      agent.labels["paseo.workflow.role"] === "executor" ||
       agent.launchProfileId !== profileId("planner") ||
       request.kind !== "plan" ||
       !request.sourcePlanCallId ||
@@ -61,7 +77,11 @@ export default function contribute(server: PluginServerContext) {
     );
   });
   server.on("agent.permission_resolved", async ({ agent, requestId, resolution }, { paseo }) => {
-    if (agent.launchProfileId === profileId("planner") && resolution.behavior === "allow")
+    if (
+      agent.labels["paseo.workflow.role"] !== "executor" &&
+      agent.launchProfileId === profileId("planner") &&
+      resolution.behavior === "allow"
+    )
       await workflow(paseo).approved(agent.id, requestId);
   });
   server.on("agent.turn_ended", async ({ agent, outcome, turnId }, { paseo }) => {
@@ -69,6 +89,7 @@ export default function contribute(server: PluginServerContext) {
     // Direct-config executors have no workflow launch profile; trust only the executor role labels.
     const roles = [
       "execution-router",
+      "executor",
       "executor-trivial",
       "executor-bounded",
       "executor-diagnostic",

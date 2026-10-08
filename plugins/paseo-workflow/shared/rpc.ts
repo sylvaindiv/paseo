@@ -57,6 +57,14 @@ export const handoffRpc = defineRpc({
   input: planContext.extend({ selection: executorSelection.optional() }),
   output: z.object({ type: z.literal("workflow.plan.handoff.response"), agentId: z.string() }),
 });
+export const handoffToProfileRpc = defineRpc({
+  name: "workflow.plan.handoffToProfile.request",
+  input: planContext.extend({ profileId: z.string().min(1) }),
+  output: z.object({
+    type: z.literal("workflow.plan.handoffToProfile.response"),
+    agentId: z.string(),
+  }),
+});
 export const statusRpc = defineRpc({
   name: "workflow.status.get.request",
   input: z.object({ workspaceId: z.string(), agentId: z.string() }),
@@ -72,6 +80,7 @@ export const statusRpc = defineRpc({
       )
       .optional(),
     plan: planContext.nullable(),
+    profiles: z.array(z.object({ id: z.string(), name: z.string() })).optional(),
     recommendation: executorSelection.nullable(),
     routing: routingStatus.nullable().optional(),
     handoffRequested: z.boolean().optional(),

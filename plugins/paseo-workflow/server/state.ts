@@ -86,6 +86,7 @@ export const workflowSettings = defineSettings({
                 .object({
                   // COMPAT(workflow-executor-selection): added in v0.8.0, remove after 2027-09-13.
                   selection: executorSelection.optional(),
+                  profileId: z.string().optional(),
                   phase: z.enum(["closing", "closed", "running", "outcome_unknown"]),
                   agentId: z.string().optional(),
                 })

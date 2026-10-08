@@ -319,6 +319,11 @@ export const zhCN: TranslationResources = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "已移交的计划",
+      details: "移交详情",
+      copyPlan: "复制计划",
+    },
     diagram: {
       diagram: "图表",
       zoomIn: "放大",
@@ -1240,6 +1245,7 @@ export const zhCN: TranslationResources = {
         all: "所有主机",
       },
       projectFilter: {
+        show: "显示 {{projectName}}",
         label: "项目",
         all: "所有项目",
       },
@@ -1291,6 +1297,7 @@ export const zhCN: TranslationResources = {
     project: {
       actions: {
         menu: "Project 操作",
+        hide: "隐藏项目",
         openSettings: "打开 project 设置",
         openNewWindow: "在新窗口中打开",
         openNewWindowFailed: "无法打开新窗口",

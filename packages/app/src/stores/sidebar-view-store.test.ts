@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { StateStorage } from "zustand/middleware";
+import { createJSONStorage, type StateStorage } from "zustand/middleware";
 import {
   createSidebarViewStorage,
   hasActiveSidebarLabelFilter,
@@ -30,13 +30,51 @@ function createMemoryStorage(entries: Record<string, string | null>): MemoryStor
 }
 
 describe("sidebar view store", () => {
+  let persistedStorage: MemoryStorage;
   beforeEach(() => {
+    persistedStorage = createMemoryStorage({});
+    useSidebarViewStore.persist.setOptions({ storage: createJSONStorage(() => persistedStorage) });
     useSidebarViewStore.setState({
       groupMode: "project",
       hostFilters: [],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: { labels: [] },
     });
+  });
+
+  it("persists hidden projects without losing other sidebar preferences", () => {
+    expect(
+      migrateSidebarViewState({
+        groupMode: "status",
+        hostFilters: ["host-a"],
+        hiddenProjectKeys: ["project-a"],
+      }),
+    ).toMatchObject({
+      groupMode: "status",
+      hostFilters: ["host-a"],
+      hiddenProjectKeys: ["project-a"],
+    });
+  });
+
+  it("hides a project durably and restores it into the current selection", async () => {
+    const store = useSidebarViewStore.getState();
+    store.toggleProjectFilter("project-b");
+    store.hideProject("project-a");
+    store.hideProject("project-a");
+    const persisted = await persistedStorage.getItem("sidebar-view");
+    expect(persisted).not.toBeNull();
+    store.clearProjectFilters();
+    await persistedStorage.setItem("sidebar-view", persisted!);
+    await useSidebarViewStore.persist.rehydrate();
+    expect(useSidebarViewStore.getState().hiddenProjectKeys).toEqual(["project-a"]);
+    expect(useSidebarViewStore.getState().projectFilters).toEqual(["project-b"]);
+    store.includeProjectFilter("project-a");
+    expect(useSidebarViewStore.getState().hiddenProjectKeys).toEqual([]);
+    expect(useSidebarViewStore.getState().projectFilters).toEqual(["project-b", "project-a"]);
+    store.hideProject("project-a");
+    store.clearProjectFilters();
+    expect(useSidebarViewStore.getState().hiddenProjectKeys).toEqual([]);
   });
 
   it("includes an added project while preserving the current selection and other filters", () => {
@@ -110,6 +148,7 @@ describe("sidebar view store", () => {
       groupMode: "status",
       hostFilters: [],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: { labels: [] },
     });
   });
@@ -124,6 +163,7 @@ describe("sidebar view store", () => {
       groupMode: "status",
       hostFilters: ["host-a"],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: { labels: [] },
     });
   });
@@ -138,6 +178,7 @@ describe("sidebar view store", () => {
       groupMode: "status",
       hostFilters: ["host-a", "host-b"],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: { labels: [] },
     });
   });
@@ -231,6 +272,7 @@ describe("sidebar view store", () => {
       groupMode: "status",
       hostFilters: ["host-a"],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: { labels: ["urgent"] },
     });
   });
@@ -248,6 +290,7 @@ describe("sidebar view store", () => {
       groupMode: "project",
       hostFilters: ["host-a"],
       projectFilters: ["project-a", "project-b"],
+      hiddenProjectKeys: [],
       labelFilter: { labels: [] },
     });
   });
@@ -257,6 +300,7 @@ describe("sidebar view store", () => {
       groupMode: "project",
       hostFilters: [],
       projectFilters: [],
+      hiddenProjectKeys: [],
       labelFilter: { labels: [] },
     });
   });

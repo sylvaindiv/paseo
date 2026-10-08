@@ -1,39 +1,49 @@
-import { useEffect, useRef, useCallback, useMemo } from "react";
-import { Text, ScrollView } from "react-native";
+import { useRef, useCallback, useMemo } from "react";
+import { Text, ScrollView, View, type ViewStyle } from "react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRpc, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import {
+  Button,
   SettingsAction,
   SettingsCard,
   SettingsRow,
   SettingsSection,
 } from "@getpaseo/plugin/client/ui";
 import type { RpcOutput } from "@getpaseo/plugin";
-import { statusRpc, enqueueRpc } from "../shared/rpc";
+import { statusRpc, handoffToProfileRpc } from "../shared/rpc";
 
-function HandoffState({
-  data,
-  textStyle,
+const handoffStyle: ViewStyle = { padding: 16, gap: 8 };
+const profilesStyle: ViewStyle = {
+  flexDirection: "row",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: 8,
+  minWidth: 0,
+};
+
+function ProfileButton({
+  profile,
+  busy,
+  disabled,
+  handoff,
 }: {
-  data: RpcOutput<typeof statusRpc>;
-  textStyle: { color: string };
+  profile: { id: string; name: string };
+  busy: boolean;
+  disabled: boolean;
+  handoff: (profileId: string) => void;
 }) {
-  const executorId = data.handoff?.agentId;
+  const onPress = useCallback(() => handoff(profile.id), [handoff, profile.id]);
   return (
-    <>
-      {data.routing?.phase === "running" ? <SettingsRow label="Choix de l’exécutant…" /> : null}
-      {data.routing?.decision ? (
-        <SettingsRow label="Executor route">
-          <Text selectable style={textStyle}>
-            {data.routing.decision.model} / {data.routing.decision.effort}
-          </Text>
-        </SettingsRow>
-      ) : null}
-      {data.handoffRequested && !executorId ? <SettingsRow label="Transfer requested" /> : null}
-      {data.routing?.error && !data.plan ? (
-        <SettingsRow label="Routing failed" hint={`${data.routing.error} Retry from the plan.`} />
-      ) : null}
-    </>
+    <Button
+      variant="secondary"
+      size="sm"
+      disabled={disabled}
+      loading={busy}
+      onPress={onPress}
+      accessibilityLabel={profile.name}
+    >
+      <Text>{profile.name}</Text>
+    </Button>
   );
 }
 
@@ -46,50 +56,64 @@ function Handoff({
   theme: PluginAgentPanelProps["theme"];
   navigation: PluginAgentPanelProps["navigation"];
 }) {
-  const opened = useRef(false);
-  const execute = useRpc(enqueueRpc);
+  const pending = useRef(false);
+  const execute = useRpc(handoffToProfileRpc);
   const mutation = useMutation({
-    mutationFn: () => {
-      if (!data.plan) throw new Error("Open Hand off on the current pending plan.");
-      return execute(data.plan);
+    mutationFn: async (profileId: string) => {
+      if (!data.plan) throw new Error("The handoff plan is no longer current.");
+      return execute({ ...data.plan, profileId });
+    },
+    onSuccess: ({ agentId }) => {
+      if (navigation?.replaceAgent) navigation.replaceAgent({ agentId });
+      else navigation?.openAgent({ agentId });
+    },
+    onSettled: () => {
+      pending.current = false;
     },
   });
-  useEffect(() => {
-    if (
-      !opened.current &&
-      mutation.isSuccess &&
-      data.handoff?.phase === "running" &&
-      data.handoff.agentId
-    ) {
-      opened.current = true;
-      navigation?.openAgent({ agentId: data.handoff.agentId });
-    }
-  }, [data.handoff, mutation.isSuccess, navigation]);
-  const handoff = useCallback(() => mutation.mutate(), [mutation]);
+  const handoff = useCallback(
+    (profileId: string) => {
+      if (pending.current) return;
+      pending.current = true;
+      mutation.mutate(profileId);
+    },
+    [mutation],
+  );
   const openExecutor = useCallback(() => {
     if (data.handoff?.agentId) navigation?.openAgent({ agentId: data.handoff.agentId });
   }, [data.handoff?.agentId, navigation]);
   const textStyle = useMemo(() => ({ color: theme.colors.foreground }), [theme]);
   const executorId = data.handoff?.agentId;
-  const canRetry = data.handoff?.phase === "closed";
-  let actionLabel = canRetry ? "Retry handoff" : "Hand off";
-  if (mutation.isPending) actionLabel = "Queuing...";
-  if (!data.plan && !data.routing && !executorId) return null;
+  if (!data.plan && !executorId) return null;
   return (
-    <SettingsSection title="Hand off">
+    <SettingsSection title="Handoff">
       <SettingsCard>
-        <HandoffState data={data} textStyle={textStyle} />
-        {data.plan && (!executorId || canRetry) ? (
-          <SettingsAction
-            label="Continue in a new root agent"
-            actionLabel={actionLabel}
-            hint="The executor starts as soon as routing is ready"
-            error={mutation.error?.message ?? data.routing?.error}
-            disabled={mutation.isPending || (data.handoffRequested && !data.routing?.error)}
-            onPress={handoff}
-          />
+        {data.plan ? (
+          <View style={handoffStyle}>
+            <View testID="workflow-handoff-profiles" style={profilesStyle}>
+              <Text style={textStyle}>Handoff :</Text>
+              {data.profiles?.length ? (
+                data.profiles.map((profile) => (
+                  <ProfileButton
+                    key={profile.id}
+                    profile={profile}
+                    handoff={handoff}
+                    disabled={mutation.isPending}
+                    busy={mutation.isPending && mutation.variables === profile.id}
+                  />
+                ))
+              ) : (
+                <Text style={textStyle}>Aucun profil disponible</Text>
+              )}
+            </View>
+            {mutation.error ? (
+              <Text accessibilityRole="alert" style={textStyle}>
+                {mutation.error.message}
+              </Text>
+            ) : null}
+          </View>
         ) : null}
-        {executorId && !canRetry ? (
+        {executorId ? (
           <SettingsAction
             label="Executor created"
             actionLabel="Open executor"

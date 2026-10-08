@@ -22,6 +22,7 @@ const request: AgentPermissionRequest = {
 };
 const action = {
   type: "handoff" as const,
+  profileId: "profile-1",
   key: "request-key",
   planCallId: "call-1",
   planText: "# Exact plan\n\nSecond line.",
@@ -68,12 +69,20 @@ describe("widget handoff", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("requires an explicit profile before invoking the plugin", async () => {
+    await expect(
+      handoffWidgetPlan({ ...input, action: { ...action, profileId: undefined } }),
+    ).rejects.toThrow("Choose an agent profile");
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("passes the exact plan and selects the executor without a window focus call", async () => {
     run.mockImplementation(async ({ navigation }) => navigation.openAgent("executor"));
     await handoffWidgetPlan(input);
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
         contributionId: "handoff",
+        profileId: "profile-1",
         workspaceId: "workspace",
         agentId: "planner",
         plan: { callId: "call-1", text: action.planText, permissionRequestId: "permission" },

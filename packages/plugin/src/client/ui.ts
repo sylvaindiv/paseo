@@ -84,3 +84,15 @@ export interface SidebarRowProps {
 export declare const SidebarRow: ComponentType<SidebarRowProps>;
 /** A line between groups of rows. Render it from a sidebar item's `Component`. */
 export declare const SidebarSeparator: ComponentType;
+
+/** The host's secondary action button. */
+export declare const Button: ComponentType<{
+  children: ReactNode;
+  onPress(): void;
+  variant?: "secondary";
+  size?: "sm" | "md";
+  disabled?: boolean;
+  loading?: boolean;
+  accessibilityLabel?: string;
+  testID?: string;
+}>;

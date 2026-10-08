@@ -73,6 +73,7 @@ export interface PluginBeforeRequests {
     env?: Record<string, string>;
     readonly workspaceId?: string;
     readonly launchProfileId?: string;
+    readonly labels?: Readonly<Record<string, string>>;
     modelRouting?: {
       readonly strategy: "jev";
       readonly prompt: string;

@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const output = path.resolve(here, "../../../.context/agent-widget");
+const output = path.resolve(here, "../test-results/agent-widget");
 await mkdir(output, { recursive: true });
 const previousBundleId =
   process.platform === "darwin"
@@ -30,6 +30,7 @@ const labels = {
   comment: "Ajouter une consigne…",
   sendComment: "Envoyer",
   handoff: "Handoff",
+  noProfiles: "Aucun profil disponible",
   submit: "Envoyer la réponse",
   next: "Suivant",
   close: "Fermer",
@@ -46,6 +47,12 @@ const plan = {
   requestId: "plan",
   workspaceId: "workspace",
   planCallId: "plan-call",
+  handoffProfiles: [
+    { id: "profile-1", name: "Codex rapide" },
+    { id: "profile-2", name: "Claude architecture" },
+    { id: "profile-3", name: "Codex approfondi" },
+    { id: "profile-4", name: "Revue en lecture seule" },
+  ],
   planText: "# Plan fictif — test automatique\n\nAfficher le premier contenu de test.",
   agentTitle: "TEST — Codex",
   workspace: "Environnement de test",
@@ -139,6 +146,8 @@ try {
   expect(geometry.bounds.x + geometry.bounds.width).toBe(
     geometry.area.x + geometry.area.width - 16,
   );
+  expect(geometry.bounds.y).toBe(geometry.area.y + 16);
+  expect(geometry.bounds.height).toBe(geometry.area.height - 32);
   expect(geometry.bounds.y + geometry.bounds.height).toBe(
     geometry.area.y + geometry.area.height - 16,
   );
@@ -163,7 +172,60 @@ try {
       (candidate) => candidate.getTitle() !== "Paseo" && candidate.isFocused(),
     ),
   );
+  await expect(widget.locator(".handoff-row button")).toHaveText(
+    plan.handoffProfiles.map((profile) => profile.name),
+  );
+  const buttonRows = await widget
+    .locator(".handoff-row button")
+    .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().top));
+  expect(new Set(buttonRows).size).toBeGreaterThan(1);
   await widget.screenshot({ path: path.join(output, "plan.png") });
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [question],
+    labels,
+  });
+  await expect(widget.locator(".pill")).toBeVisible();
+  await widget.locator("[data-action=restore]").click();
+  await expect(widget.locator(".question-title")).toContainText("Quand");
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [],
+    labels,
+  });
+  await expect(widget.locator(".pill")).toHaveText(/Paseo.*0/);
+  await widget.screenshot({ path: path.join(output, "reduced-after-app-response.png") });
+  await widget.locator("[data-action=restore]").click();
+  await expect(widget.locator(".pill")).toBeVisible();
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [plan, question],
+    labels,
+  });
+  await expect(widget.locator("#comment")).toBeVisible();
+  const simultaneousPlan = {
+    ...plan,
+    key: JSON.stringify(["host", "agent", "simultaneous"]),
+    requestId: "simultaneous",
+  };
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [simultaneousPlan, question],
+    labels,
+  });
+  await expect(widget.locator("#comment")).toBeVisible();
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [plan, question],
+    labels,
+  });
+  await expect(widget.locator("#comment")).toBeVisible();
+  await widget.locator("#comment").fill("Garde le widget silencieux.");
   const replacement = {
     ...plan,
     planText: "# Second plan fictif — test automatique\n\nAfficher le second contenu de test.",
@@ -216,10 +278,11 @@ try {
   await widget.screenshot({ path: path.join(output, "reduced-after-answer.png") });
   await widget.locator("[data-action=restore]").click();
   await expect(widget.locator("#comment")).toHaveValue("Garde le widget silencieux.");
-  await widget.locator("#handoff").click();
+  await widget.locator('[data-action="handoff"]').first().click();
   await expect(widget.locator(".pill")).toBeVisible();
   const actions = await owner.evaluate(() => window.widgetActions);
   expect(actions.map((action) => action.type)).toEqual(["comment", "answer", "handoff"]);
+  expect(actions.at(-1).profileId).toBe("profile-1");
   expect(actions[2]).toMatchObject({ planCallId: "plan-call", planText: plan.planText });
   expect(actions[1].selections).toEqual([[0], [0, 1], []]);
   expect(actions[1].texts).toEqual(["", "", "Ne pas interrompre la saisie."]);
@@ -230,15 +293,7 @@ try {
     requests: [plan, question],
     labels,
   });
-  await expect
-    .poll(() =>
-      app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()
-          .find((window) => window.getTitle() === "Paseo")
-          ?.isVisible(),
-      ),
-    )
-    .toBe(false);
+  await expect(widget.locator(".pill")).toHaveText(/Paseo.*0/);
   const newPlan = { ...plan, key: JSON.stringify(["host", "agent", "plan2"]), requestId: "plan2" };
   await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
     serverId: "host",
@@ -282,15 +337,7 @@ try {
         ?.isFocused(),
     ),
   ).toBe(false);
-  await expect
-    .poll(() =>
-      app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()
-          .find((window) => window.getTitle() === "Paseo")
-          ?.isVisible(),
-      ),
-    )
-    .toBe(false);
+  await expect(widget.locator(".pill")).toHaveText(/Paseo.*0/);
   // Another application window shares the queue, then takes over when its peer closes.
   const secondOpened = app.waitForEvent("window");
   await app.evaluate(() => globalThis.createWidgetOwner());
@@ -357,15 +404,7 @@ try {
   await owner.close();
   await expect(widget.locator(".queue span")).toHaveText("1 / 1");
   await widget.locator("[data-action=approve]").click();
-  await expect
-    .poll(() =>
-      app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()
-          .find((window) => window.getTitle() === "Paseo")
-          ?.isVisible(),
-      ),
-    )
-    .toBe(false);
+  await expect(widget.locator(".pill")).toHaveText(/Paseo.*0/);
   expect(
     await secondOwner.evaluate(() => window.widgetActions.map((action) => action.type)),
   ).toEqual(["approve"]);
@@ -378,8 +417,8 @@ try {
     labels,
   });
   await expect(widget.locator("#comment")).toBeVisible();
-  await widget.locator("#handoff").click();
-  await expect(widget.locator("#handoff")).toBeDisabled();
+  await widget.locator('[data-action="handoff"]').first().click();
+  await expect(widget.locator('[data-action="handoff"]').first()).toBeDisabled();
   await expect.poll(() => secondOwner.evaluate(() => window.widgetActions.length)).toBe(2);
   await widget.locator("header button").click();
   await expect(widget.locator(".pill")).toBeVisible();
@@ -423,23 +462,37 @@ try {
   });
   await expect(widget.locator("#comment")).toBeVisible();
   await widget.locator("#comment").fill("Brouillon à préserver");
-  await widget.locator("#handoff").click();
+  await widget.locator('[data-action="handoff"]').first().click();
   await expect(widget.locator(".notice.error")).toContainText("No confirmation", {
     timeout: 35_000,
   });
   await expect(widget.locator("#comment")).toHaveValue("Brouillon à préserver");
   await widget.screenshot({ path: path.join(output, "handoff-timeout.png") });
   await secondOwner.evaluate(() => (window.widgetMode = "normal"));
-  await widget.locator("#handoff").click();
-  await expect
-    .poll(() =>
-      app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()
-          .find((window) => window.getTitle() === "Paseo")
-          ?.isVisible(),
-      ),
-    )
-    .toBe(false);
+  await widget.locator('[data-action="handoff"]').first().click();
+  await expect(widget.locator(".pill")).toHaveText(/Paseo.*0/);
+  const tallPlan = {
+    ...plan,
+    key: JSON.stringify(["host", "agent", "tall"]),
+    requestId: "tall",
+    planHtml: `<h1>Plan long</h1>${Array.from({ length: 80 }, (_, index) => `<p>Étape ${index + 1}</p>`).join("")}`,
+  };
+  await secondOwner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [tallPlan],
+    labels,
+  });
+  const body = widget.locator(".body");
+  await expect(body).toBeVisible();
+  const scrollMetrics = await body.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+  await body.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+  expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(widget.locator("[data-action=approve]")).toBeVisible();
   const sizeChecks = await app.evaluate(() => {
     const widgetBounds = globalThis.widgetBounds;
     return [
@@ -448,6 +501,9 @@ try {
     ].map((size) => ({ size, bounds: widgetBounds({ x: 0, y: 0, ...size }, false) }));
   });
   for (const { size, bounds } of sizeChecks) {
+    expect(bounds.width).toBe(512);
+    expect(bounds.y).toBe(16);
+    expect(bounds.height).toBe(size.height - 32);
     expect(bounds.x + bounds.width).toBe(size.width - 16);
     expect(bounds.y + bounds.height).toBe(size.height - 16);
   }
@@ -457,7 +513,7 @@ try {
     JSON.stringify({ passed: true, geometry, actions, pageErrors: errors }, null, 2),
   );
   console.log(
-    "PASS: non-activating widget with a visible main window, primary screen bounds, feedback failure/retry, questions, drafts, stale snapshots, offline, collapse, approval, multi-window deduplication and takeover, draft focus and screen sizes.",
+    "PASS: non-activating widget with a visible main window, full primary-screen height, feedback failure/retry, app and widget responses, questions, drafts, stale snapshots, offline, persistent zero-count pill, multi-window takeover and long-content scrolling.",
   );
 } finally {
   await app.close();

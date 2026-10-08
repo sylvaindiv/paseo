@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getFeatureHighlightColor,
   getFeatureTooltip,
+  getFeatureToggleValue,
   getAgentControlHintKey,
   isFeatureActive,
   normalizeModelId,
@@ -17,6 +18,28 @@ describe("getAgentControlHintKey", () => {
 });
 
 describe("feature metadata helpers", () => {
+  it("toggles Codex Normal/Fast using the catalog tier id", () => {
+    const feature = {
+      type: "select" as const,
+      id: "service_tier",
+      label: "Speed",
+      value: "default",
+      options: [
+        { id: "default", label: "Normal", isDefault: true },
+        { id: "priority", label: "Fast" },
+      ],
+    };
+    expect(getFeatureToggleValue(feature)).toBe("priority");
+    expect(getFeatureToggleValue({ ...feature, value: "priority" })).toBe("default");
+    expect(getFeatureToggleValue({ ...feature, id: "other" })).toBeNull();
+    expect(
+      getFeatureToggleValue({
+        ...feature,
+        options: [...feature.options, { id: "ultrafast", label: "Ultrafast" }],
+      }),
+    ).toBeNull();
+  });
+
   it("prefers explicit feature tooltip copy", () => {
     expect(
       getFeatureTooltip({

@@ -118,9 +118,9 @@ export const fr: TranslationResources = {
   },
   composer: {
     placeholders: {
-      desktop: "Envoyez un message à l’agent, mentionnez @files ou utilisez /commands et /skills",
-      mobile: "Message, @files, /commands",
-      fallback: "Message…",
+      desktop: "Envoyez un message à l'agent...",
+      mobile: "Envoyez un message à l'agent...",
+      fallback: "Envoyez un message à l'agent...",
       terminal: "Invite",
     },
     input: {
@@ -324,6 +324,11 @@ export const fr: TranslationResources = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "Plan transmis",
+      details: "Détails du handoff",
+      copyPlan: "Copier le plan",
+    },
     diagram: {
       diagram: "Diagramme",
       zoomIn: "Zoomer",
@@ -1156,7 +1161,7 @@ export const fr: TranslationResources = {
         reviewProfile: "Profil de revue",
         deliveryProfile: "Profil de livraison",
         selectProfile: "Sélectionner un profil",
-        noProfiles: "Aucun profil d’agent disponible",
+        noProfiles: "Aucun profil disponible",
         reviewPrompt: "Prompt de revue",
         createPrPrompt: "Prompt de création de PR",
         commitAndPushPrompt: "Prompt de commit et push",
@@ -1275,6 +1280,7 @@ export const fr: TranslationResources = {
         all: "Tous les hôtes",
       },
       projectFilter: {
+        show: "Réafficher {{projectName}}",
         label: "Projet",
         all: "Tous les projets",
       },
@@ -1328,6 +1334,7 @@ export const fr: TranslationResources = {
     project: {
       actions: {
         menu: "Actions du projet",
+        hide: "Masquer le projet",
         openSettings: "Ouvrir les paramètres du projet",
         openNewWindow: "Ouvrir dans une nouvelle fenêtre",
         openNewWindowFailed: "Impossible d’ouvrir une nouvelle fenêtre",

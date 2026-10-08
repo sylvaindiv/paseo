@@ -1,5 +1,4 @@
 import { expect, test } from "vitest";
-import { z } from "zod";
 import {
   WorkflowController,
   type WorkflowPort,
@@ -7,15 +6,11 @@ import {
   type WorkflowState,
 } from "./workflow";
 import { profiles } from "../shared/profiles";
-import { routes } from "./execution-routing";
-import type { ExecutionDecision } from "./execution-routing";
 
 function fixture() {
   const launches: Parameters<WorkflowPort["create"]>[0][] = [];
   const prompts: Array<{ agentId: string; text: string; messageId: string }> = [];
   const decisions: string[] = [];
-  let classification: ExecutionDecision | Error | undefined;
-  let classifyCalls = 0;
   const agents = new Map<string, WorkflowAgent>([
     [
       "planner",
@@ -39,22 +34,6 @@ function fixture() {
   let installed = [...profiles];
   const port: WorkflowPort = {
     profiles: async () => installed,
-    models: async () => [
-      { id: "gpt-5.6-luna", thinkingOptions: [{ id: "low" }] },
-      {
-        id: "gpt-5.6-sol",
-        thinkingOptions: [{ id: "low" }, { id: "medium" }, { id: "high" }],
-      },
-      {
-        id: "gpt-6-astra",
-        thinkingOptions: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
-      },
-    ],
-    classify: async () => {
-      classifyCalls++;
-      if (classification instanceof Error) throw classification;
-      return classification ?? JSON.parse(decisionFor("bounded"));
-    },
     agent: async (id) => {
       const value = agents.get(id);
       if (!value) throw new Error("Unknown agent");
@@ -113,6 +92,9 @@ function fixture() {
       agents.get(agentId)!.pendingPermissions = [];
     },
     claimReview: async () => {},
+    ensurePlanPermission: async () => {
+      throw new Error("Unexpected synthetic permission");
+    },
     read: async () => structuredClone(stored),
     write: async (value) => {
       stored = structuredClone(value);
@@ -123,17 +105,7 @@ function fixture() {
     launches,
     prompts,
     decisions,
-    get classifyCalls() {
-      return classifyCalls;
-    },
     agents,
-    setClassifierResult: (text: string) => {
-      try {
-        classification = JSON.parse(text) as ExecutionDecision;
-      } catch {
-        classification = new Error("JEV a retourné une réponse invalide.");
-      }
-    },
     removeProfile: (id: string) => {
       installed = installed.filter((profile) => profile.id !== id);
     },
@@ -148,204 +120,174 @@ const plan = {
   text: "Exact (c) plan",
 };
 
-const decisionFor = (category: (typeof routes)[number]["category"]) => {
-  const route = routes.find((entry) => entry.category === category)!;
-  return JSON.stringify({ ...route, provider: "codex", reason: "Matched policy" });
-};
-
-async function settleRouting(f: ReturnType<typeof fixture>) {
-  for (let turn = 0; turn < 100; turn++) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const plans = Object.values((await f.port.read()).workflows).flatMap((w) =>
-      Object.values(w.plans),
-    );
-    if (plans.length && plans.every((p) => p.routing && p.routing.phase !== "running")) return;
-  }
-  throw new Error("Routing did not settle");
-}
-
-// Existing execution/review cases start from a ready decision; preparation has its own tests.
 async function preparedHandoff(
   controller: WorkflowController,
-  f: ReturnType<typeof fixture>,
+  _f: ReturnType<typeof fixture>,
   context: typeof plan,
 ) {
-  const workflow = Object.values((await f.port.read()).workflows).find(
-    (w) => w.plannerId === context.agentId,
-  );
-  if (!workflow?.plans[context.callId]?.routing) {
-    await controller.prepareHandoff(context);
-  }
-  if (
-    !workflow?.plans[context.callId]?.routing ||
-    workflow.plans[context.callId].routing?.phase === "running"
-  )
-    await settleRouting(f);
-  const routing = Object.values((await f.port.read()).workflows).find(
-    (w) => w.plannerId === context.agentId,
-  )?.plans[context.callId]?.routing;
-  if (routing?.phase === "failed" || routing?.phase === "outcome_unknown")
-    throw new Error(routing.error);
-  return controller.handoff(context);
+  return controller.handoff(context, "paseo-workflow-executor-standard");
 }
 
-test("background preparation classifies once without authorizing an executor", async () => {
+test("handoff requires an explicit available profile and never classifies", async () => {
   const f = fixture();
-  f.setClassifierResult(decisionFor("bounded"));
-  const write = f.port.write;
-  f.port.write = async (state) => {
-    z.json().parse(state);
-    await write(state);
-  };
   const controller = new WorkflowController(f.port);
-  await Promise.all([controller.prepareHandoff(plan), controller.prepareHandoff(plan)]);
-  await settleRouting(f);
-  expect(f.classifyCalls).toBe(1);
+  await expect(controller.handoff(plan)).rejects.toThrow("Choose an agent profile");
+  await expect(controller.prepareHandoff(plan)).rejects.toThrow("Choose an agent profile");
+  await expect(controller.enqueueHandoff(plan)).rejects.toThrow("Choose an agent profile");
+  await expect(controller.handoff(plan, "deleted-profile")).rejects.toThrow("no longer available");
+  expect(f.port).not.toHaveProperty("classify");
   expect(f.launches).toEqual([]);
   expect(f.decisions).toEqual([]);
-  expect(await controller.status("planner", "workspace")).toMatchObject({
-    routing: { phase: "complete", decision: { model: "gpt-5.6-sol" } },
-    handoffRequested: false,
-  });
 });
 
-test("background enqueue returns while classification waits and status remains available", async () => {
+test("status exposes the current plan and ordered profiles without preparing handoff", async () => {
   const f = fixture();
-  let finish!: (decision: ExecutionDecision) => void;
-  const waiting = new Promise<ExecutionDecision>((resolve) => {
-    finish = resolve;
-  });
-  f.port.classify = async () => waiting;
   const controller = new WorkflowController(f.port);
-  await controller.prepareHandoff(plan);
-  await controller.enqueueHandoff(plan);
-  await controller.enqueueHandoff(plan);
-  await new Promise<void>((resolve) => setImmediate(resolve));
   expect(await controller.status("planner", "workspace")).toMatchObject({
-    routing: { phase: "running" },
-    handoffRequested: true,
+    plan,
+    profiles: profiles.map(({ id, name }) => ({ id, name })),
   });
-  expect(f.launches).toEqual([]);
-  finish(JSON.parse(decisionFor("trivial")));
-  await settleRouting(f);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(f.launches).toHaveLength(1);
-  expect(f.decisions).toEqual(["permission-1"]);
-  expect(await controller.status("planner", "workspace")).toMatchObject({
-    handoff: { phase: "running", agentId: "child-1" },
-  });
+  f.port.profiles = async () => [];
+  expect(await controller.status("planner", "workspace")).toMatchObject({ plan, profiles: [] });
+  f.agents.get("planner")!.pendingPermissions[0].input = { plan: "replacement" };
+  const oldTimeline = await fixture().port.timeline("planner");
+  f.port.timeline = async () => oldTimeline;
+  expect(await controller.status("planner", "workspace")).toMatchObject({ plan: null });
+  expect(f.port).not.toHaveProperty("classify");
 });
 
-test("background preparation accepts an idle complete plan without a native permission and enriches it on click", async () => {
+test("handoff applies the chosen profile's exact settings to a root in the same workspace", async () => {
   const f = fixture();
-  f.agents.get("planner")!.status = "idle";
-  f.agents.get("planner")!.pendingPermissions = [];
+  f.port.profiles = async () => [
+    {
+      id: "custom",
+      name: "Custom",
+      provider: "claude",
+      model: "sonnet",
+      modeId: "default",
+      thinkingOptionId: "high",
+      featureValues: { plan_mode: false },
+      postApprovalModeId: "auto",
+    },
+  ];
+  await new WorkflowController(f.port).handoff(plan, "custom");
+  expect(f.launches).toEqual([
+    {
+      workspaceId: "workspace",
+      launchProfileId: "custom",
+      idempotencyKey: "workflow:planner:handoff:plan-1",
+      config: {
+        provider: "claude/sonnet",
+        modeId: "default",
+        thinkingOptionId: "high",
+        featureValues: { plan_mode: false },
+        writePolicy: "read_write",
+      },
+      labels: {
+        "paseo.workflow.id": "planner",
+        "paseo.workflow.plan": "plan-1",
+        "paseo.workflow.role": "executor",
+      },
+    },
+  ]);
+  expect(f.port).not.toHaveProperty("classify");
+});
+
+test("legacy queued routing stays readable and cannot launch without an explicit profile", async () => {
+  const f = fixture();
+  const controller = new WorkflowController(f.port);
+  await controller.planRequested(plan, false);
+  const state = await f.port.read();
+  const saved = state.workflows.planner.plans[plan.callId];
+  saved.handoffRequested = true;
+  saved.routing = { attempt: 1, phase: "running", promptStarted: true };
+  state.workflows.planner.preparedPlanId = plan.callId;
+  await f.port.write(state);
+  expect(await new WorkflowController(f.port).status("planner", "workspace")).toMatchObject({
+    plan,
+  });
+  await expect(new WorkflowController(f.port).handoff(plan)).rejects.toThrow(
+    "Choose an agent profile",
+  );
+  expect(f.port).not.toHaveProperty("classify");
+  expect(f.launches).toEqual([]);
+  expect(f.decisions).toEqual([]);
+});
+
+test("status captures an idle structured plan's canonical permission for explicit handoff", async () => {
+  const f = fixture();
+  const agent = f.agents.get("planner")!;
+  agent.pendingPermissions = [];
+  agent.status = "idle";
   const timeline = await f.port.timeline("planner");
   const item = timeline[1];
   if (item.type !== "tool_call") throw new Error("Expected plan");
   item.status = "completed";
   f.port.timeline = async () => timeline;
-  f.setClassifierResult(decisionFor("trivial"));
-  const controller = new WorkflowController(f.port);
-  const { permissionRequestId: _permission, ...available } = plan;
-  await controller.prepareHandoff(available);
-  await settleRouting(f);
-  expect(f.launches).toEqual([]);
-  expect(f.decisions).toEqual([]);
-  f.agents.get("planner")!.pendingPermissions = [
-    {
-      id: plan.permissionRequestId,
-      kind: "plan",
+  let ensures = 0;
+  f.port.ensurePlanPermission = async (context) => {
+    expect(context).toEqual({
+      workspaceId: plan.workspaceId,
+      agentId: plan.agentId,
+      callId: plan.callId,
+      text: plan.text,
+    });
+    ensures++;
+    const permission = {
+      id: "synthetic-permission",
+      provider: "codex" as const,
+      name: "Plan",
+      kind: "plan" as const,
       sourcePlanCallId: plan.callId,
       input: { plan: plan.text },
-    },
-  ];
-  await controller.enqueueHandoff(plan);
-  await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+    agent.pendingPermissions = [permission];
+    return permission;
+  };
+  const controller = new WorkflowController(f.port);
+  const captured = { ...plan, permissionRequestId: "synthetic-permission" };
+  expect((await controller.status("planner", "workspace")).plan).toEqual(captured);
+  expect((await controller.status("planner", "workspace")).plan).toEqual(captured);
+  expect(ensures).toBe(1);
+  await expect(controller.handoff(captured, "paseo-workflow-executor-standard")).resolves.toEqual({
+    agentId: "child-1",
+  });
+  expect(f.decisions).toEqual(["synthetic-permission"]);
   expect(f.launches).toHaveLength(1);
-  expect(f.decisions).toEqual([plan.permissionRequestId]);
 });
 
-test("a failed classification stays visible until an explicit retry", async () => {
+test("a closed transfer without an executor waits for a fresh profile choice and saves it", async () => {
   const f = fixture();
-  f.setClassifierResult("invalid json");
-  const controller = new WorkflowController(f.port);
-  await controller.prepareHandoff(plan);
-  await settleRouting(f);
-  expect(await controller.status("planner", "workspace")).toMatchObject({
-    routing: { phase: "failed", error: expect.stringContaining("relance explicite") },
-    handoffRequested: false,
-  });
-  expect(f.classifyCalls).toBe(1);
-  await controller.status("planner", "workspace");
-  expect(f.classifyCalls).toBe(1);
-  f.setClassifierResult(decisionFor("bounded"));
-  await controller.enqueueHandoff(plan);
-  await settleRouting(f);
-  expect(f.classifyCalls).toBe(2);
-  expect(f.launches).toHaveLength(1);
-  expect(f.decisions).toEqual([plan.permissionRequestId]);
-});
-
-test("reconcile preserves a complete persisted decision", async () => {
-  const f = fixture();
-  const controller = new WorkflowController(f.port);
-  await controller.prepareHandoff(plan);
-  await settleRouting(f);
-  const state = await f.port.read();
-  state.workflows.planner.plans[plan.callId].routing!.agentId = "legacy-classifier";
-  await f.port.write(state);
-  await controller.status("planner", "workspace");
-  expect((await f.port.read()).workflows.planner.plans[plan.callId].routing).toMatchObject({
-    phase: "complete",
-    decision: { model: "gpt-5.6-sol", effort: "medium" },
-  });
-  expect(f.classifyCalls).toBe(1);
-});
-
-test("reload marks an interrupted classification failed and requires another click", async () => {
-  const f = fixture();
-  let finish!: (decision: ExecutionDecision) => void;
-  f.port.classify = async () => new Promise<ExecutionDecision>((resolve) => (finish = resolve));
-  const controller = new WorkflowController(f.port);
-  await controller.enqueueHandoff(plan);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  controller.dispose();
-  const reloaded = new WorkflowController(f.port);
-  await reloaded.status("planner", "workspace");
-  expect(await reloaded.status("planner", "workspace")).toMatchObject({
-    routing: { phase: "failed", error: expect.stringContaining("interrompue") },
-    handoffRequested: false,
-  });
-  finish(JSON.parse(decisionFor("critical")));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(f.launches).toEqual([]);
-});
-
-test("legacy handoff rejects immediately when preparation is still required", async () => {
-  const f = fixture();
-  await expect(new WorkflowController(f.port).handoff(plan)).rejects.toThrow(
-    "Executor preparation is required",
+  const timeline = await f.port.timeline("planner");
+  f.port.timeline = async () => timeline;
+  const respond = f.port.respond;
+  f.port.respond = async (id, requestId, resolution) => {
+    await respond(id, requestId, resolution);
+    const item = timeline[1];
+    if (item.type !== "tool_call") throw new Error("Expected plan");
+    item.status = "completed";
+    item.metadata = { approved: false, resolution };
+  };
+  const create = f.port.create;
+  f.port.create = async () => {
+    throw new Error("Spawn failed");
+  };
+  await expect(preparedHandoff(new WorkflowController(f.port), f, plan)).rejects.toThrow(
+    "Spawn failed",
   );
-  expect(f.launches).toEqual([]);
-  expect(f.decisions).toEqual([]);
-});
-
-test("a late classification cannot overwrite a replacement plan or launch an executor", async () => {
-  const f = fixture();
-  let finish!: (decision: ExecutionDecision) => void;
-  f.port.classify = async () => new Promise<ExecutionDecision>((resolve) => (finish = resolve));
   const controller = new WorkflowController(f.port);
-  await controller.enqueueHandoff(plan);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  f.agents.get("planner")!.pendingPermissions = [
-    { id: "permission-2", kind: "plan", sourcePlanCallId: "plan-2", input: { plan: "New plan" } },
-  ];
-  await controller.status("planner", "workspace");
-  finish(JSON.parse(decisionFor("critical")));
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect((await controller.status("planner", "workspace")).plan).toEqual(plan);
   expect(f.launches).toEqual([]);
-  expect(f.decisions).toEqual([]);
+  await expect(controller.handoff(plan)).rejects.toThrow("Choose an agent profile");
+  f.port.create = create;
+  await controller.handoff(plan, "paseo-workflow-executor-advanced");
+  expect(f.launches[0].launchProfileId).toBe("paseo-workflow-executor-advanced");
+  expect((await f.port.read()).workflows.planner.plans[plan.callId].handoff).toMatchObject({
+    profileId: "paseo-workflow-executor-advanced",
+    agentId: "child-1",
+    phase: "running",
+  });
+  expect(f.decisions).toEqual([plan.permissionRequestId]);
 });
 
 test("permission lifecycle reviews once and approval selects the exact plan for same-agent final review", async () => {
@@ -378,7 +320,7 @@ test("an executor's question does not start final review without a reviewable de
   const completedDiff = f.port.diff;
   f.port.diff = async () => ({ head: "abc123", text: "", dirtyFiles: [], untrackedFiles: [] });
   const controller = new WorkflowController(f.port);
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   await preparedHandoff(controller, f, plan);
   await controller.finished("child-1", "Which behavior do you prefer?");
   expect(f.launches).toHaveLength(1);
@@ -418,7 +360,7 @@ test("final review audits an uncommitted local result without requesting a commi
 test("unrelated tool approvals never select a workflow plan or start final review", async () => {
   const f = fixture();
   const controller = new WorkflowController(f.port);
-  await controller.prepareHandoff(plan);
+  await controller.planRequested(plan, false);
   await controller.approved("planner", "unrelated-tool");
   await controller.finished("planner", "Tool finished");
   expect(f.launches).toEqual([]);
@@ -433,7 +375,7 @@ test.each([
   "final review %s creates only its bounded read-only audit fanout and reserves writing for the manager",
   async (classification, auditors) => {
     const f = fixture();
-    f.setClassifierResult(decisionFor("complex"));
+
     const controller = new WorkflowController(f.port);
     await preparedHandoff(controller, f, plan);
     await controller.finished("child-1", "Functional commit verified");
@@ -471,7 +413,7 @@ test("final review refuses unsafe corrections and treats manager assertions with
     untrackedFiles: [],
   });
   const controller = new WorkflowController(f.port);
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   await preparedHandoff(controller, f, plan);
   await controller.finished("child-1", "Done");
   await controller.finished("child-2", '{"classification":"SIMPLE"}');
@@ -511,7 +453,7 @@ test("final review refuses unsafe corrections and treats manager assertions with
 test("uncertain findings never authorize correction", async () => {
   const f = fixture();
   const controller = new WorkflowController(f.port);
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   await preparedHandoff(controller, f, plan);
   await controller.finished("child-1", "Done");
   await controller.finished("child-2", '{"classification":"SIMPLE"}');
@@ -564,7 +506,7 @@ test.each([
     untrackedFiles: [],
   });
   const controller = new WorkflowController(f.port);
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   await preparedHandoff(controller, f, plan);
   await controller.finished("child-1", "Done");
   await controller.finished("child-2", '{"classification":"SIMPLE"}');
@@ -789,7 +731,7 @@ test("reconcile recovers the latest canonically approved planner plan missed dur
       detail: { type: "plan", text: knownPlan.text },
     },
   ];
-  await controller.prepareHandoff(knownPlan);
+  await controller.planRequested(knownPlan, false);
   plannerTimeline = [
     { type: "user_message", text: "Plan the request" },
     {
@@ -876,7 +818,7 @@ test("handoff does not recover closing from a non-workflow denial", async () => 
     ];
     throw new Error("ACK lost after consumption");
   };
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   await expect(preparedHandoff(new WorkflowController(f.port), f, plan)).rejects.toThrow(
     "ACK lost",
   );
@@ -909,7 +851,7 @@ test("handoff revalidates the persisted plan before launching the executor", asy
     if (input.idempotencyKey.includes("classifier")) return create(input);
     throw new Error("Spawn unavailable after closing");
   };
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   await expect(preparedHandoff(new WorkflowController(f.port), f, plan)).rejects.toThrow(
     "Spawn unavailable",
   );
@@ -959,7 +901,7 @@ test("handoff does not resume an old denial after a newer unresolved plan", asyn
     ];
     throw new Error("ACK lost after consumption");
   };
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   await expect(preparedHandoff(new WorkflowController(f.port), f, plan)).rejects.toThrow(
     "ACK lost",
   );
@@ -995,7 +937,7 @@ test.each([
       if (input.idempotencyKey.includes("classifier")) return create(input);
       throw new Error("Spawn unavailable after closing");
     };
-    f.setClassifierResult(decisionFor("diagnostic"));
+
     await expect(preparedHandoff(new WorkflowController(f.port), f, plan)).rejects.toThrow(
       "Spawn unavailable",
     );
@@ -1051,7 +993,7 @@ test.each(["review", "handoff"] as const)(
       action === "review"
         ? controller.review(plan, "manual")
         : preparedHandoff(controller, f, plan);
-    f.setClassifierResult(decisionFor("diagnostic"));
+
     await expect(invoke(new WorkflowController(f.port))).rejects.toThrow("Temporary spawn failure");
     f.port.create = create;
     expect(await invoke(new WorkflowController(f.port))).toEqual({
@@ -1089,7 +1031,7 @@ test.each(["review", "handoff"] as const)(
       action === "review"
         ? controller.review(plan, "manual")
         : preparedHandoff(controller, f, plan);
-    f.setClassifierResult(decisionFor("diagnostic"));
+
     await expect(invoke(new WorkflowController(f.port))).rejects.toThrow("ACK lost");
     f.port.respond = async () => {
       throw new Error("The denial must not be replayed");
@@ -1114,11 +1056,11 @@ test.each(["review", "handoff"] as const)(
   },
 );
 
-test("handoff routes once and delivers only the exact plan and original git context", async () => {
+test("handoff delivers only the exact plan and original git context", async () => {
   const f = fixture();
   const context = { ...plan, text: "  Execute this plan.\nNo commit or push authorized.\n" };
   f.agents.get("planner")!.pendingPermissions[0].input = { plan: context.text };
-  f.setClassifierResult(decisionFor("critical"));
+
   const controller = new WorkflowController(f.port);
   const results = await Promise.all([
     preparedHandoff(controller, f, context),
@@ -1130,18 +1072,18 @@ test("handoff routes once and delivers only the exact plan and original git cont
     workspaceId: "workspace",
     idempotencyKey: "workflow:planner:handoff:plan-1",
     config: {
-      provider: "codex/gpt-6-astra",
+      provider: "codex/gpt-5.6-sol",
       modeId: "auto",
-      thinkingOptionId: "xhigh",
+      thinkingOptionId: "medium",
       writePolicy: "read_write",
     },
     labels: {
       "paseo.workflow.id": "planner",
       "paseo.workflow.plan": "plan-1",
-      "paseo.workflow.role": "executor-critical",
+      "paseo.workflow.role": "executor",
     },
   });
-  expect(f.launches[0]).not.toHaveProperty("launchProfileId");
+  expect(f.launches[0].launchProfileId).toBe("paseo-workflow-executor-standard");
   expect(f.prompts[0].text).toMatch(/^\/paseo-handoff/);
   const marker = JSON.parse(
     f.prompts[0].text.split("\n")[1]!.slice("PASEO_WORKFLOW_HANDOFF ".length),
@@ -1169,10 +1111,7 @@ test("handoff routes once and delivers only the exact plan and original git cont
   expect(prompt).not.toContain("Keep the user in control");
   expect(prompt).not.toContain("Build the requested feature");
   expect(f.decisions).toEqual(["permission-1"]);
-  expect((await f.port.read()).workflows.planner.plans["plan-1"].routing?.decision).toMatchObject({
-    model: "gpt-6-astra",
-    effort: "xhigh",
-  });
+  expect(f.port).not.toHaveProperty("classify");
 });
 
 test("plan review preserves the exact plan and projected clarification exchanges", async () => {
@@ -1265,10 +1204,10 @@ test("handoff accepts an actionable plan from an ordinary conversation while rev
     text: "Ordinary exact plan",
   };
   const controller = new WorkflowController(f.port);
-  f.setClassifierResult(decisionFor("bounded"));
-  await expect(controller.prepareHandoff(ordinary)).resolves.toEqual({ recommendation: null });
+
+  expect((await controller.status(ordinary.agentId, ordinary.workspaceId)).plan).toEqual(ordinary);
   await expect(controller.review(ordinary, "manual")).rejects.toThrow("planner profile");
-  f.setClassifierResult(decisionFor("bounded"));
+
   await expect(preparedHandoff(controller, f, ordinary)).resolves.toEqual({
     agentId: "child-1",
   });
@@ -1280,10 +1219,10 @@ test("handoff accepts an actionable plan from an ordinary conversation while rev
       writePolicy: "read_write",
     },
   });
-  expect(f.launches[0]).not.toHaveProperty("launchProfileId");
+  expect(f.launches[0].launchProfileId).toBe("paseo-workflow-executor-standard");
 });
 
-test("an ordinary plan classifies once before it closes or launches an executor", async () => {
+test("an ordinary plan transfers without classification", async () => {
   const f = fixture();
   f.agents.set("ordinary", {
     id: "ordinary",
@@ -1306,7 +1245,7 @@ test("an ordinary plan classifies once before it closes or launches an executor"
     callId: "ordinary-plan",
     text: "Ordinary exact plan",
   };
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   const result = await preparedHandoff(new WorkflowController(f.port), f, ordinaryPlan);
   expect(result).toEqual({ agentId: "child-1" });
   expect(f.launches[0]).toMatchObject({
@@ -1314,25 +1253,23 @@ test("an ordinary plan classifies once before it closes or launches an executor"
     idempotencyKey: "workflow:ordinary:handoff:ordinary-plan",
     config: {
       provider: "codex/gpt-5.6-sol",
-      thinkingOptionId: "high",
+      thinkingOptionId: "medium",
       writePolicy: "read_write",
     },
-    labels: { "paseo.workflow.role": "executor-diagnostic" },
+    labels: { "paseo.workflow.role": "executor" },
   });
-  expect(f.launches[0]).not.toHaveProperty("launchProfileId");
+  expect(f.launches[0].launchProfileId).toBe("paseo-workflow-executor-standard");
   expect(f.prompts[0].agentId).toBe("child-1");
   expect(f.prompts[0].text).toMatch(/^\/paseo-handoff/);
   expect(f.prompts[0].messageId).toBe("workflow:ordinary:handoff:ordinary-plan:prompt");
   expect(f.decisions).toEqual(["ordinary-permission"]);
-  expect(
-    (await f.port.read()).workflows.ordinary.plans["ordinary-plan"].routing?.decision,
-  ).toMatchObject({ model: "gpt-5.6-sol", effort: "high" });
+  expect(f.port).not.toHaveProperty("classify");
 });
 
 test("an uncertain handoff reuses the executor without sending its instruction again", async () => {
   const f = fixture();
   const controller = new WorkflowController(f.port);
-  f.setClassifierResult(decisionFor("diagnostic"));
+
   let sends = 0;
   f.port.send = async (_agentId, text) => {
     sends += 1;
@@ -1351,28 +1288,9 @@ test("an uncertain handoff reuses the executor without sending its instruction a
   expect(f.launches).toHaveLength(1);
 });
 
-test("classifier failures stay retryable and visible", async () => {
-  const f = fixture();
-  const controller = new WorkflowController(f.port);
-  f.setClassifierResult("{ not json");
-  await expect(preparedHandoff(controller, f, plan)).rejects.toThrow("relance explicite");
-  expect(f.decisions).toEqual([]);
-  expect(f.launches).toEqual([]);
-  expect((await f.port.read()).workflows.planner.plans[plan.callId].routing).toMatchObject({
-    phase: "failed",
-  });
-  f.setClassifierResult(decisionFor("bounded"));
-  await controller.enqueueHandoff(plan);
-  await settleRouting(f);
-  await expect(preparedHandoff(new WorkflowController(f.port), f, plan)).resolves.toEqual({
-    agentId: "child-1",
-  });
-  expect(f.launches).toHaveLength(1);
-});
-
 test("a rejected executor prompt requires explicit enqueue and reuses the closed handoff", async () => {
   const f = fixture();
-  f.setClassifierResult(decisionFor("bounded"));
+
   const timeline = await f.port.timeline("planner");
   f.port.timeline = async () => timeline;
   const respond = f.port.respond;
@@ -1393,16 +1311,13 @@ test("a rejected executor prompt requires explicit enqueue and reuses the closed
     await send(id, text, messageId);
   };
   const controller = new WorkflowController(f.port);
-  await controller.enqueueHandoff(plan);
-  await settleRouting(f);
+  await expect(preparedHandoff(controller, f, plan)).rejects.toThrow("agent_request_not_accepted");
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(await controller.status("planner", "workspace")).toMatchObject({
-    handoffRequested: false,
     handoff: { phase: "closed", agentId: "child-1" },
-    routing: { error: expect.stringContaining("agent_request_not_accepted") },
   });
   expect(f.prompts.filter((prompt) => prompt.agentId === "child-1")).toEqual([]);
-  await Promise.all([controller.enqueueHandoff(plan), controller.enqueueHandoff(plan)]);
+  await Promise.all([preparedHandoff(controller, f, plan), preparedHandoff(controller, f, plan)]);
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(await controller.status("planner", "workspace")).toMatchObject({
     handoff: { phase: "running", agentId: "child-1" },
@@ -1412,58 +1327,9 @@ test("a rejected executor prompt requires explicit enqueue and reuses the closed
   expect(f.decisions).toEqual([plan.permissionRequestId]);
 });
 
-test("a classification error fails visibly and explicit enqueue creates a new attempt", async () => {
-  const f = fixture();
-  f.port.classify = async () => {
-    throw new Error("JEV indisponible");
-  };
-  const controller = new WorkflowController(f.port);
-  await controller.enqueueHandoff(plan);
-  await settleRouting(f);
-  expect(await controller.status("planner", "workspace")).toMatchObject({
-    routing: {
-      phase: "failed",
-      attempt: 1,
-      error: expect.stringContaining("JEV indisponible"),
-    },
-  });
-  expect(f.agents.get("planner")!.pendingPermissions).toHaveLength(1);
-  expect(f.decisions).toEqual([]);
-  f.setClassifierResult(decisionFor("bounded"));
-  f.port.classify = async () => JSON.parse(decisionFor("bounded"));
-  await controller.enqueueHandoff(plan);
-  await settleRouting(f);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(await controller.status("planner", "workspace")).toMatchObject({
-    routing: { phase: "complete", attempt: 2 },
-    handoff: { phase: "running", agentId: "child-1" },
-  });
-  expect(f.launches.map((launch) => launch.idempotencyKey)).toEqual([
-    "workflow:planner:handoff:plan-1",
-  ]);
-});
-
-test("an unsupported model/effort combination leaves the permission pending", async () => {
-  const f = fixture();
-  const controller = new WorkflowController(f.port);
-  f.setClassifierResult(
-    JSON.stringify({
-      category: "bounded",
-      provider: "codex",
-      model: "gpt-6-astra",
-      effort: "xhigh",
-      reason: "Invented combination",
-    }),
-  );
-  f.port.models = async () => [];
-  await expect(preparedHandoff(controller, f, plan)).rejects.toThrow("does not expose");
-  expect(f.decisions).toEqual([]);
-  expect(f.launches).toEqual([]);
-});
-
 test("two concurrent handoff calls launch one executor", async () => {
   const f = fixture();
-  f.setClassifierResult(decisionFor("bounded"));
+
   const controller = new WorkflowController(f.port);
   const results = await Promise.all([
     preparedHandoff(controller, f, plan),
@@ -1475,7 +1341,7 @@ test("two concurrent handoff calls launch one executor", async () => {
 
 test("a persisted complete decision never classifies again", async () => {
   const f = fixture();
-  f.setClassifierResult(decisionFor("bounded"));
+
   await preparedHandoff(new WorkflowController(f.port), f, plan);
   expect(f.launches).toHaveLength(1);
   const state = await f.port.read();
@@ -1488,39 +1354,40 @@ test("a persisted complete decision never classifies again", async () => {
   expect(f.launches).toHaveLength(1);
 });
 
-test("turnEnded starts final review for a direct-config executor", async () => {
-  const f = fixture();
-  f.setClassifierResult(decisionFor("critical"));
-  await preparedHandoff(new WorkflowController(f.port), f, plan);
-  f.port.turn = async (id) =>
-    id === "child-1"
-      ? {
-          key: "executor-done",
-          items: [{ type: "assistant_message", text: "Implemented and committed" }],
-        }
-      : null;
-  await new WorkflowController(f.port).turnEnded("child-1", "turn-1");
-  expect(f.launches.at(-1)).toMatchObject({
-    launchProfileId: "paseo-workflow-final-review",
-    labels: {
-      "paseo.workflow.id": "planner",
-      "paseo.workflow.plan": "plan-1",
-      "paseo.workflow.role": "final-review",
-    },
-  });
-});
+test.each(["paseo-workflow-executor-standard", "paseo-workflow-router", "paseo-workflow-planner"])(
+  "turnEnded starts final review for executor profile %s",
+  async (selectedProfileId) => {
+    const f = fixture();
 
-test("missing profiles, unavailable classifier model, and stale plan contexts reject before closing or launching", async () => {
+    await new WorkflowController(f.port).handoff(plan, selectedProfileId);
+    f.port.turn = async (id) =>
+      id === "child-1"
+        ? {
+            key: "executor-done",
+            items: [{ type: "assistant_message", text: "Implemented and committed" }],
+          }
+        : null;
+    await new WorkflowController(f.port).turnEnded("child-1", "turn-1");
+    expect(f.launches.at(-1)).toMatchObject({
+      launchProfileId: "paseo-workflow-final-review",
+      labels: {
+        "paseo.workflow.id": "planner",
+        "paseo.workflow.plan": "plan-1",
+        "paseo.workflow.role": "final-review",
+      },
+    });
+  },
+);
+
+test("deleted profiles and stale contexts reject before closing or launching", async () => {
   const f = fixture();
   const controller = new WorkflowController(f.port);
-  f.removeProfile("paseo-workflow-plan-reviewer");
-  await expect(controller.review(plan, "manual")).rejects.toThrow("Install / repair profiles");
-  f.port.models = async () => [];
-  await expect(preparedHandoff(controller, f, plan)).rejects.toThrow("does not expose");
-  await expect(controller.prepareHandoff({ ...plan, workspaceId: "other" })).rejects.toThrow(
-    "workspace",
-  );
-  await expect(controller.prepareHandoff({ ...plan, text: "stale" })).rejects.toThrow(
+  f.removeProfile("paseo-workflow-executor-standard");
+  await expect(preparedHandoff(controller, f, plan)).rejects.toThrow("no longer available");
+  await expect(
+    controller.handoff({ ...plan, workspaceId: "other" }, profiles[0].id),
+  ).rejects.toThrow("workspace");
+  await expect(controller.handoff({ ...plan, text: "stale" }, profiles[0].id)).rejects.toThrow(
     "text changed",
   );
   expect(f.decisions).toEqual([]);

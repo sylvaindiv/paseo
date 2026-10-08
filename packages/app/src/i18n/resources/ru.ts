@@ -323,6 +323,11 @@ export const ru: TranslationResources = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "Переданный план",
+      details: "Детали передачи",
+      copyPlan: "Копировать план",
+    },
     diagram: {
       diagram: "Диаграмма",
       zoomIn: "Увеличить масштаб",
@@ -1266,6 +1271,7 @@ export const ru: TranslationResources = {
         all: "Все хосты",
       },
       projectFilter: {
+        show: "Показать {{projectName}}",
         label: "Проект",
         all: "Все проекты",
       },
@@ -1319,6 +1325,7 @@ export const ru: TranslationResources = {
     project: {
       actions: {
         menu: "Действия проекта",
+        hide: "Скрыть проект",
         openSettings: "Открыть настройки проекта",
         openNewWindow: "Открыть в новом окне",
         openNewWindowFailed: "Не удалось открыть новое окно",

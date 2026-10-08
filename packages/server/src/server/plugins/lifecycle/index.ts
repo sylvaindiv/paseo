@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AgentStreamEvent, AgentTimelineItem } from "../../agent/agent-sdk-types.js";
 import { z } from "zod";
 import { CreateAgentRequestMessageSchema } from "@getpaseo/protocol/messages";
@@ -34,6 +35,7 @@ const beforeSchemas = {
     env: true,
     workspaceId: true,
     launchProfileId: true,
+    labels: true,
   })
     .extend({
       modelRouting: z
@@ -183,6 +185,8 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
     if (previous.config.cwd !== next.config.cwd) {
       throw new Error("agent.create hooks cannot change the workspace directory");
     }
+    if (!isDeepStrictEqual(previous.labels, next.labels))
+      throw new Error("agent.create hooks cannot change labels");
     validateModelRouting(previous, next);
   }
   return result;

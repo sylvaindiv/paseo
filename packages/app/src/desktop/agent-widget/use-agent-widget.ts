@@ -8,11 +8,13 @@ import { getDesktopHost } from "@/desktop/host";
 import { useSessionStore } from "@/stores/session-store";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { respondToWidgetRequest, projectWidgetRequest } from "./model";
+import { useAgentProfiles } from "@/agent-profiles";
 import { pluginRegistry } from "@/plugins/registry";
 import { handoffReason, handoffWidgetPlan } from "./handoff";
 
 export function useAgentWidget(serverId: string): void {
   const { t } = useTranslation();
+  const { profiles } = useAgentProfiles(serverId);
   useEffect(() => {
     const bridge = getDesktopHost()?.agentWidget;
     if (!bridge) return;
@@ -24,6 +26,7 @@ export function useAgentWidget(serverId: string): void {
       comment: t("desktop.agentWidget.comment"),
       sendComment: t("desktop.agentWidget.sendComment"),
       handoff: t("desktop.agentWidget.handoff"),
+      noProfiles: t("workspace.git.workflow.noProfiles"),
       submit: t("message.question.submit"),
       next: t("message.question.next"),
       close: t("common.actions.close"),
@@ -50,6 +53,7 @@ export function useAgentWidget(serverId: string): void {
           agentTitle: agent.title ?? agent.provider,
           workspace: workspace ? `${workspace.projectDisplayName} · ${workspace.name}` : agent.cwd,
           workspaceId: agent.workspaceId ?? undefined,
+          handoffProfiles: profiles?.map(({ id, name }) => ({ id, name })),
           handoffDisabledReason: handoffReason(
             serverId,
             agent.workspaceId ?? undefined,
@@ -126,5 +130,5 @@ export function useAgentWidget(serverId: string): void {
         .publish({ serverId, online: false, requests: [], labels })
         .catch((error) => console.warn("[agent-widget] Failed to release requests", error));
     };
-  }, [serverId, t]);
+  }, [serverId, t, profiles]);
 }

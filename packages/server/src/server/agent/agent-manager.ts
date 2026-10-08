@@ -1318,6 +1318,7 @@ export class AgentManager {
         env: options.env,
         workspaceId: options.workspaceId,
         launchProfileId: options.launchProfileId,
+        labels: options.labels,
         modelRouting,
       });
       const writePolicy = request.config.writePolicy ?? config.writePolicy;

@@ -183,7 +183,7 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
 
   const showHostFilter = hosts.length > 1;
   // One project is the whole sidebar, so filtering to it is a no-op with a menu row attached.
-  const showProjectFilter = allProjects.length > 1;
+  const showProjectFilter = allProjects.length > 1 || preferences.hiddenProjectKeys.length > 0;
   // Nothing to filter by means no row at all. The active-filter half is not redundant: the merged
   // catalog only counts hosts that are online, so a host dropping off would otherwise take away
   // the only way back to a filter that is still hiding workspaces.
@@ -340,7 +340,9 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
               {showHostFilter ? null : <MenuSeparator />}
               <MenuSubTrigger
                 id="projectFilter"
-                indicator={resolvedProjectFilters.length > 0}
+                indicator={
+                  resolvedProjectFilters.length > 0 || preferences.hiddenProjectKeys.length > 0
+                }
                 testID="sidebar-display-project-filter"
               >
                 {t("sidebar.display.projectFilter.label")}
@@ -626,23 +628,38 @@ function ProjectFilterPage({
   return (
     <>
       <MenuItem
-        selected={resolvedProjectFilters.length === 0}
+        selected={resolvedProjectFilters.length === 0 && preferences.hiddenProjectKeys.length === 0}
         closeOnSelect={false}
         onSelect={preferences.clearProjectFilters}
         testID="sidebar-project-filter-all"
       >
         {t("sidebar.display.projectFilter.all")}
       </MenuItem>
-      {projects.map((project) => (
-        <ProjectFilterItem
-          key={project.viewKey}
-          viewKey={project.viewKey}
-          label={project.projectName}
-          icon={iconByProjectViewKey.get(project.viewKey)}
-          selected={resolvedProjectFilters.includes(project.viewKey)}
-          onToggle={preferences.toggleProjectFilter}
-        />
-      ))}
+      {projects
+        .filter((project) => !preferences.hiddenProjectKeys.includes(project.viewKey))
+        .map((project) => (
+          <ProjectFilterItem
+            key={project.viewKey}
+            viewKey={project.viewKey}
+            label={project.projectName}
+            icon={iconByProjectViewKey.get(project.viewKey)}
+            selected={resolvedProjectFilters.includes(project.viewKey)}
+            onToggle={preferences.toggleProjectFilter}
+          />
+        ))}
+      {preferences.hiddenProjectKeys.length > 0 ? <MenuSeparator /> : null}
+      {projects
+        .filter((project) => preferences.hiddenProjectKeys.includes(project.viewKey))
+        .map((project) => (
+          <ProjectFilterItem
+            key={project.viewKey}
+            viewKey={project.viewKey}
+            label={t("sidebar.display.projectFilter.show", { projectName: project.projectName })}
+            icon={iconByProjectViewKey.get(project.viewKey)}
+            selected={false}
+            onToggle={preferences.showProject}
+          />
+        ))}
     </>
   );
 }

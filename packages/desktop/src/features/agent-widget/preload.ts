@@ -19,6 +19,7 @@ let display: WidgetDisplay | null = null;
 let selected = "";
 let reduced = false;
 let busy: WidgetDisplayItem | null = null;
+let busyProfileId: string | undefined;
 let notice = "";
 let failed = false;
 const escape = (value: string) =>
@@ -76,7 +77,11 @@ function actions(item: WidgetDisplayItem): string {
   const disabled = busy !== null || !item.online;
   if (item.kind === "plan") {
     const handoffReason = item.handoffDisabledReason;
-    return `<form class="actions plan-actions"><div class="action-row"><label class="sr-only" for="comment">${escape(labels.comment)}</label><input id="comment" data-focus="comment" type="text" placeholder="${escape(labels.comment)}" value="${escape(draft(item.key).message)}" ${disabled ? "disabled" : ""}><button id="send-comment" type="submit" ${disabled || !draft(item.key).message.trim() ? "disabled" : ""}>${escape(labels.sendComment)}</button></div><div class="action-row"><button id="handoff" type="button" data-action="handoff" title="${escape(handoffReason ?? "")}" ${disabled || handoffReason ? "disabled" : ""}>${escape(labels.handoff)}</button><button type="button" data-action="approve" class="primary" ${disabled || !item.canApprove ? "disabled" : ""}>${escape(labels.execute)} ↗</button></div>${handoffReason ? `<small class="handoff-reason">${escape(handoffReason)}</small>` : ""}</form>`;
+    const profiles = item.handoffProfiles ?? [];
+    const handoff = handoffReason
+      ? ""
+      : `<div class="action-row handoff-row"><span>${escape(labels.handoff)} :</span>${profiles.length ? profiles.map((profile) => `<button type="button" data-action="handoff" data-profile-id="${escape(profile.id)}" aria-busy="${busyProfileId === profile.id}" ${disabled ? "disabled" : ""}>${busyProfileId === profile.id ? `${escape(labels.pending)} · ` : ""}${escape(profile.name)}</button>`).join("") : `<span>${escape(labels.noProfiles ?? "Aucun profil disponible")}</span>`}</div>`;
+    return `<form class="actions plan-actions"><div class="action-row"><label class="sr-only" for="comment">${escape(labels.comment)}</label><input id="comment" data-focus="comment" type="text" placeholder="${escape(labels.comment)}" value="${escape(draft(item.key).message)}" ${disabled ? "disabled" : ""}><button id="send-comment" type="submit" ${disabled || !draft(item.key).message.trim() ? "disabled" : ""}>${escape(labels.sendComment)}</button></div><div class="action-row"><button type="button" data-action="approve" class="primary" ${disabled || !item.canApprove ? "disabled" : ""}>${escape(labels.execute)} ↗</button></div>${handoff}${handoffReason ? `<small class="handoff-reason">${escape(handoffReason)}</small>` : ""}</form>`;
   }
   const value = draft(item.key);
   const last = value.question >= item.questions.length - 1;
@@ -159,6 +164,7 @@ async function submit(action: WidgetAction) {
   const item = current();
   if (!item || !item.online || busy || !display) return;
   busy = item;
+  busyProfileId = action.type === "handoff" ? action.profileId : undefined;
   notice = "";
   failed = false;
   render();
@@ -176,6 +182,7 @@ async function submit(action: WidgetAction) {
       display.requests.push({ ...item, online: false });
   } finally {
     busy = null;
+    busyProfileId = undefined;
     render();
   }
 }
@@ -191,10 +198,12 @@ function move(direction: number) {
   failed = false;
   render();
 }
-function submitHandoff(item: WidgetDisplayItem | undefined) {
-  if (!item?.planCallId || item.planText === undefined || item.handoffDisabledReason) return;
+function submitHandoff(item: WidgetDisplayItem | undefined, profileId: string | undefined) {
+  if (!item?.planCallId || item.planText === undefined || item.handoffDisabledReason || !profileId)
+    return;
   void submit({
     type: "handoff",
+    profileId,
     key: item.key,
     planCallId: item.planCallId,
     planText: item.planText,
@@ -237,7 +246,7 @@ function handleClick(event: MouseEvent) {
       if (item) void submit({ type: "approve", key: item.key });
       break;
     case "handoff":
-      submitHandoff(item);
+      submitHandoff(item, button.dataset.profileId);
       break;
     case "answer":
       if (item) {
@@ -291,8 +300,14 @@ window.addEventListener("DOMContentLoaded", () => {
     if (message) void submit({ type: "comment", key: item.key, message });
   });
   ipcRenderer.on("paseo:agent-widget:update", (_event, value: WidgetDisplay) => {
+    const previousKeys = new Set(display?.requests.map((item) => item.key));
+    const currentKey = current()?.key;
+    const arrived = value.requests.some((item) => !previousKeys.has(item.key));
+    const currentDisappeared =
+      currentKey && !value.requests.some((item) => item.key === currentKey);
     display = value;
     render();
+    if (currentDisappeared && !arrived && !busy && !reduced) void resize(true);
   });
   ipcRenderer.on("paseo:agent-widget:reduced", (_event, value: boolean) => {
     reduced = value;

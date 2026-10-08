@@ -48,6 +48,7 @@ export async function handoffWidgetPlan(input: {
     throw new Error("This plan cannot be handed off.");
   if (item.planCallId !== action.planCallId || item.planText !== action.planText)
     throw new Error("This plan has been replaced.");
+  if (!action.profileId) throw new Error("Choose an agent profile to hand off this plan.");
   const reason = handoffReason(serverId, item.workspaceId, item.planCallId);
   if (reason) throw new Error(reason);
   const plugin = pluginRegistry
@@ -68,7 +69,7 @@ export async function handoffWidgetPlan(input: {
       agentId,
       plan: { callId: item.planCallId, text: item.planText, permissionRequestId: request.id },
       signal: plugin.lifetime.signal,
-      prepare: true,
+      profileId: action.profileId,
       navigation: {
         ...navigation,
         openAgent: (executorId) => {

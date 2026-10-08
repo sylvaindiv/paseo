@@ -144,9 +144,9 @@ export interface SeedDaemonClient {
   setAgentMode(agentId: string, modeId: string): Promise<unknown>;
   waitForAgentUpsert(
     agentId: string,
-    predicate: (snapshot: { status: string }) => boolean,
+    predicate: (snapshot: { status: string; requiresAttention?: boolean }) => boolean,
     timeout?: number,
-  ): Promise<{ status: string }>;
+  ): Promise<{ status: string; requiresAttention?: boolean }>;
   sendAgentMessage(agentId: string, text: string): Promise<void>;
   waitForFinish(
     agentId: string,

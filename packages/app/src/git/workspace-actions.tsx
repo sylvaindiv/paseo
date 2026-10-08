@@ -3,17 +3,19 @@ import { Eye, GitCommitHorizontal, GitPullRequest } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Theme } from "@/styles/theme";
-import { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { useAgentProfiles } from "@/agent-profiles";
 import { Button } from "@/components/ui/button";
 import { GIT_ACTION_ICONS } from "@/git/action-icons";
-import { launchWorkspaceWorkflowAction } from "@/git/workflow/launch";
+import { launchWorkspaceWorkflowAction, type WorkspaceWorkflowAction } from "@/git/workflow/launch";
 import type { WorkspaceWorkflowState } from "@/git/policy";
 import { useGitActionRunner, useGitActions } from "@/git/use-actions";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
+import { useHostRuntimeClient } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
+import { useToast } from "@/contexts/toast-context";
 import { buildSettingsHostSectionRoute } from "@/utils/host-routes";
 
 const ThemedEye = withUnistyles(Eye);
@@ -44,7 +46,10 @@ export function WorkspaceActions({
 }: WorkspaceActionsProps) {
   const router = useRouter();
   const { t } = useTranslation();
+  const toast = useToast();
   const runGitAction = useGitActionRunner();
+  const client = useHostRuntimeClient(serverId);
+  const [launchingAction, setLaunchingAction] = useState<WorkspaceWorkflowAction | null>(null);
   const { config } = useDaemonConfig(serverId);
   const { profiles } = useAgentProfiles(serverId);
   const workflowSupported = useSessionStore(
@@ -71,9 +76,8 @@ export function WorkspaceActions({
     router.push(buildSettingsHostSectionRoute(serverId, "agents"));
   }, [router, serverId]);
   const launch = useCallback(
-    (
-      action: "review" | "create-pr" | "commit-and-push" | "repair-checks" | "resolve-conflicts",
-    ) => {
+    (action: WorkspaceWorkflowAction) => {
+      if (launchingAction) return;
       const profile = action === "review" ? reviewProfile : deliveryProfile;
       const manual = action === "review" ? workflowConfig.reviewModel : workflowConfig.prModel;
       if (!manual && !profile) {
@@ -81,14 +85,20 @@ export function WorkspaceActions({
         return;
       }
       if (!workflowContext.baseRef) return;
+      if (!client && action !== "review") {
+        toast.error(t("workspace.terminal.hostDisconnected"));
+        return;
+      }
       if (
         action === "repair-checks" &&
         (!workflowContext.pullRequestUrl || !workflowContext.branch)
       ) {
         return;
       }
-      launchWorkspaceWorkflowAction({
+      setLaunchingAction(action);
+      void launchWorkspaceWorkflowAction({
         action,
+        client,
         serverId,
         workspaceId,
         cwd: workflowContext.cwd,
@@ -97,13 +107,19 @@ export function WorkspaceActions({
         prUrl: workflowContext.pullRequestUrl,
         profile,
         config: workflowConfig,
-      });
+      })
+        .catch((error) => toast.error(error instanceof Error ? error.message : String(error)))
+        .finally(() => setLaunchingAction(null));
     },
     [
+      client,
       deliveryProfile,
+      launchingAction,
       openAgentsSettings,
       reviewProfile,
       serverId,
+      t,
+      toast,
       workflowConfig,
       workflowContext,
       workspaceId,
@@ -123,6 +139,7 @@ export function WorkspaceActions({
     [gitActions.primary, gitActions.secondary],
   );
   const workflowDisabled =
+    launchingAction !== null ||
     !workflowSupported ||
     workflowState.action === "checking" ||
     workflowState.action === "unavailable" ||
@@ -179,7 +196,8 @@ export function WorkspaceActions({
         textStyle={styles.reviewText}
         testID="workspace-git-review"
         accessibilityLabel="Review"
-        disabled={!workflowSupported}
+        disabled={!workflowSupported || launchingAction !== null}
+        loading={launchingAction === "review"}
         onPress={handleReview}
       >
         {hideLabels ? null : "Review"}
@@ -226,7 +244,9 @@ export function WorkspaceActions({
         }
         testID="changes-primary-cta"
         disabled={workflowDisabled}
-        loading={workflowNativeAction?.status === "pending"}
+        loading={
+          launchingAction === workflowState.action || workflowNativeAction?.status === "pending"
+        }
         onPress={handlePr}
       >
         {workflowLabel}

@@ -34,12 +34,13 @@ describe("evaluatePluginClientBundle", () => {
       "workflow",
       bundle(`
       plugin.addPlanAction({ id: "review", title: "Revue", order: 10,
-        query: { launchProfileId: "planner" }, onPress() {} });
+        query: { launchProfileId: "planner" }, requiresAgentProfile: true, onPress() {} });
     `),
     );
     expect(plugin.planActions.map(({ id, title }) => ({ id, title }))).toEqual([
       { id: "review", title: "Revue" },
     ]);
+    expect(plugin.planActions[0]?.requiresAgentProfile).toBe(true);
     await plugin.cleanup();
     expect(plugin.planActions).toEqual([]);
   });
@@ -67,6 +68,10 @@ describe("evaluatePluginClientBundle", () => {
     ['id: "review", title: " ", onPress() {}', "has no title"],
     ['id: "review", title: "Review"', "has no callback"],
     ['id: "review", title: "Review", order: NaN, onPress() {}', "invalid order"],
+    [
+      'id: "review", title: "Review", requiresAgentProfile: "yes", onPress() {}',
+      "invalid profile requirement",
+    ],
     [
       'id: "review", title: "Review", query: { launchProfileId: "" }, onPress() {}',
       "invalid launch profile",

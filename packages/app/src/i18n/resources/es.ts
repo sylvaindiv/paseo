@@ -324,6 +324,11 @@ export const es: TranslationResources = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "Plan transferido",
+      details: "Detalles de la transferencia",
+      copyPlan: "Copiar plan",
+    },
     diagram: {
       diagram: "Diagrama",
       zoomIn: "Acercar",
@@ -1285,6 +1290,7 @@ export const es: TranslationResources = {
         all: "Todos los hosts",
       },
       projectFilter: {
+        show: "Mostrar {{projectName}}",
         label: "Proyecto",
         all: "Todos los proyectos",
       },
@@ -1337,6 +1343,7 @@ export const es: TranslationResources = {
     project: {
       actions: {
         menu: "Acciones del proyecto",
+        hide: "Ocultar proyecto",
         openSettings: "Abrir la configuración del proyecto",
         openNewWindow: "Open in new window",
         openNewWindowFailed: "Couldn't open a new window",

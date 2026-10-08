@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   useGitActions: vi.fn(),
   runGitAction: vi.fn(),
   launch: vi.fn(),
+  toastError: vi.fn(),
+  client: { listProviderFeatures: vi.fn() },
 }));
 
 vi.mock("@/git/use-actions", () => ({
@@ -22,8 +24,33 @@ vi.mock("@/git/use-actions", () => ({
   useGitActionRunner: () => mocks.runGitAction,
 }));
 
+vi.mock("lucide-react-native", () => ({
+  Eye: () => null,
+  GitCommitHorizontal: () => null,
+  GitPullRequest: () => null,
+}));
+
+vi.mock("react-native-unistyles", () => ({
+  StyleSheet: { create: () => ({}) },
+  withUnistyles: (component: React.ComponentType) => component,
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => children,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => children,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 vi.mock("@/git/workflow/launch", () => ({
   launchWorkspaceWorkflowAction: mocks.launch,
+}));
+
+vi.mock("@/runtime/host-runtime", () => ({
+  useHostRuntimeClient: () => mocks.client,
+}));
+
+vi.mock("@/contexts/toast-context", () => ({
+  useToast: () => ({ error: mocks.toastError }),
 }));
 
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -56,14 +83,22 @@ vi.mock("@/components/ui/button", () => ({
     children,
     onPress,
     disabled,
+    loading,
     testID,
   }: {
     children?: React.ReactNode;
     onPress?: () => void;
     disabled?: boolean;
+    loading?: boolean;
     testID?: string;
   }) => (
-    <button type="button" data-testid={testID} disabled={disabled} onClick={onPress}>
+    <button
+      type="button"
+      data-testid={testID}
+      data-loading={loading ? "true" : "false"}
+      disabled={disabled}
+      onClick={onPress}
+    >
       {children}
     </button>
   ),
@@ -134,6 +169,8 @@ describe("WorkspaceActions", () => {
     mocks.useGitActions.mockReset();
     mocks.runGitAction.mockReset();
     mocks.launch.mockReset();
+    mocks.launch.mockResolvedValue({ draftId: "draft", clientMessageId: "message" });
+    mocks.toastError.mockReset();
   });
 
   afterEach(() => {
@@ -211,5 +248,33 @@ describe("WorkspaceActions", () => {
     current = render();
 
     expect(document.querySelector('[data-testid="workspace-git-view-pr"]')).toBeNull();
+  });
+
+  it("blocks duplicate launches while preparation is pending", async () => {
+    let finish: (() => void) | null = null;
+    mocks.launch.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+    useScenario({ action: "create-pr" });
+    current = render();
+
+    fireEvent.click(primaryCta());
+    fireEvent.click(primaryCta());
+
+    expect(mocks.launch).toHaveBeenCalledTimes(1);
+    expect(primaryCta().disabled).toBe(true);
+    expect(primaryCta().dataset.loading).toBe("true");
+    await act(async () => finish?.());
+    expect(primaryCta().disabled).toBe(false);
+  });
+
+  it("shows launch errors and releases the pending state", async () => {
+    mocks.launch.mockRejectedValue(new Error("Feature discovery failed"));
+    useScenario({ action: "create-pr" });
+    current = render();
+
+    fireEvent.click(primaryCta());
+    await act(async () => Promise.resolve());
+
+    expect(mocks.toastError).toHaveBeenCalledWith("Feature discovery failed");
+    expect(primaryCta().disabled).toBe(false);
   });
 });

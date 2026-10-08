@@ -324,6 +324,11 @@ export const ja: TranslationResources = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "引き継がれたプラン",
+      details: "引き継ぎの詳細",
+      copyPlan: "プランをコピー",
+    },
     diagram: {
       diagram: "図",
       zoomIn: "拡大",
@@ -1261,6 +1266,7 @@ export const ja: TranslationResources = {
         all: "すべてのホスト",
       },
       projectFilter: {
+        show: "{{projectName}} を表示",
         label: "プロジェクト",
         all: "すべてのプロジェクト",
       },
@@ -1314,6 +1320,7 @@ export const ja: TranslationResources = {
     project: {
       actions: {
         menu: "プロジェクトアクション",
+        hide: "プロジェクトを非表示",
         openSettings: "プロジェクト設定を開く",
         openNewWindow: "新しいウィンドウで開く",
         openNewWindowFailed: "新しいウィンドウを開けませんでした",

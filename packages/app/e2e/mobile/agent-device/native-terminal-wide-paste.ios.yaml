@@ -10,12 +10,14 @@ appId: sh.paseo.debug
 - assertNotVisible: ".*getRegistrationInfoAsync.*"
 - extendedWaitUntil:
     visible:
-      id: workspace-new-tab-button
+      id: workspace-split-pane-menu
     timeout: 30000
 - tapOn:
-    id: workspace-new-tab-button
+    id: workspace-split-pane-menu
 - tapOn:
-    id: workspace-new-tab-menu-terminal
+    id: workspace-split-pane-right
+- tapOn:
+    id: workspace-new-tab-terminal
 - extendedWaitUntil:
     visible:
       id: terminal-virtual-keyboard-native-wide

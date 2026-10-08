@@ -130,7 +130,7 @@ test("Explorer keeps Files and Changes close actions in the context menu", async
     const main = page.getByTestId("workspace-pane-main");
     const mainTabsBefore = await main.getByTestId("workspace-tabs-row").getByRole("button").count();
     const explorer = await ensureExplorerSidebar(page);
-    await expectTabTitleFits(page, "Files", { min: 64, max: 90 });
+    await expectTabTitleFits(page, "Files", { min: 180, max: 320 });
 
     await test.step("Explorer's + menu excludes Agent and terminal profiles", async () => {
       await explorer.getByRole("button", { name: "New tab", exact: true }).click();
@@ -145,11 +145,6 @@ test("Explorer keeps Files and Changes close actions in the context menu", async
       expect(entries.findIndex((entry) => entry.startsWith("Terminal"))).toBeLessThan(
         entries.findIndex((entry) => entry.startsWith("Diff")),
       );
-      await page.keyboard.press("Escape");
-      await main.getByTestId("workspace-new-tab-button").click();
-      await expect(menu).toBeVisible();
-      await expect(menu.getByRole("menuitem", { name: /^Agent/ })).toBeVisible();
-      await expect(menu.getByText("Terminal profiles", { exact: true })).toBeVisible();
       await page.keyboard.press("Escape");
     });
 
@@ -177,7 +172,7 @@ test("Explorer keeps Files and Changes close actions in the context menu", async
     await test.step("Cmd+T still belongs to the focused workspace pane", async () => {
       await pressNewTabShortcut(page);
       await expect(
-        main.getByTestId("workspace-new-tab-panel").filter({ visible: true }),
+        main.getByTestId("message-input-surface").filter({ visible: true }),
       ).toBeVisible();
       await expect(explorer.getByTestId("workspace-new-tab-panel")).toHaveCount(0);
     });

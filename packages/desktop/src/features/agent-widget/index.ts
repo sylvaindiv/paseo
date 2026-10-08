@@ -30,7 +30,7 @@ interface OwnedRequest {
 
 export function widgetBounds(area: Electron.Rectangle, reduced: boolean): Electron.Rectangle {
   const width = Math.min(reduced ? 260 : 512, area.width);
-  const height = Math.min(reduced ? 80 : 700, area.height);
+  const height = reduced ? Math.min(80, area.height) : Math.max(1, area.height - 32);
   return {
     x: area.x + Math.max(0, area.width - width - 16),
     y: area.y + Math.max(0, area.height - height - 16),
@@ -85,11 +85,10 @@ export function registerAgentWidget() {
       window.setBounds(widgetBounds(screen.getPrimaryDisplay().workArea, reduced));
   }
   function setReduced(value: boolean) {
-    reduced = value;
+    reduced = value || !requests().length;
     position();
     if (window && !window.isDestroyed())
       window.webContents.send("paseo:agent-widget:reduced", reduced);
-    if (!requests().length && reduced) window?.hide();
   }
   function update() {
     const value = display();
@@ -204,6 +203,12 @@ export function registerAgentWidget() {
         entry.request.planText !== action.planText)
     )
       throw new Error(entry.request.handoffDisabledReason ?? "This plan has been replaced.");
+    if (
+      action.type === "handoff" &&
+      (!action.profileId ||
+        !entry.request.handoffProfiles?.some((profile) => profile.id === action.profileId))
+    )
+      throw new Error("Choose an available agent profile to hand off this plan.");
     if (runningKeys.has(action.key)) throw new Error("A response is already being sent.");
     runningKeys.add(action.key);
     const generation = requestGeneration;

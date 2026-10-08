@@ -323,6 +323,11 @@ export const ptBR: TranslationResources = {
     },
   },
   message: {
+    handoff: {
+      planTitle: "Plano transferido",
+      details: "Detalhes da transferência",
+      copyPlan: "Copiar plano",
+    },
     diagram: {
       diagram: "Diagrama",
       zoomIn: "Aproximar",
@@ -1275,6 +1280,7 @@ export const ptBR: TranslationResources = {
         all: "Todos os hosts",
       },
       projectFilter: {
+        show: "Mostrar {{projectName}}",
         label: "Projeto",
         all: "Todos os projetos",
       },
@@ -1327,6 +1333,7 @@ export const ptBR: TranslationResources = {
     project: {
       actions: {
         menu: "Ações do projeto",
+        hide: "Ocultar projeto",
         openSettings: "Abrir configurações do projeto",
         openNewWindow: "Abrir em nova janela",
         openNewWindowFailed: "Não foi possível abrir uma nova janela",

@@ -41,21 +41,22 @@ function getSessionMessage(message: WebSocketMessage): Record<string, unknown> |
 }
 
 // The draft mode control in New Workspace only mutates local form state; it never sends
-// set_agent_mode_request. So the only source of such a request while the New Workspace
+// agent control requests. So the only source of such a request while the New Workspace
 // composer is focused is a *live* agent's mode control. Recording those, keyed by agentId,
 // gives a direct signal that Shift+Tab leaked into a backgrounded agent.
-async function recordSetAgentModeRequests(page: Page): Promise<{
-  requestsForAgent(agentId: string): Array<{ agentId: string; modeId: string }>;
+async function recordAgentControlRequests(page: Page): Promise<{
+  requestsForAgent(agentId: string): Record<string, unknown>[];
 }> {
-  const seen: Array<{ agentId: string; modeId: string }> = [];
+  const seen: Record<string, unknown>[] = [];
   await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
     const server = ws.connectToServer();
     ws.onMessage((message) => {
       const sessionMessage = getSessionMessage(message);
-      if (sessionMessage?.type === "set_agent_mode_request") {
-        const agentId = typeof sessionMessage.agentId === "string" ? sessionMessage.agentId : "";
-        const modeId = typeof sessionMessage.modeId === "string" ? sessionMessage.modeId : "";
-        seen.push({ agentId, modeId });
+      if (
+        sessionMessage?.type === "set_agent_mode_request" ||
+        sessionMessage?.type === "set_agent_feature_request"
+      ) {
+        seen.push(sessionMessage);
       }
       server.send(message);
     });
@@ -93,9 +94,18 @@ async function seedCodexDefaultPreferences(page: Page): Promise<void> {
 async function cycleNewWorkspaceMode(page: Page, presses: number): Promise<void> {
   const composer = page.getByRole("textbox", { name: "Message agent..." });
   await expect(composer).toBeVisible({ timeout: 30_000 });
-  await composer.click();
+  await composer.fill("Keep this draft");
+  const stripe = page.getByTestId("message-input-plan-stripe");
+  await expect(stripe).toBeVisible();
+  const permissions = page.getByRole("button", { name: /^Select agent mode \(/ });
+  await expect(permissions).toBeVisible();
+  const permissionsBefore = await permissions.getAttribute("aria-label");
   for (let i = 0; i < presses; i++) {
     await page.keyboard.press("Shift+Tab");
+    await expect(stripe).toHaveCount(i % 2);
+    await expect(composer).toBeFocused();
+    await expect(composer).toHaveValue("Keep this draft");
+    expect(await permissions.getAttribute("aria-label")).toBe(permissionsBefore);
   }
 }
 
@@ -215,10 +225,12 @@ test.describe("New Workspace mode cycle safety", () => {
   // the New Workspace composer must never reach a backgrounded, still-mounted agent's mode
   // control and silently change that (possibly running) agent's mode — e.g. into a
   // permissive/bypass mode. See use-keyboard-action-handler.ts.
-  test("Shift+Tab in New Workspace never changes a backgrounded agent's mode", async ({ page }) => {
+  test("Shift+Tab in New Workspace never changes a backgrounded agent's mode", async ({
+    page,
+  }, testInfo) => {
     const seeded = await seedWorkspace({ repoPrefix: "mode-cycle-safety-" });
     await seedCodexDefaultPreferences(page);
-    const modeRequests = await recordSetAgentModeRequests(page);
+    const modeRequests = await recordAgentControlRequests(page);
 
     try {
       const agent = await seeded.client.createAgent({
@@ -228,6 +240,7 @@ test.describe("New Workspace mode cycle safety", () => {
         title: "mode cycle safety e2e",
         modeId: "auto",
         model: "gpt-5.4-mini",
+        featureValues: { plan_mode: false },
       });
 
       // Mount the live agent tab: its mode control registers a mode-cycle keyboard handler.
@@ -235,6 +248,25 @@ test.describe("New Workspace mode cycle safety", () => {
       await expect(
         page.getByRole("button", { name: "Select agent mode (Default permissions)" }),
       ).toBeVisible({ timeout: 30_000 });
+
+      const liveComposer = page.getByRole("textbox", { name: "Message agent..." });
+      await liveComposer.fill("Keep the live message");
+      const stripe = page.getByTestId("message-input-plan-stripe");
+      await expect(stripe).toHaveCount(0);
+      for (const enabled of [true, false]) {
+        await page.keyboard.press("Shift+Tab");
+        await expect(stripe).toHaveCount(Number(enabled));
+        await expect(liveComposer).toBeFocused();
+        await expect(liveComposer).toHaveValue("Keep the live message");
+        await expect(
+          page.getByRole("button", { name: "Select agent mode (Default permissions)" }),
+        ).toBeVisible();
+      }
+      const liveRequests = modeRequests.requestsForAgent(agent.id);
+      expect(liveRequests).toMatchObject([
+        { type: "set_agent_feature_request", featureId: "plan_mode", value: true },
+        { type: "set_agent_feature_request", featureId: "plan_mode", value: false },
+      ]);
 
       // Move to the New Workspace composer. The agent tab stays mounted in the background,
       // so its handler is still registered when we cycle here.
@@ -244,7 +276,8 @@ test.describe("New Workspace mode cycle safety", () => {
         projectDisplayName: seeded.projectDisplayName,
       });
 
-      await cycleNewWorkspaceMode(page, 6);
+      await cycleNewWorkspaceMode(page, 2);
+      await page.screenshot({ path: testInfo.outputPath("codex-draft-plan.png") });
 
       // fetchAgents is a real daemon round-trip; once it resolves, any mode change the
       // presses would have triggered has already landed. Assert the running agent is
@@ -252,7 +285,7 @@ test.describe("New Workspace mode cycle safety", () => {
       const agents = await seeded.client.fetchAgents();
       const backgroundAgent = agents.entries.find((entry) => entry.agent.id === agent.id)?.agent;
       expect(backgroundAgent?.currentModeId).toBe("auto");
-      expect(modeRequests.requestsForAgent(agent.id)).toEqual([]);
+      expect(modeRequests.requestsForAgent(agent.id)).toEqual(liveRequests);
     } finally {
       await seeded.cleanup();
     }
