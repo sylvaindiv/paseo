@@ -1,3 +1,4 @@
+import { WorkspaceTodosHost, WorkspaceTodosButton } from "@/workspace-todos";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { WorkspaceIntentionEditor } from "./workspace-intention-editor";
 import { useHostFeature } from "@/runtime/host-features";
@@ -1140,6 +1141,7 @@ function WorkspaceHeaderTitleBar({
             onOpenSetupTab={onOpenSetupTab}
           />
         )}
+        {isMobile ? <WorkspaceTodosButton hideLabels /> : null}
         {isMobile && workspaceScripts.length > 0 ? (
           <WorkspaceScriptsButton
             serverId={normalizedServerId}
@@ -3936,6 +3938,7 @@ function WorkspaceScreenContent({
     () => (
       <View style={styles.headerRight}>
         <PluginHeaderButtons serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
+        {!isMobile ? <WorkspaceTodosButton hideLabels={hideHeaderActionLabels} /> : null}
         {!isMobile && workspaceDescriptor ? (
           <WorkspaceScriptsButton
             serverId={normalizedServerId}
@@ -4325,9 +4328,33 @@ function WorkspaceScreenContent({
   if (gatedWorkspaceScreen) {
     return gatedWorkspaceScreen;
   }
+  return renderWorkspaceWithTodos({
+    serverId: normalizedServerId,
+    workspaceId: normalizedWorkspaceId,
+    persistenceKey,
+    active: isRouteFocused,
+    screen: renderedWorkspaceScreen,
+  });
+}
+
+function renderWorkspaceWithTodos({
+  serverId,
+  workspaceId,
+  persistenceKey,
+  active,
+  screen,
+}: {
+  serverId: string;
+  workspaceId: string;
+  persistenceKey: string | null;
+  active: boolean;
+  screen: ReactNode;
+}) {
   return (
     <WorkspaceContentProviders key={persistenceKey} workspaceKey={persistenceKey}>
-      {renderedWorkspaceScreen}
+      <WorkspaceTodosHost serverId={serverId} workspaceId={workspaceId} active={active}>
+        {screen}
+      </WorkspaceTodosHost>
     </WorkspaceContentProviders>
   );
 }

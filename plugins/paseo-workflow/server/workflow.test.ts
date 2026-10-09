@@ -34,6 +34,7 @@ function fixture() {
   let installed = [...profiles];
   const port: WorkflowPort = {
     profiles: async () => installed,
+    executionSettings: async () => ({ modes: [], features: [] }),
     agent: async (id) => {
       const value = agents.get(id);
       if (!value) throw new Error("Unknown agent");
@@ -156,7 +157,7 @@ test("status exposes the current plan and ordered profiles without preparing han
   expect(f.port).not.toHaveProperty("classify");
 });
 
-test("handoff applies the chosen profile's exact settings to a root in the same workspace", async () => {
+test("handoff preserves a non-plan profile's settings to a root in the same workspace", async () => {
   const f = fixture();
   f.port.profiles = async () => [
     {
@@ -191,6 +192,148 @@ test("handoff applies the chosen profile's exact settings to a root in the same 
     },
   ]);
   expect(f.port).not.toHaveProperty("classify");
+});
+
+test.each([
+  {
+    provider: "codex",
+    modeId: "auto-review",
+    defaultModeId: "auto-review",
+    expected: "auto-review",
+    toggle: true,
+  },
+  { provider: "claude", modeId: "plan", defaultModeId: "auto", expected: "auto" },
+  { provider: "opencode", modeId: "plan", defaultModeId: "build", expected: "build" },
+  {
+    provider: "custom-acp",
+    modeId: "https://agentclientprotocol.com/protocol/session-modes#plan",
+    defaultModeId: "agent",
+    expected: "agent",
+  },
+])("handoff disables Plan for $provider and preserves the saved profile", async (entry) => {
+  const f = fixture();
+  const profile = {
+    id: "custom",
+    name: "Custom",
+    provider: entry.provider,
+    model: "chosen-model",
+    modeId: entry.modeId,
+    thinkingOptionId: "high",
+    featureValues: { ...(entry.toggle ? { plan_mode: true } : {}), fast_mode: true },
+    postApprovalModeId: "unchanged",
+  };
+  const before = structuredClone(profile);
+  f.port.profiles = async () => [profile];
+  f.port.executionSettings = async () => ({
+    defaultModeId: entry.defaultModeId,
+    modes: [
+      { id: entry.modeId, label: "Selected", colorTier: entry.toggle ? "moderate" : "planning" },
+      { id: entry.expected, label: "Execution", colorTier: "moderate" },
+    ],
+    features: entry.toggle ? [{ type: "toggle", id: "plan_mode", label: "Plan", value: true }] : [],
+  });
+  const result = await new WorkflowController(f.port).handoff(plan, profile.id);
+  expect(f.launches[0].config).toEqual({
+    provider: `${entry.provider}/chosen-model`,
+    modeId: entry.expected,
+    thinkingOptionId: "high",
+    featureValues: { ...(entry.toggle ? { plan_mode: false } : {}), fast_mode: true },
+    writePolicy: "read_write",
+  });
+  expect(profile).toEqual(before);
+  f.port.executionSettings = async () => {
+    throw new Error("Must not reconfigure an existing agent");
+  };
+  expect(await new WorkflowController(f.port).handoff(plan, profile.id)).toEqual(result);
+  expect(f.launches).toHaveLength(1);
+});
+
+test.each([
+  { modeId: "execute", isUnattended: false },
+  { modeId: "full", isUnattended: true },
+])(
+  "handoff preserves an already non-plan $modeId mode even when the default is Plan",
+  async ({ modeId, isUnattended }) => {
+    const f = fixture();
+    const profile = { id: "custom", name: "Custom", provider: "custom-acp", modeId };
+    f.port.profiles = async () => [profile];
+    f.port.executionSettings = async () => ({
+      defaultModeId: "plan",
+      features: [],
+      modes: [
+        { id: "plan", label: "Plan", colorTier: "planning" },
+        { id: modeId, label: "Chosen", isUnattended },
+      ],
+    });
+    await new WorkflowController(f.port).handoff(plan, "custom");
+    expect(f.launches[0].config.modeId).toBe(modeId);
+  },
+);
+
+test("provider discovery failure leaves the source plan available", async () => {
+  const f = fixture();
+  f.port.executionSettings = async () => {
+    throw new Error("Provider discovery failed");
+  };
+  const controller = new WorkflowController(f.port);
+  await expect(controller.handoff(plan, profiles[0].id)).rejects.toThrow(
+    "Provider discovery failed",
+  );
+  expect(f.decisions).toEqual([]);
+  expect(f.launches).toEqual([]);
+  expect(await controller.status("planner", "workspace")).toMatchObject({ plan, handoff: null });
+});
+
+test("handoff chooses a safe non-plan mode when the default is Plan", async () => {
+  const f = fixture();
+  f.port.profiles = async () => [
+    { id: "custom", name: "Custom", provider: "custom-acp", modeId: "plan" },
+  ];
+  f.port.executionSettings = async () => ({
+    defaultModeId: "plan",
+    features: [],
+    modes: [
+      { id: "plan", label: "Plan", colorTier: "planning" },
+      { id: "full", label: "Full", isUnattended: true },
+      { id: "dangerous", label: "Dangerous", colorTier: "dangerous" },
+      { id: "execute", label: "Execute", colorTier: "moderate" },
+    ],
+  });
+  await new WorkflowController(f.port).handoff(plan, "custom");
+  expect(f.launches[0].config.modeId).toBe("execute");
+});
+
+test("handoff resolves an implicit mode when the provider has no default", async () => {
+  const f = fixture();
+  f.port.profiles = async () => [{ id: "custom", name: "Custom", provider: "opencode" }];
+  f.port.executionSettings = async () => ({
+    defaultModeId: null,
+    features: [],
+    modes: [
+      { id: "planning-agent", label: "Planner", colorTier: "planning" },
+      { id: "build", label: "Build" },
+    ],
+  });
+  await new WorkflowController(f.port).handoff(plan, "custom");
+  expect(f.launches[0].config.modeId).toBe("build");
+});
+
+test("unresolvable execution leaves the source plan available without a recipient", async () => {
+  const f = fixture();
+  f.port.profiles = async () => [{ id: "custom", name: "Custom", provider: "custom-acp" }];
+  f.port.executionSettings = async () => ({
+    defaultModeId: "plan",
+    features: [],
+    modes: [
+      { id: "plan", label: "Plan", colorTier: "planning" },
+      { id: "full", label: "Full", isUnattended: true },
+    ],
+  });
+  const controller = new WorkflowController(f.port);
+  await expect(controller.handoff(plan, "custom")).rejects.toThrow("non-plan execution mode");
+  expect(f.decisions).toEqual([]);
+  expect(f.launches).toEqual([]);
+  expect(await controller.status("planner", "workspace")).toMatchObject({ plan, handoff: null });
 });
 
 test("legacy queued routing stays readable and cannot launch without an explicit profile", async () => {

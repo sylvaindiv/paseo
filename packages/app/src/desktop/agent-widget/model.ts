@@ -3,12 +3,32 @@ import type {
   AgentPermissionResponse,
 } from "@getpaseo/protocol/agent-types";
 import type { WidgetAction, WidgetRequest } from "@getpaseo/protocol/desktop-agent-widget";
+import type { HostProjectListItem } from "@/projects/host-projects";
+import type { ProjectIconRenderData } from "@/projects/icons";
+import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { deriveIdentityColorName, identityColor } from "@/styles/identity-colors";
 import { createMarkdownParser } from "@/utils/markdown-parser";
 import {
   areQuestionsAnswered,
   buildQuestionFormAnswers,
   parseQuestionFormQuestions,
 } from "@/components/question-form-card-core";
+
+export function projectWidgetIdentity(
+  project: Pick<HostProjectListItem, "projectName" | "viewKey"> | undefined,
+  workspace: Pick<WorkspaceDescriptor, "gitRuntime"> | undefined,
+  icons: ReadonlyMap<string, ProjectIconRenderData>,
+): WidgetRequest["project"] {
+  if (!project) return undefined;
+  const icon = icons.get(project.viewKey);
+  return {
+    name: project.projectName,
+    branchName: workspace?.gitRuntime?.currentBranch ?? "",
+    color: identityColor(deriveIdentityColorName(project.viewKey)),
+    iconDataUri: icon?.dataUri,
+    emoji: icon?.emoji,
+  };
+}
 
 const markdown = createMarkdownParser({ linkify: false });
 // Images can disclose plan content through remote URLs; this small reading surface is text-only.
@@ -17,6 +37,7 @@ interface RequestInput {
   serverId: string;
   agentId: string;
   request: AgentPermissionRequest;
+  project?: WidgetRequest["project"];
   agentTitle: string;
   workspace: string;
   workspaceId?: string;
@@ -51,6 +72,7 @@ export function projectWidgetRequest(input: RequestInput): WidgetRequest | null 
     planText: typeof plan === "string" ? plan : undefined,
     handoffDisabledReason: handoffDisabledReason(input, plan),
     handoffProfiles: input.handoffProfiles,
+    project: input.project,
     agentTitle,
     workspace,
     kind: request.kind,

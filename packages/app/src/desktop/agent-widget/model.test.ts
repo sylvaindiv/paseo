@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { WidgetRequestSchema } from "@getpaseo/protocol/desktop-agent-widget";
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 import {
   projectWidgetRequest,
+  projectWidgetIdentity,
   buildWidgetPermissionResponse,
   respondToWidgetRequest,
 } from "./model";
@@ -15,6 +17,44 @@ const plan: AgentPermissionRequest = {
   actions: [{ id: "implement", label: "Implement", behavior: "allow", variant: "primary" }],
 };
 describe("desktop agent widget", () => {
+  it("preserves project identity across the widget IPC boundary and rejects remote logos", () => {
+    const project = projectWidgetIdentity(
+      { projectName: "Atlas", viewKey: "atlas" },
+      { gitRuntime: { currentBranch: "feat/widget-header" } },
+      new Map([["atlas", { dataUri: "data:image/png;base64,aWNvbg==", emoji: null }]]),
+    );
+    expect(project).toMatchObject({
+      name: "Atlas",
+      branchName: "feat/widget-header",
+      iconDataUri: "data:image/png;base64,aWNvbg==",
+    });
+    expect(
+      projectWidgetIdentity(
+        { projectName: "Atlas", viewKey: "atlas" },
+        undefined,
+        new Map([["atlas", { dataUri: null, emoji: "🚀" }]]),
+      ),
+    ).toMatchObject({ name: "Atlas", branchName: "", emoji: "🚀", iconDataUri: null });
+    const item = projectWidgetRequest({
+      serverId: "host",
+      agentId: "agent",
+      request: plan,
+      agentTitle: "Agent name",
+      workspace: "Different workspace title",
+      project,
+    });
+    expect(WidgetRequestSchema.parse(item).project).toEqual(project);
+    expect(
+      WidgetRequestSchema.safeParse({
+        ...item,
+        project: {
+          ...project,
+          iconDataUri: "https://example.com/tracking.png",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("projects pending plans safely and approves the provider's primary action", () => {
     const item = projectWidgetRequest({
       serverId: "host",

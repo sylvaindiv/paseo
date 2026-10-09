@@ -265,6 +265,13 @@ export function buildLightSemanticColors(tint: LightThemeConfig) {
       review: tint.accent,
       tabAccent: tint.accent,
     },
+    planCard: {
+      header: "#403d3b",
+      headerForeground: "#faf8f5",
+      background: "#faf8f5",
+      footer: "#efebe7",
+      border: "#ded8d2",
+    },
     surface0: tint.surface0,
     surface1: tint.surface1,
     surface2: tint.surface2,
@@ -428,6 +435,13 @@ export function buildDarkSemanticColors(tint: DarkThemeConfig) {
       border: tint.border,
       review: tint.accent,
       tabAccent: tint.accent,
+    },
+    planCard: {
+      header: "#403d3b",
+      headerForeground: "#faf8f5",
+      background: tint.surface1,
+      footer: tint.surface2,
+      border: tint.border,
     },
     surface0: tint.surface0,
     surface1: tint.surface1,
@@ -684,7 +698,7 @@ export const OPACITY = {
 export const DEFAULT_UI_FONT_STACK: string = Platform.select({
   ios: "Helvetica Neue",
   default: "normal",
-  web: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+  web: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
 });
 
 export const DEFAULT_MONO_FONT_STACK: string = Platform.select({

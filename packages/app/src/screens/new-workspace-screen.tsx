@@ -88,6 +88,7 @@ import {
 } from "@/projects/host-projects";
 import { useProjectIcons, type ProjectIconRenderData } from "@/projects/icons";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
+import { chatStyles } from "@/styles/chat";
 import type { ComposerAttachment } from "@/attachments/types";
 import { useDraftWorkspaceAttachmentScopeKey } from "@/attachments/workspace-attachments-store";
 import type { MessagePayload } from "@/composer/types";
@@ -1670,7 +1671,7 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
   ) : (
     <View
       testID="new-workspace-ref-picker-row"
-      style={styles.formStackDesktop}
+      style={[chatStyles.rail, styles.formStackDesktop]}
       pointerEvents="box-none"
     >
       {projectControl}
@@ -2571,8 +2572,10 @@ function NewWorkspaceLayout({
   const setupFields = (
     <>
       {isCompact ? <View style={styles.compactTopActions}>{importSessionButton}</View> : null}
-      <View style={styles.composerTitleContainer} pointerEvents="none">
-        <Text style={styles.composerTitle}>{title}</Text>
+      <View style={[chatStyles.rail, styles.composerTitleContainer]} pointerEvents="none">
+        <Text accessibilityRole="header" style={styles.composerTitle}>
+          {title}
+        </Text>
       </View>
       {formStack}
     </>
@@ -2605,13 +2608,13 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[3],
   },
   composerTitleContainer: {
-    marginBottom: theme.spacing[8],
-    paddingLeft: theme.spacing[6],
-    paddingRight: theme.spacing[4],
+    marginBottom: { xs: theme.spacing[8], md: theme.spacing[6] },
   },
   composerTitle: {
-    fontSize: theme.fontSize["2xl"],
-    fontWeight: theme.fontWeight.normal,
+    paddingHorizontal: { xs: theme.spacing[3], md: theme.spacing[4] },
+    fontSize: { xs: theme.fontSize["2xl"], md: theme.fontSize["4xl"] },
+    fontWeight: theme.fontWeight.medium,
+    letterSpacing: { xs: 0, md: -0.5 },
     color: theme.colors.foreground,
   },
   errorText: {
@@ -2626,14 +2629,7 @@ const styles = StyleSheet.create((theme) => ({
   formStackDesktop: {
     flexDirection: "row",
     alignItems: "center",
-    // Matches the gap between the composer and the Import session pill below it.
     marginBottom: theme.spacing[4],
-    // The badge adds its own left padding; offset it so the project icon's left
-    // edge lands exactly on the "New workspace" title's left edge. The trailing
-    // inset mirrors it so the launch chip stops on the composer's inner content
-    // rather than running out to the composer's border.
-    paddingLeft: theme.spacing[4],
-    paddingRight: theme.spacing[4],
     gap: theme.spacing[2],
   },
   desktopControl: {

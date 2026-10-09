@@ -2042,7 +2042,7 @@ const styles = StyleSheet.create((theme: Theme) => ({
     backgroundColor: theme.colors.composerInputBackground,
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.composerInputBorder,
-    borderRadius: theme.borderRadius.lg,
+    borderRadius: { xs: theme.borderRadius.lg, md: theme.borderRadius["2xl"] },
     paddingTop: {
       xs: theme.spacing[2],
       md: theme.spacing[3],

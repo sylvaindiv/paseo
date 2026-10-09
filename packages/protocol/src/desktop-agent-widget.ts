@@ -20,6 +20,19 @@ export const WidgetRequestSchema = z.object({
   planText: z.string().optional(),
   handoffDisabledReason: z.string().optional(),
   handoffProfiles: z.array(z.object({ id: z.string().min(1), name: z.string() })).optional(),
+  project: z
+    .object({
+      name: z.string(),
+      branchName: z.string(),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+      iconDataUri: z
+        .string()
+        .regex(/^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+$/)
+        .nullable()
+        .optional(),
+      emoji: z.string().nullable().optional(),
+    })
+    .optional(),
   agentTitle: z.string(),
   workspace: z.string(),
   kind: z.enum(["plan", "question"]),

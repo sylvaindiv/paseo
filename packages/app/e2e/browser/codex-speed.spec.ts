@@ -126,12 +126,17 @@ for (const viewport of [
       });
       await selectSpeed(page, "Normal");
       await expectSpeedIconColor(page, NORMAL_SPEED_COLOR);
-      if (viewport.name === "desktop") {
-        await switchAgentModel(agent.id, "gpt-6-sol");
-        await openSpeedSelector(page);
-        await expectSpeedChoices(page, ["Normal", "Fast"]);
-        await page.screenshot({ path: testInfo.outputPath("desktop-fast-only.png") });
-      }
+      await switchAgentModel(agent.id, "gpt-6-sol");
+      // Two catalog tiers use a direct toggle; three tiers retain the chooser.
+      const toggle = page.getByTestId("agent-feature-service_tier");
+      await expect(toggle).toHaveAttribute("aria-pressed", "false");
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "true");
+      await expectSpeedIconColor(page, ACTIVE_SPEED_COLOR);
+      await page.screenshot({ path: testInfo.outputPath(`${viewport.name}-fast-only.png`) });
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "false");
+      await expectSpeedIconColor(page, NORMAL_SPEED_COLOR);
     } finally {
       await workspace.cleanup();
     }

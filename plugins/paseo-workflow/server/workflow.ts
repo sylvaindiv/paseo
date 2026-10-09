@@ -1,3 +1,4 @@
+import type { AgentMode, AgentFeature } from "@getpaseo/protocol/agent-types";
 import { profileId, type Role } from "../shared/profiles";
 import { decisionJson, routerDecision } from "../shared/decisions";
 import {
@@ -114,6 +115,14 @@ const UNCONFIRMED_APPROVAL =
   "Approval follow-up outcome_unknown. Inspect this conversation before continuing; automatic completion is suspended.";
 export interface WorkflowPort {
   profiles(): Promise<AgentProfile[]>;
+  executionSettings(
+    profile: AgentProfile,
+    cwd: string,
+  ): Promise<{
+    modes: AgentMode[];
+    features: AgentFeature[];
+    defaultModeId?: string | null;
+  }>;
   agent(id: string): Promise<WorkflowAgent>;
   workspace(id: string): Promise<{ cwd: string; intent?: string | null }>;
   timeline(id: string, projection?: "canonical" | "projected"): Promise<AgentTimelineItem[]>;
@@ -532,6 +541,7 @@ export class WorkflowController {
       if (plan.review || plan.approved)
         throw new Error("This plan is already reviewed or approved.");
       const profile = await this.handoffProfile(plan.handoff, selectedProfileId);
+      const config = profile ? await this.handoffConfig(profile, workflow.workspaceId) : undefined;
       if (plan.handoff?.phase !== "closed") {
         await this.available(context);
         plan.context = context;
@@ -550,7 +560,7 @@ export class WorkflowController {
         await this.port.write(state);
       }
       return {
-        agentId: await this.startHandoff(state, workflow, plan, profile, resumingClosed),
+        agentId: await this.startHandoff(state, workflow, plan, profile, config, resumingClosed),
       };
     });
   }
@@ -567,11 +577,40 @@ export class WorkflowController {
     return profile;
   }
 
+  private async handoffConfig(profile: AgentProfile, workspaceId: string) {
+    const { cwd } = await this.port.workspace(workspaceId);
+    const { modes, features, defaultModeId } = await this.port.executionSettings(profile, cwd);
+    const config = profileConfig(profile, false);
+    if (features.some((feature) => feature.id === "plan_mode" && feature.type === "toggle"))
+      config.featureValues = { ...config.featureValues, plan_mode: false };
+    const isPlan = (mode: AgentMode) =>
+      mode.colorTier === "planning" || mode.id === "plan" || mode.id.endsWith("#plan");
+    const selectedId = config.modeId ?? defaultModeId;
+    const selected = modes.find((mode) => mode.id === selectedId);
+    if (
+      (!selectedId && modes.length > 0) ||
+      (selected ? isPlan(selected) : selectedId === "plan" || selectedId?.endsWith("#plan"))
+    ) {
+      const admissible = (mode: AgentMode) =>
+        !isPlan(mode) && !mode.isUnattended && mode.colorTier !== "dangerous";
+      const execution =
+        modes.find((mode) => mode.id === defaultModeId && admissible(mode)) ??
+        modes.find(admissible);
+      if (!execution)
+        throw new Error(
+          `Provider '${profile.provider}' has no non-plan execution mode without unrestricted permissions.`,
+        );
+      config.modeId = execution.id;
+    }
+    return config;
+  }
+
   private async startHandoff(
     state: WorkflowState,
     workflow: Workflow,
     plan: Workflow["plans"][string],
     profile: AgentProfile | undefined,
+    config: PaseoAgentConfig | undefined,
     resume = false,
   ) {
     const handoff = plan.handoff!;
@@ -586,7 +625,7 @@ export class WorkflowController {
         workspaceId: workflow.workspaceId,
         idempotencyKey: `workflow:${workflow.id}:handoff:${plan.context.callId}`,
         launchProfileId: profile!.id,
-        config: profileConfig(profile!, false),
+        config: config!,
         labels: {
           "paseo.workflow.id": workflow.id,
           "paseo.workflow.plan": plan.context.callId,

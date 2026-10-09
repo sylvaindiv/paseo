@@ -2,6 +2,26 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const es: TranslationResources = {
+  workspaceTodos: {
+    title: "To-do",
+    taskTitle: "Título de la tarea",
+    notes: "Notas",
+    todo: "Por hacer",
+    in_progress: "En curso",
+    done: "Completada",
+    add: "Añadir tarea",
+    save: "Guardar",
+    delete: "Eliminar tarea",
+    moveUp: "Subir",
+    moveDown: "Bajar",
+    reorder: "Reordenar tarea",
+    taskMenu: "Acciones de la tarea",
+    close: "Cerrar To-do",
+    empty: "Todavía no hay tareas",
+    unsaved: "Cambios sin guardar",
+    retry: "Actualizar y reintentar",
+    updateHost: "Actualiza este host para usar las listas To-do compartidas del workspace.",
+  },
   paneFind: {
     connectionFailure:
       "No se pudo buscar en este chat. Comprueba la conexión con el host y vuelve a intentarlo.",

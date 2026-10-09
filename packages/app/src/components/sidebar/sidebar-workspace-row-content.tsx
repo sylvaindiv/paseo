@@ -530,7 +530,6 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.normal,
     lineHeight: 20,
-    opacity: 0.76,
     flex: 1,
     minWidth: 0,
   },

@@ -43,15 +43,14 @@ export function createPluginNavigation(input: {
       if (sourceTab && targetTab) {
         store.closeTab(workspaceKey, sourceTab.tabId);
         store.focusTab(workspaceKey, targetTab.tabId);
-        return;
+      } else if (sourceTab) {
+        store.replaceTab(workspaceKey, sourceTab.tabId, {
+          kind: "agent",
+          agentId: targetAgentId,
+        });
       }
-      const replaced = sourceTab
-        ? store.replaceTab(workspaceKey, sourceTab.tabId, {
-            kind: "agent",
-            agentId: targetAgentId,
-          })
-        : null;
-      if (!replaced) navigateToAgent({ serverId, agentId: targetAgentId });
+      // Widget actions can originate from a workspace that is not on screen.
+      navigateToAgent({ serverId, workspaceId, agentId: targetAgentId });
     },
     openSettings(pluginId, screenId) {
       router.push(buildPluginSettingsRoute(serverId, pluginId, screenId));

@@ -49,37 +49,50 @@ afterEach(() => {
   for (const value of registries.splice(0)) value.removeHost("host");
 });
 
-it("checks the app version before creating a runtime or evaluating plugin code", () => {
-  const { result, starts } = registry("0.8.0");
+it("runs client plugins even when their declared range excludes this app version", () => {
+  const { result, starts } = registry("0.11.1");
   result.installCatalog(
     "host",
     [
       {
         id: "example",
-        requirements: { paseo: ">=0.9.0" },
-        clientBundle: "throw new Error('executed')",
+        requirements: { paseo: "^0.8.0" },
+        clientBundle,
       },
     ],
     { client, audio },
   );
-  expect(starts()).toBe(0);
-  expect(result.getSnapshot()).toEqual([]);
-  expect(result.getEvaluationError("host", "example")).toBe(
-    'Plugin "example" requires Paseo >=0.9.0. Your app is 0.8.0. Use a compatible plugin version or update the app.',
-  );
+  expect(starts()).toBe(1);
+  expect(result.getSnapshot().map(({ id }) => id)).toEqual(["example"]);
+  expect(result.getEvaluationError("host", "example")).toBeUndefined();
 });
 
-it("rejects catalogs without requirements from pre-0.8 daemons", () => {
-  const { result, starts } = registry("0.8.0");
+it("loads catalogs without requirements from any daemon version", () => {
+  const { result, starts } = registry("0.11.1");
   result.installCatalog("host", [{ id: "example", clientBundle }], { client, audio });
-  expect(starts()).toBe(0);
-  expect(result.getEvaluationError("host", "example")).toContain(
-    "https://paseo.sh/docs/plugins/migration",
-  );
+  expect(starts()).toBe(1);
+  expect(result.getSnapshot().map(({ id }) => id)).toEqual(["example"]);
 });
 
-it("unloads on a requirement-only edit and recovers after correction", () => {
-  const { result, starts, cleanups } = registry("0.8.0");
+it("surfaces malformed requirements and real client evaluation errors", () => {
+  const { result } = registry("0.11.1");
+  result.installCatalog(
+    "host",
+    [{ id: "bad-requirement", requirements: { paseo: "latest" }, clientBundle }],
+    { client, audio },
+  );
+  expect(result.getEvaluationError("host", "bad-requirement")).toContain(
+    "Invalid requirements.paseo",
+  );
+  result.installCatalog("host", [{ id: "broken", clientBundle: "throw new Error('boom')" }], {
+    client,
+    audio,
+  });
+  expect(result.getEvaluationError("host", "broken")).toContain("boom");
+});
+
+it("re-evaluates requirement-only edits without rejecting version differences", () => {
+  const { result, starts, cleanups } = registry("0.11.1");
   const install = (paseo: string) =>
     result.installCatalog("host", [{ id: "example", clientBundle, requirements: { paseo } }], {
       client,
@@ -91,10 +104,6 @@ it("unloads on a requirement-only edit and recovers after correction", () => {
   expect(starts()).toBe(1);
   install(">=0.9.0");
   expect(cleanups()).toBe(1);
-  expect(starts()).toBe(1);
-  expect(result.getSnapshot()).toEqual([]);
-  expect(result.getEvaluationError("host", "example")).toContain("requires Paseo >=0.9.0");
-  install(">=0.8.0");
   expect(starts()).toBe(2);
   expect(result.getSnapshot().map(({ id }) => id)).toEqual(["example"]);
   expect(result.getEvaluationError("host", "example")).toBeUndefined();

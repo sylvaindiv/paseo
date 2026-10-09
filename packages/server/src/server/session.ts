@@ -1,3 +1,4 @@
+import { workspaceTodosForHome } from "./workspace-todos.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
@@ -2984,6 +2985,10 @@ export class Session {
 
   private dispatchWorkspaceLabelMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
+      case "workspace.todos.get.request":
+        return this.handleWorkspaceTodosGet(msg);
+      case "workspace.todos.mutate.request":
+        return this.handleWorkspaceTodosMutate(msg);
       case "workspace.label.list.request":
         return this.handleWorkspaceLabelList(msg);
       case "workspace.label.assignment.set.request":
@@ -6515,6 +6520,84 @@ export class Session {
           requestType: "project.list.request",
           error: error instanceof Error ? error.message : "Failed to list projects",
           code: "project_list_failed",
+        },
+      });
+    }
+  }
+
+  private async handleWorkspaceTodosGet(
+    request: Extract<SessionInboundMessage, { type: "workspace.todos.get.request" }>,
+  ): Promise<void> {
+    if (!(await this.workspaceRegistry.get(request.workspaceId)))
+      throw new Error("Unknown workspace");
+    const store = workspaceTodosForHome(this.paseoHome);
+    let stop: (() => void) | undefined;
+    const owner = request.subscribe
+      ? this.delivery.begin(`todos:${request.workspaceId}`, request.subscribe.subscriptionId, () =>
+          stop?.(),
+        )
+      : null;
+    let ready = false;
+    let latest: Awaited<ReturnType<typeof store.read>> | undefined;
+    const emit = (list: Awaited<ReturnType<typeof store.read>>) =>
+      owner?.emit({
+        type: "workspace.todos.changed",
+        payload: { workspaceId: request.workspaceId, list },
+      });
+    try {
+      if (owner)
+        stop = store.subscribe(request.workspaceId, (list) => {
+          if (ready) emit(list);
+          else latest = list;
+        });
+      const list = await store.read(request.workspaceId);
+      if (owner?.signal.aborted) return;
+      this.emit({
+        type: "workspace.todos.get.response",
+        payload: {
+          requestId: request.requestId,
+          workspaceId: request.workspaceId,
+          list,
+          ...(owner ? { subscriptionId: owner.responseId } : {}),
+        },
+      });
+      ready = true;
+      if (latest && latest.revision > list.revision) emit(latest);
+    } catch (error) {
+      await owner?.release();
+      throw error;
+    }
+  }
+
+  private async handleWorkspaceTodosMutate(
+    request: Extract<SessionInboundMessage, { type: "workspace.todos.mutate.request" }>,
+  ): Promise<void> {
+    try {
+      if (!(await this.workspaceRegistry.get(request.workspaceId)))
+        throw new Error("Unknown workspace");
+      const list = await workspaceTodosForHome(this.paseoHome).mutate(
+        request.workspaceId,
+        request.revision,
+        request.mutation,
+        "user",
+      );
+      this.emit({
+        type: "workspace.todos.mutate.response",
+        payload: {
+          requestId: request.requestId,
+          workspaceId: request.workspaceId,
+          list,
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "workspace.todos.mutate.response",
+        payload: {
+          requestId: request.requestId,
+          workspaceId: request.workspaceId,
+          list: null,
+          error: getErrorMessage(error),
         },
       });
     }

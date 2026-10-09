@@ -2,6 +2,26 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ko: TranslationResources = {
+  workspaceTodos: {
+    title: "To-do",
+    taskTitle: "작업 제목",
+    notes: "메모",
+    todo: "할 일",
+    in_progress: "진행 중",
+    done: "완료",
+    add: "작업 추가",
+    save: "저장",
+    delete: "작업 삭제",
+    moveUp: "위로 이동",
+    moveDown: "아래로 이동",
+    reorder: "작업 순서 변경",
+    taskMenu: "작업 메뉴",
+    close: "To-do 닫기",
+    empty: "아직 작업이 없습니다",
+    unsaved: "저장하지 않은 변경 사항",
+    retry: "새로고침 후 다시 시도",
+    updateHost: "공유 작업 목록을 사용하려면 이 호스트를 업데이트하세요.",
+  },
   paneFind: {
     connectionFailure: "이 채팅을 검색할 수 없습니다. 호스트 연결을 확인하고 다시 시도하세요.",
     historyChangedFailure: "검색 중에 채팅이 변경되었습니다. 다시 검색하세요.",

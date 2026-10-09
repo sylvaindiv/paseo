@@ -10,6 +10,34 @@ import {
 } from "./messages.js";
 
 describe("workspace message schemas", () => {
+  test("shared todos messages validate revisions and targeted mutations", () => {
+    const request = {
+      type: "workspace.todos.mutate.request",
+      requestId: "r",
+      workspaceId: "w",
+      revision: 0,
+      mutation: { operation: "add", title: "Step", notes: "" },
+    };
+    expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+    expect(SessionInboundMessageSchema.safeParse({ ...request, revision: -1 }).success).toBe(false);
+    expect(
+      SessionInboundMessageSchema.safeParse({
+        ...request,
+        mutation: { operation: "add", title: "", notes: "" },
+      }).success,
+    ).toBe(false);
+    expect(
+      SessionOutboundMessageSchema.parse({
+        type: "workspace.todos.changed",
+        payload: {
+          workspaceId: "w",
+          subscriptionId: "s",
+          list: { revision: 1, initialized: true, tasks: [] },
+        },
+      }),
+    ).toMatchObject({ type: "workspace.todos.changed" });
+  });
+
   test("parses mark-unread request and response", () => {
     expect(
       SessionInboundMessageSchema.parse({

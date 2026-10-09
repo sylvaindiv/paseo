@@ -63,6 +63,7 @@ import {
   resolveAgentModelSelection,
 } from "@/composer/agent-controls/utils";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { isWeb } from "@/constants/platform";
 import { readMeasuredWidth } from "@/hooks/use-container-width";
 import { useToast } from "@/contexts/toast-context";
 import { toErrorMessage } from "@/utils/error-messages";
@@ -1430,6 +1431,7 @@ function DesktopFeatureItem({
             disabled={disabled}
             onPress={handleTogglePress}
             accessibilityState={accessibilityState}
+            aria-pressed={isWeb ? accessibilityState.checked : undefined}
             accessibilityLabel={getFeatureTooltip(feature)}
             testID={`agent-feature-${feature.id}`}
           />
@@ -1559,6 +1561,7 @@ function SheetFeatureItem({
         disabled={disabled}
         onPress={handleTogglePress}
         accessibilityState={accessibilityState}
+        aria-pressed={isWeb ? accessibilityState.checked : undefined}
         accessibilityLabel={getFeatureTooltip(feature)}
         testID={`agent-feature-${feature.id}`}
       />

@@ -35,6 +35,15 @@ function outboundMessage(type: SessionOutboundMessage["type"]): SessionOutboundM
 }
 
 describe("SessionAuthorization", () => {
+  test("shared todos require read authority for observations and write authority for edits", () => {
+    const reader = new SessionAuthorization(["workspace.read"]);
+    expect(reader.allowsInbound(inboundMessage("workspace.todos.get.request"))).toBe(true);
+    expect(reader.allowsOutbound(outboundMessage("workspace.todos.changed"))).toBe(true);
+    expect(reader.allowsInbound(inboundMessage("workspace.todos.mutate.request"))).toBe(false);
+    const writer = new SessionAuthorization(["workspace.write"]);
+    expect(writer.allowsInbound(inboundMessage("workspace.todos.mutate.request"))).toBe(true);
+  });
+
   test("owner authority covers every session operation", () => {
     const authorization = new SessionAuthorization(OWNER_PERMISSIONS);
 
