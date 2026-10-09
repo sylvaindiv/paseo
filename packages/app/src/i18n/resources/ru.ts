@@ -2,6 +2,26 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ru: TranslationResources = {
+  workspaceTodos: {
+    title: "To-do",
+    taskTitle: "Название задачи",
+    notes: "Заметки",
+    todo: "К выполнению",
+    in_progress: "В работе",
+    done: "Готово",
+    add: "Добавить задачу",
+    save: "Сохранить",
+    delete: "Удалить задачу",
+    moveUp: "Переместить вверх",
+    moveDown: "Переместить вниз",
+    reorder: "Изменить порядок",
+    taskMenu: "Действия с задачей",
+    close: "Закрыть To-do",
+    empty: "Задач пока нет",
+    unsaved: "Несохранённые изменения",
+    retry: "Обновить и повторить",
+    updateHost: "Обновите этот хост, чтобы использовать общие списки задач workspace.",
+  },
   paneFind: {
     connectionFailure:
       "Не удалось выполнить поиск в чате. Проверьте подключение к хосту и повторите попытку.",

@@ -57,6 +57,29 @@ export function runtime(
   };
   const port: WorkflowPort = {
     profiles: async () => (await paseo.config.get()).config.agentProfiles ?? [],
+    executionSettings: async (profile, cwd) => {
+      const [catalog, features] = await Promise.all([
+        paseo.providers.waitForReady({ cwd }),
+        paseo.providers.listFeatures({
+          provider: profile.model ? `${profile.provider}/${profile.model}` : profile.provider,
+          cwd,
+          modeId: profile.modeId,
+          thinkingOptionId: profile.thinkingOptionId,
+          featureValues: profile.featureValues,
+        }),
+      ]);
+      const provider = catalog.entries.find((entry) => entry.provider === profile.provider);
+      if (!provider || provider.status !== "ready" || !provider.modes)
+        throw new Error(provider?.error ?? `Provider '${profile.provider}' modes are unavailable.`);
+      if (features.error) throw new Error(features.error);
+      if (!features.features)
+        throw new Error(`Provider '${profile.provider}' features are unavailable.`);
+      return {
+        modes: provider.modes,
+        defaultModeId: provider.defaultModeId,
+        features: features.features,
+      };
+    },
     agent: async (id) => {
       const handle = paseo.agents.ref(id);
       const snapshot = await handle.refresh();

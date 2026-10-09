@@ -74,31 +74,21 @@ these fields during installation.
 ### Requirements
 
 `requirements` is an optional object. Its currently supported key, `paseo`, accepts an npm semver
-range. An omitted `requirements.paseo` means `<0.8.0`: the plugin predates the first breaking
-plugin release. Paseo 0.8 and later reject it with a link to the [migration guide](migration).
-Empty strings, invalid ranges, and unknown manifest requirement keys are rejected.
+range as author-provided compatibility guidance. Paseo does not compare the range with the running
+daemon or app version. An omitted `requirements.paseo` is accepted. Empty strings, invalid ranges,
+and unknown manifest requirement keys are rejected.
 
-| Range            | Compatible releases                                                          |
-| ---------------- | ---------------------------------------------------------------------------- |
-| `>=0.8.0`        | 0.8.0 and later releases, including prereleases and future breaking releases |
-| `^0.8.0`         | 0.8.x releases, including prereleases                                        |
-| `>=0.8.3 <0.9.0` | 0.8.3 through the last 0.8 patch, including prereleases                      |
-
-Prerelease Paseo versions also satisfy a range their stable core (`major.minor.patch`) satisfies, so `0.8.0-beta.1` satisfies `>=0.8.0` but not `<0.8.0`.
+For example, `^0.8.0` documents the range the author tested. It does not prevent the plugin from
+loading on Paseo 0.11.1 or any other version. The declared range does not verify that APIs used by
+the plugin still exist; actual compile and runtime errors remain visible.
 
 `paseo plugin init` writes `>=` followed by the current CLI version and pins the matching SDK
-for typechecking. Raise the minimum when adopting a newer API. Add an upper bound when a later
-release is incompatible; a minimum alone does not promise protection from future breaking changes.
+for typechecking. Keep the range aligned with the versions you test; it does not protect against
+future API changes.
 
-The daemon checks its version before installing, running preparation commands, or loading a plugin,
-and checks again on startup, enable, and reload. A rejected update keeps the installed revision.
-Each connected app checks its own version before evaluating client code and shows incompatibility
-in Settings → Plugins. A compatible daemon does not make an older app compatible. A plugin with no
-client entry does not require the connected app to match.
-
-For example: `Plugin "review" requires Paseo >=0.8.0. Your daemon is 0.7.2.` Use a compatible plugin
-revision or update the named runtime. Releases before 0.8 do not understand this manifest field
-and cannot show this new diagnostic.
+The manifest field is informational for both daemon and app loading. Paseo validates that the range
+is well-formed, then reports genuine preparation, compilation, and runtime failures through the
+normal plugin status and error surfaces.
 
 ### Runtime entries
 

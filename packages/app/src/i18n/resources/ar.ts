@@ -2,6 +2,26 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ar: TranslationResources = {
+  workspaceTodos: {
+    title: "المهام",
+    taskTitle: "عنوان المهمة",
+    notes: "ملاحظات",
+    todo: "لم تبدأ",
+    in_progress: "قيد التنفيذ",
+    done: "مكتملة",
+    add: "إضافة مهمة",
+    save: "حفظ",
+    delete: "حذف المهمة",
+    moveUp: "نقل لأعلى",
+    moveDown: "نقل لأسفل",
+    reorder: "ترتيب المهمة",
+    taskMenu: "إجراءات المهمة",
+    close: "إغلاق المهام",
+    empty: "لا توجد مهام بعد",
+    unsaved: "تغييرات غير محفوظة",
+    retry: "تحديث وإعادة المحاولة",
+    updateHost: "حدّث هذا المضيف لاستخدام قوائم المهام المشتركة لمساحة العمل.",
+  },
   paneFind: {
     connectionFailure: "تعذر البحث في هذه المحادثة. تحقق من الاتصال بالمضيف وأعد المحاولة.",
     historyChangedFailure: "تغيّرت المحادثة أثناء البحث. أعد البحث.",

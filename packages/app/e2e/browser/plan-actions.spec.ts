@@ -92,7 +92,9 @@ test("received handoff plans render as readable plans with opt-in technical deta
   }
 });
 
-test("handoff selects the executor after the source plan closes", async ({ page }, testInfo) => {
+test("handoff returns to the executor workspace after the source plan closes", async ({
+  page,
+}, testInfo) => {
   const plugin = await createPlanActionPlugin();
   const client = await connectDaemonClient<DaemonClient>({ clientIdPrefix: "handoff-focus" });
   const previous = await client.getDaemonConfig();
@@ -125,7 +127,14 @@ test("handoff selects the executor after the source plan closes", async ({ page 
       interrupt: true,
     });
     await expect(page.getByTestId("plan-handoff-profiles")).toHaveCount(0);
+    await page
+      .getByTestId("sidebar-global-new-workspace")
+      .filter({ visible: true })
+      .first()
+      .click();
+    await expect(page).toHaveURL(/\/new(?:\?.*)?$/);
     await page.evaluate(() => sessionStorage.setItem("plan-action-release", "true"));
+    await expect(page).toHaveURL(new RegExp(`/workspace/${session.workspaceId}(?:\\?.*)?$`));
     await expect(page.getByTestId(`workspace-tab-agent_${executor.id}`).first()).toHaveAttribute(
       "aria-selected",
       "true",

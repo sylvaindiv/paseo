@@ -111,7 +111,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[1],
     paddingHorizontal: theme.spacing[1],
-    borderRadius: theme.borderRadius.composerControl,
+    borderRadius: theme.borderRadius.md,
     backgroundColor: "transparent",
   },
   toolbarIconOnly: {
@@ -124,7 +124,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     flexShrink: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: { xs: theme.fontSize.base, md: theme.fontSize.sm },
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.normal,
   },
   sheetRow: {
@@ -164,10 +164,10 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.normal,
   },
   hovered: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   pressed: {
-    backgroundColor: theme.colors.surface0,
+    backgroundColor: theme.colors.interactionHighlight,
   },
   disabled: {
     opacity: 0.5,

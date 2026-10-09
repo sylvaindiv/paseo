@@ -203,7 +203,7 @@ interface PlanCardProps {
 }
 
 const ThemedChevron = withUnistyles(ChevronRight);
-const chevronColor = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const chevronColor = (theme: Theme) => ({ color: theme.colors.planCard.headerForeground });
 const markdownRules = createPlanMarkdownRules();
 
 export function PlanCard(props: PlanCardProps) {
@@ -272,8 +272,9 @@ const styles = StyleSheet.create((theme) => ({
     padding: theme.spacing[3],
     borderRadius: theme.spacing[2],
     borderWidth: 1,
-    backgroundColor: theme.colors.surface1,
-    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.planCard.background,
+    borderColor: theme.colors.planCard.border,
+    overflow: "hidden",
     gap: theme.spacing[2],
   },
   containerCompact: {
@@ -283,13 +284,18 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
-    minHeight: 24,
+    minHeight: 36,
+    marginTop: -theme.spacing[3],
+    marginHorizontal: -theme.spacing[3],
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1.5],
+    backgroundColor: theme.colors.planCard.header,
   },
   chevron: {},
   chevronExpanded: { transform: [{ rotate: "90deg" }] },
   body: { gap: theme.spacing[2] },
   title: {
-    color: theme.colors.foreground,
+    color: theme.colors.planCard.headerForeground,
     flexShrink: 1,
     fontSize: theme.fontSize.base,
     lineHeight: 22,
@@ -301,6 +307,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   footer: {
     gap: theme.spacing[2],
+    marginHorizontal: -theme.spacing[3],
+    marginBottom: -theme.spacing[3],
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1.5],
+    backgroundColor: theme.colors.planCard.footer,
   },
 }));
 

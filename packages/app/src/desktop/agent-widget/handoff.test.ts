@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 import { handoffReason, handoffWidgetPlan } from "./handoff";
+import { collectAllTabs, useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 
 const { plugins, run, navigate } = vi.hoisted(() => ({
   plugins: vi.fn(),
@@ -9,7 +10,8 @@ const { plugins, run, navigate } = vi.hoisted(() => ({
 }));
 vi.mock("@/plugins/registry", () => ({ pluginRegistry: { getSnapshot: plugins } }));
 vi.mock("@/plugins/plan-actions/contribution", () => ({ runPlanContribution: run }));
-vi.mock("@/plugins/navigation", () => ({ createPluginNavigation: () => ({ openAgent() {} }) }));
+vi.mock("expo-router", () => ({ router: { push: vi.fn() } }));
+vi.mock("@/stores/navigation-active-workspace-store", () => ({ navigateToWorkspace: vi.fn() }));
 vi.mock("@/utils/navigate-to-agent", () => ({ navigateToAgent: navigate }));
 
 const request: AgentPermissionRequest = {
@@ -47,6 +49,7 @@ const plugin = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useWorkspaceLayoutStore.setState({ layoutByWorkspace: {}, hiddenAgentIdsByWorkspace: {} });
   plugins.mockReturnValue([plugin]);
   run.mockResolvedValue(undefined);
 });
@@ -94,6 +97,37 @@ describe("widget handoff", () => {
       workspaceId: "workspace",
     });
   });
+
+  it.each([false, true])(
+    "opens the handed-off executor's workspace when its target tab already exists: %s",
+    async (targetExists) => {
+      const workspaceKey = "host:workspace";
+      const store = useWorkspaceLayoutStore.getState();
+      store.openTab({ workspaceKey, target: { kind: "agent", agentId: "planner" }, intent: "new" });
+      if (targetExists) {
+        store.openTab({
+          workspaceKey,
+          target: { kind: "agent", agentId: "executor" },
+          intent: "new",
+        });
+      }
+      run.mockImplementation(async ({ navigation }) =>
+        navigation.replaceAgent("planner", "executor"),
+      );
+      await handoffWidgetPlan(input);
+      expect(navigate).toHaveBeenCalledWith({
+        serverId: "host",
+        workspaceId: "workspace",
+        agentId: "executor",
+      });
+      const layout = useWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey]!;
+      expect(
+        collectAllTabs(layout.root)
+          .filter((tab) => tab.target.kind === "agent")
+          .map((tab) => tab.target),
+      ).toEqual([{ kind: "agent", agentId: "executor" }]);
+    },
+  );
 
   it("renews progress beyond thirty seconds, stops signaling, and allows a failed retry", async () => {
     vi.useFakeTimers();

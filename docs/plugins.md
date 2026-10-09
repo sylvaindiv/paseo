@@ -30,7 +30,11 @@ conversation — can be handed off by choosing a host agent profile. The dedicat
 shows every host profile in its normal order, with no preselection, on the plan card, desktop widget
 and Workflow panel. The server revalidates the exact current plan and the selected profile before
 closing the plan permission. The executor starts as a root agent in the same workspace with that
-profile's provider, model, mode, effort and feature settings. Handoff never calls the classifier.
+profile's provider, model, effort and other settings, with Plan disabled. For a separate Plan mode,
+Handoff selects the provider's default execution mode, or its first non-plan mode without unrestricted
+permissions if the default is Plan or unavailable. An already non-plan mode stays unchanged. If no
+execution mode qualifies, Handoff fails before closing the source plan. The saved profile and source
+agent settings stay unchanged. Handoff never calls the classifier.
 Concurrent clicks and retries reuse the existing executor; a definitive prompt rejection permits an
 explicit retry on that same agent. Older queued transfers without an executor require a fresh
 explicit profile choice and never resume automatically after reload.
@@ -168,9 +172,9 @@ runtime modules, so consumers do not install these packages when adding the plug
 }
 ```
 
-Declare the supported Paseo range and keep it current when adopting newer APIs. See the
-[requirements contract](../public-docs/plugins/reference.md#requirements), including legacy
-manifests and prerelease matching.
+Declare the Paseo versions you tested as guidance for plugin users. The range is validated but does
+not block loading on other versions; genuine API, compilation, and runtime errors still appear.
+See the [requirements contract](../public-docs/plugins/reference.md#requirements).
 
 The config key is the runtime plugin ID. The manifest ID is the default selected during install;
 `--id` overrides it. Existing configuration is not renamed when the manifest changes, and the

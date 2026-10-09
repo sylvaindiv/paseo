@@ -2,6 +2,26 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const zhCN: TranslationResources = {
+  workspaceTodos: {
+    title: "待办事项",
+    taskTitle: "任务标题",
+    notes: "备注",
+    todo: "待办",
+    in_progress: "进行中",
+    done: "已完成",
+    add: "添加任务",
+    save: "保存",
+    delete: "删除任务",
+    moveUp: "上移",
+    moveDown: "下移",
+    reorder: "调整任务顺序",
+    taskMenu: "任务操作",
+    close: "关闭待办事项",
+    empty: "暂无任务",
+    unsaved: "未保存的更改",
+    retry: "刷新并重试",
+    updateHost: "请更新此主机以使用工作区共享待办列表。",
+  },
   paneFind: {
     connectionFailure: "无法搜索此聊天。请检查主机连接后重试。",
     historyChangedFailure: "搜索期间聊天已更改。请重新搜索。",

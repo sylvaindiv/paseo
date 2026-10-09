@@ -1,3 +1,4 @@
+import { workspaceTodosForHome } from "../workspace-todos.js";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -831,6 +832,88 @@ function createPaseoWorktreeForMcpTest(options: {
     return result;
   };
 }
+
+describe("shared workspace todos tools", () => {
+  it("derives workspace authority from the caller and preserves manually protected text", async () => {
+    const paseoHome = await mkdtemp(join(tmpdir(), "paseo-todos-mcp-"));
+    const workspace = createPersistedWorkspaceRecord({
+      workspaceId: BROWSER_WORKSPACE_ID,
+      projectId: "project-1",
+      cwd: REPO_CWD,
+      kind: "directory",
+      displayName: "Todos",
+      createdAt: "2026-10-09T00:00:00.000Z",
+      updatedAt: "2026-10-09T00:00:00.000Z",
+    });
+    const dependencies = {
+      agentManager: new BoundaryAgentManagerFake() as AgentManager,
+      agentStorage: new BoundaryAgentStorageFake() as AgentStorage,
+      providerSnapshotManager:
+        new BoundaryProviderSnapshotManagerFake() as unknown as ProviderSnapshotManager,
+      workspaceRegistry: {
+        get: async (id: string) => (id === workspace.workspaceId ? workspace : null),
+        list: async () => [workspace],
+        upsert: async () => undefined,
+      },
+      paseoHome,
+      callerAgentId: "agent-1",
+      logger: createTestLogger(),
+    };
+    const server = await createAgentMcpServer(dependencies);
+    const client = await connectInMemoryMcpClient(server);
+    try {
+      const initialized = await client.callTool({
+        name: "mutate_workspace_todos",
+        arguments: {
+          workspaceId: "spoofed",
+          revision: 0,
+          mutation: { operation: "initialize", tasks: [{ title: "Step", notes: "" }] },
+        },
+      });
+      expect(initialized.isError).not.toBe(true);
+      const store = workspaceTodosForHome(paseoHome);
+      const saved = await store.read(workspace.workspaceId);
+      expect(saved.tasks[0]?.title).toBe("Step");
+      expect((await store.read("spoofed")).tasks).toEqual([]);
+      const id = saved.tasks[0]!.id;
+      await store.mutate(
+        workspace.workspaceId,
+        1,
+        { operation: "update", id, notes: "My notes" },
+        "user",
+      );
+      const rejected = await client.callTool({
+        name: "mutate_workspace_todos",
+        arguments: { revision: 2, mutation: { operation: "update", id, notes: "Overwrite" } },
+      });
+      expect(rejected.isError).toBe(true);
+      const progress = await client.callTool({
+        name: "mutate_workspace_todos",
+        arguments: { revision: 2, mutation: { operation: "update", id, status: "done" } },
+      });
+      expect(progress.isError).not.toBe(true);
+      const read = await client.callTool({ name: "read_workspace_todos", arguments: {} });
+      expect(read.structuredContent).toMatchObject({
+        revision: 3,
+        tasks: [{ notes: "My notes", status: "done" }],
+      });
+    } finally {
+      await client.close();
+      await server.close();
+      await rm(paseoHome, { recursive: true, force: true });
+    }
+    const topLevel = await createAgentMcpServer({ ...dependencies, callerAgentId: undefined });
+    const topLevelClient = await connectInMemoryMcpClient(topLevel);
+    try {
+      expect((await topLevelClient.listTools()).tools.map((tool) => tool.name)).not.toContain(
+        "mutate_workspace_todos",
+      );
+    } finally {
+      await topLevelClient.close();
+      await topLevel.close();
+    }
+  });
+});
 
 describe("browser MCP tools", () => {
   const logger = createTestLogger();

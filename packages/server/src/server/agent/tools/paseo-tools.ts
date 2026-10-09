@@ -1,3 +1,5 @@
+import { workspaceTodosForHome } from "../../workspace-todos.js";
+import { WorkspaceTodoMutationSchema } from "@getpaseo/protocol/workspace-todos";
 import { stat } from "node:fs/promises";
 import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
@@ -2161,6 +2163,51 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       };
     },
   );
+
+  if (callerAgentId && options.paseoHome && options.workspaceRegistry) {
+    const resolveTodosWorkspace = async () => {
+      const agent = resolveCallerAgent();
+      if (!agent?.workspaceId || !(await options.workspaceRegistry?.get(agent.workspaceId)))
+        throw new Error("Caller has no workspace");
+      return agent.workspaceId;
+    };
+    registerTool(
+      "read_workspace_todos",
+      {
+        description:
+          "Read your workspace's shared project To-do list and revision. Reuse existing tasks when resuming work.",
+        inputSchema: {},
+      },
+      async () => ({
+        content: [],
+        structuredContent: ensureValidJson(
+          await workspaceTodosForHome(options.paseoHome!).read(await resolveTodosWorkspace()),
+        ),
+      }),
+    );
+    registerTool(
+      "mutate_workspace_todos",
+      {
+        description:
+          "Maintain shared project tasks. Initialize once with your first proposed plan, then update progress. Use the revision you read; on conflicts reread. Manually edited text is protected. This list is independent of internal agent tasks.",
+        inputSchema: {
+          revision: z.number().int().nonnegative(),
+          mutation: WorkspaceTodoMutationSchema,
+        },
+      },
+      async ({ revision, mutation }) => ({
+        content: [],
+        structuredContent: ensureValidJson(
+          await workspaceTodosForHome(options.paseoHome!).mutate(
+            await resolveTodosWorkspace(),
+            revision,
+            mutation,
+            "agent",
+          ),
+        ),
+      }),
+    );
+  }
 
   registerTool(
     "kill_agent",

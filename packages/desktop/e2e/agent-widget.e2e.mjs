@@ -54,6 +54,12 @@ const plan = {
     { id: "profile-4", name: "Revue en lecture seule" },
   ],
   planText: "# Plan fictif — test automatique\n\nAfficher le premier contenu de test.",
+  project: {
+    name: "Atlas",
+    branchName: "feat/widget-header",
+    color: "#3d7ea6",
+    iconDataUri: `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><rect width="30" height="30" rx="5" fill="#304c75"/><path d="M5 23 15 6l10 17h-6l-4-7-4 7Z" fill="#fff"/></svg>').toString("base64")}`,
+  },
   agentTitle: "TEST — Codex",
   workspace: "Environnement de test",
   title: "Plan fictif — test automatique",
@@ -125,8 +131,30 @@ try {
   const errors = [];
   widget.on("pageerror", (error) => errors.push(error.message));
   await expect(widget.locator("#comment")).toBeVisible();
-  await expect(widget.locator(".identity b")).toHaveText("TEST — Codex");
-  await expect(widget.locator(".identity small")).toHaveText("Environnement de test");
+  await expect(widget.locator(".identity b")).toHaveText("Atlas");
+  await expect(widget.locator(".identity small")).toHaveText("feat/widget-header");
+  await expect(widget.locator("header")).not.toContainText(/paseo/i);
+  await expect(widget.locator(".avatar img")).toHaveJSProperty("naturalWidth", 30);
+  await widget.locator("header").screenshot({ path: path.join(output, "header-logo.png") });
+  for (const [suffix, project, expected] of [
+    ["emoji", { ...plan.project, emoji: "🚀" }, "🚀"],
+    ["initial", { ...plan.project, iconDataUri: undefined }, "A"],
+  ]) {
+    await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+      serverId: "host",
+      online: true,
+      requests: [{ ...plan, project }, question],
+      labels,
+    });
+    await expect(widget.locator(".avatar")).toHaveText(expected);
+    await widget.locator("header").screenshot({ path: path.join(output, `header-${suffix}.png`) });
+  }
+  await owner.evaluate((snapshot) => window.paseoDesktop.agentWidget.publish(snapshot), {
+    serverId: "host",
+    online: true,
+    requests: [plan, question],
+    labels,
+  });
   await expect(widget.locator(".markdown h1")).toHaveText("Plan fictif — test automatique");
   const geometry = await app.evaluate(({ BrowserWindow, screen }) => {
     const win = BrowserWindow.getAllWindows().find((candidate) => candidate.getTitle() === "Paseo");

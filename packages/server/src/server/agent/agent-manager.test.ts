@@ -2246,7 +2246,9 @@ test("createAgent injects daemon append system prompt at runtime only", async ()
   const record = await storage.get(snapshot.id);
 
   expect(client.createdConfigs[0]?.systemPrompt).toBe("Agent instructions.");
-  expect(client.createdConfigs[0]?.daemonAppendSystemPrompt).toBe("Daemon instructions.");
+  expect(client.createdConfigs[0]?.daemonAppendSystemPrompt).toMatch(/^Daemon instructions\./);
+  expect(client.createdConfigs[0]?.daemonAppendSystemPrompt).toContain("read_workspace_todos");
+  expect(client.createdConfigs[0]?.daemonAppendSystemPrompt).toContain("mutate_workspace_todos");
   expect(snapshot.config).not.toHaveProperty("daemonAppendSystemPrompt");
   expect(record?.config?.systemPrompt).toBe("Agent instructions.");
   expect(record?.config).not.toHaveProperty("daemonAppendSystemPrompt");
@@ -2267,6 +2269,7 @@ test("daemon append system prompt is injected into Pi configs", async () => {
     registry: storage,
     logger,
     appendSystemPrompt: "Daemon instructions.",
+    paseoToolsEnabled: false,
     idFactory: () => "00000000-0000-4000-8000-000000000104",
   });
 

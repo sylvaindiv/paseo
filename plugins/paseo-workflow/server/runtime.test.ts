@@ -164,6 +164,58 @@ function row(seq: number, item: AgentTimelineItem, turnId = "turn") {
   };
 }
 
+test("handoff discovers execution settings for the selected provider and workspace", async () => {
+  const profile = {
+    id: "custom",
+    name: "Custom",
+    provider: "custom-acp",
+    model: "chosen",
+    modeId: "plan",
+    thinkingOptionId: "high",
+    featureValues: { other: true },
+  };
+  const modes = [
+    { id: "plan", label: "Plan" },
+    { id: "execute", label: "Execute" },
+  ];
+  const features = [{ type: "toggle" as const, id: "other", label: "Other", value: true }];
+  const requests: unknown[] = [];
+  const api = {
+    providers: {
+      waitForReady: async (options: unknown) => {
+        requests.push(options);
+        return {
+          entries: [{ provider: "custom-acp", status: "ready", modes, defaultModeId: "execute" }],
+        };
+      },
+      listFeatures: async (config: unknown) => {
+        requests.push(config);
+        return { features };
+      },
+    },
+  };
+  const controller = runtime(
+    api as unknown as Parameters<typeof runtime>[0],
+    {} as Parameters<typeof runtime>[1],
+  );
+  const { port } = controller as unknown as { port: WorkflowPort };
+  expect(await port.executionSettings(profile, "/workspace")).toEqual({
+    modes,
+    features,
+    defaultModeId: "execute",
+  });
+  expect(requests).toEqual([
+    { cwd: "/workspace" },
+    {
+      provider: "custom-acp/chosen",
+      cwd: "/workspace",
+      modeId: "plan",
+      thinkingOptionId: "high",
+      featureValues: { other: true },
+    },
+  ]);
+});
+
 test("transcript history requests projected pages while timeline and turn default to canonical", async () => {
   const prompt = row(1, { type: "user_message", text: "Implement" });
   const answer = row(2, { type: "assistant_message", text: "Complete answer" });

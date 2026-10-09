@@ -237,7 +237,7 @@ async function openRemoteWorkspaceFromPlugin(
   await expect(
     page
       .getByTestId(`workspace-deck-entry-${target.serverId}:${target.workspaceId}`)
-      .getByTestId("workspace-header-title"),
+      .getByTestId("workspace-header-breadcrumb"),
   ).toBeVisible();
 }
 
@@ -333,9 +333,12 @@ test.describe("plugin workspace panels and Command Center", () => {
           (await page.getByText(/Workspace renders \d+/).textContent())?.split(" ").at(-1),
         );
         await primaryClient.setWorkspaceTitle(primary.workspaceId, "Unrelated title update");
-        await expect(page.getByTestId("workspace-header-title")).toHaveText(
-          "Unrelated title update",
-        );
+        await expect(
+          page
+            .getByTestId(`sidebar-workspace-row-${getServerId()}:${primary.workspaceId}`)
+            .getByText("Unrelated title update", { exact: true })
+            .first(),
+        ).toBeVisible();
         expect(
           Number((await page.getByText(/Workspace renders \d+/).textContent())?.split(" ").at(-1)),
         ).toBe(renderCount);
@@ -370,7 +373,7 @@ test.describe("plugin workspace panels and Command Center", () => {
         await runCommand(page, "Open direct collision surface");
         await page.getByRole("button", { name: "Open workspace from plugin", exact: true }).click();
         await page.waitForURL(isSettledWorkspaceUrl);
-        await expect(page.getByTestId("workspace-header-title")).toBeVisible();
+        await expect(page.getByTestId("workspace-header-breadcrumb")).toBeVisible();
 
         const agent = await primary.client.createAgent({
           provider: "mock",

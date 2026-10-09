@@ -2,6 +2,26 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ja: TranslationResources = {
+  workspaceTodos: {
+    title: "To-do",
+    taskTitle: "タスク名",
+    notes: "メモ",
+    todo: "未着手",
+    in_progress: "進行中",
+    done: "完了",
+    add: "タスクを追加",
+    save: "保存",
+    delete: "タスクを削除",
+    moveUp: "上に移動",
+    moveDown: "下に移動",
+    reorder: "タスクを並べ替え",
+    taskMenu: "タスクの操作",
+    close: "To-doを閉じる",
+    empty: "タスクはまだありません",
+    unsaved: "未保存の変更",
+    retry: "更新して再試行",
+    updateHost: "共有To-doリストを使うには、このホストを更新してください。",
+  },
   paneFind: {
     connectionFailure:
       "このチャットを検索できませんでした。ホストへの接続を確認して再試行してください。",

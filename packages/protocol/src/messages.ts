@@ -1,3 +1,4 @@
+import { WorkspaceTodosSchema, WorkspaceTodoMutationSchema } from "./workspace-todos.js";
 import {
   MutableStructuredGenerationProviderSchema,
   WorkspaceGitWorkflowConfigSchema,
@@ -1036,6 +1037,46 @@ export const WorkspaceLabelDefinitionSchema = z.object({
 const WorkspaceLabelSyncCursorSchema = z.object({
   generation: z.string(),
   afterSeq: z.number().int().nonnegative(),
+});
+
+export const WorkspaceTodosGetRequestSchema = z.object({
+  type: z.literal("workspace.todos.get.request"),
+  requestId: z.string(),
+  workspaceId: z.string(),
+  subscribe: z.object({ subscriptionId: z.string().optional() }).optional(),
+});
+export const WorkspaceTodosMutateRequestSchema = z.object({
+  type: z.literal("workspace.todos.mutate.request"),
+  requestId: z.string(),
+  workspaceId: z.string(),
+  revision: z.number().int().nonnegative(),
+  mutation: WorkspaceTodoMutationSchema,
+});
+export const WorkspaceTodosGetResponseSchema = z.object({
+  type: z.literal("workspace.todos.get.response"),
+  payload: z.object({
+    requestId: z.string(),
+    workspaceId: z.string(),
+    subscriptionId: z.string().optional(),
+    list: WorkspaceTodosSchema,
+  }),
+});
+export const WorkspaceTodosChangedSchema = z.object({
+  type: z.literal("workspace.todos.changed"),
+  payload: z.object({
+    workspaceId: z.string(),
+    subscriptionId: z.string().optional(),
+    list: WorkspaceTodosSchema,
+  }),
+});
+export const WorkspaceTodosMutateResponseSchema = z.object({
+  type: z.literal("workspace.todos.mutate.response"),
+  payload: z.object({
+    requestId: z.string(),
+    workspaceId: z.string(),
+    list: WorkspaceTodosSchema.nullable(),
+    error: z.string().nullable(),
+  }),
 });
 
 export const WorkspaceLabelListRequestSchema = z.object({
@@ -3324,6 +3365,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentPlanRevisionSendRequestSchema,
   AgentPlanPermissionEnsureRequestSchema,
   WorkspacePinSetRequestSchema,
+  WorkspaceTodosGetRequestSchema,
+  WorkspaceTodosMutateRequestSchema,
   WorkspaceLabelListRequestSchema,
   WorkspaceLabelAssignmentSetRequestSchema,
   WorkspaceLabelUpdateRequestSchema,
@@ -3700,6 +3743,7 @@ export const ServerInfoStatusPayloadSchema = z
         directorySync: z.boolean().optional(),
         // COMPAT(workspaceLabels): added in v0.5.0, remove after 2027-08-14.
         workspaceLabels: z.boolean().optional(),
+        workspaceTodos: z.boolean().optional(),
         // COMPAT(workspaceSetupRun): added in v0.8.0, remove gate after 2027-09-02.
         workspaceSetupRun: z.boolean().optional(),
         // COMPAT(workspaceTerminals): added in v0.8.0, remove gate after 2027-09-05.
@@ -7012,6 +7056,9 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ArtifactMessageSchema,
   AgentUpdateMessageSchema,
   WorkspaceUpdateMessageSchema,
+  WorkspaceTodosGetResponseSchema,
+  WorkspaceTodosMutateResponseSchema,
+  WorkspaceTodosChangedSchema,
   WorkspaceLabelListResponseSchema,
   WorkspaceLabelUpdateSchema,
   WorkspaceLabelAssignmentSetResponseSchema,

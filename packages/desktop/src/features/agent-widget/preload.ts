@@ -126,7 +126,13 @@ function requestContent(
   return `<div class="body"><p class="status">${escape(heading)}</p>${body}</div>${actions(item)}`;
 }
 function header(item: WidgetDisplayItem | undefined, labels: WidgetDisplay["labels"]) {
-  return `<header><button class="header-collapse" data-action="reduce" aria-label="${escape(labels.minimize)}"><span class="avatar">◈</span><span class="identity"><b>${escape(item?.agentTitle ?? "Paseo")}</b><small>${escape(item?.workspace ?? "")}</small></span><span class="brand">paseo</span></button></header>`;
+  const project = item?.project;
+  const name = project?.name ?? item?.workspace ?? "";
+  const initial = escape(Array.from(name.trim())[0]?.toUpperCase() ?? "");
+  const icon = project?.emoji
+    ? `<span class="avatar emoji">${escape(project.emoji)}</span>`
+    : `<span class="avatar" style="background-color:${project?.color ?? "#7a6aa8"}"><span class="initial">${initial}</span>${project?.iconDataUri ? `<img src="${escape(project.iconDataUri)}" alt="">` : ""}</span>`;
+  return `<header><button class="header-collapse" data-action="reduce" aria-label="${escape(labels.minimize)}">${icon}<span class="identity"><b>${escape(name)}</b><small>${escape(project?.branchName ?? "")}</small></span></button></header>`;
 }
 function footer(position: number, count: number, labels: WidgetDisplay["labels"]) {
   const disabled = count < 2 || busy !== null;
@@ -157,6 +163,8 @@ function render() {
     ? `<p class="notice ${failed ? "error" : ""}" role="status">${escape(status)}</p>`
     : "";
   root.innerHTML = `<section class="sheet"><div class="surface">${header(item, labels)}${content}${statusHtml}${footer(position, requests.length, labels)}</div></section>`;
+  const logo = root.querySelector<HTMLImageElement>(".avatar img");
+  logo?.addEventListener("error", () => logo.remove(), { once: true });
   if (selected !== previous) return;
   restoreReadingPosition(root, positionBefore);
 }

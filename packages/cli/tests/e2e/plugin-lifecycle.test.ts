@@ -8,7 +8,7 @@ import {
 } from "../../../../scripts/test-support/npm-registry.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -77,6 +77,9 @@ async function main(): Promise<void> {
     const caller = path.join(context.workDir, "caller");
     await mkdir(caller);
     await mkdir(path.join(sibling, "sub"), { recursive: true });
+    const realCaller = await realpath(caller);
+    const realSibling = await realpath(sibling);
+    const realSub = await realpath(path.join(sibling, "sub"));
     for (const target of [caller, path.join(sibling, "sub"), context.paseoHome]) {
       await writeFile(
         path.join(target, "paseo-plugin.json"),
@@ -90,9 +93,9 @@ async function main(): Promise<void> {
     assert.notEqual(caller, process.cwd()); // The daemon inherits the test runner's cwd.
     try {
       for (const [source, expectedSource, expectedDirectory, extraArgs] of [
-        [".", caller, caller, []],
-        ["../x:sub", `${sibling}:sub`, path.join(sibling, "sub"), []],
-        ["../x", `${sibling}:sub`, path.join(sibling, "sub"), ["--path", "sub"]],
+        [".", realCaller, realCaller, []],
+        ["../x:sub", `${realSibling}:sub`, realSub, []],
+        ["../x", `${realSibling}:sub`, realSub, ["--path", "sub"]],
         ["~", context.paseoHome, context.paseoHome, []],
         ["~/.:.", `${context.paseoHome}:.`, context.paseoHome, []],
       ] as const) {
@@ -134,17 +137,19 @@ async function main(): Promise<void> {
 
     await writeFile(
       manifestPath,
-      JSON.stringify({ ...manifest, requirements: { paseo: ">=999.0.0" } }),
+      JSON.stringify({ ...manifest, requirements: { paseo: "^0.8.0" } }),
     );
-    const incompatibleInstall = await context.paseo(["plugin", "install", scaffold, "--json"]);
-    assert.equal(incompatibleInstall.exitCode, 1);
-    assert.match(incompatibleInstall.stderr, /requires Paseo >=999.0.0/);
-    const afterRejection = await context.paseo(["plugin", "ls", "--json"]);
-    assert.equal(afterRejection.exitCode, 0, afterRejection.stderr);
-    assert.deepEqual(
-      JSON.parse(afterRejection.stdout).map((plugin: { id: string }) => plugin.id),
-      ["cli-e2e"],
+    const olderRangeInstall = await context.paseo(["plugin", "install", scaffold, "--json"]);
+    assert.equal(olderRangeInstall.exitCode, 0, olderRangeInstall.stderr);
+    assert.equal(JSON.parse(olderRangeInstall.stdout).status, "running");
+    await writeFile(
+      manifestPath,
+      JSON.stringify({ ...manifest, requirements: { paseo: "not-semver" } }),
     );
+    const malformedInstall = await context.paseo(["plugin", "install", scaffold, "--json"]);
+    assert.equal(malformedInstall.exitCode, 1);
+    assert.match(malformedInstall.stderr, /Invalid requirements.paseo/);
+    await context.paseo(["plugin", "remove", "authored-plugin", "--json"]);
     await writeFile(manifestPath, JSON.stringify(manifest));
     const scaffoldInstall = await context.paseo(["plugin", "install", scaffold, "--json"]);
     assert.equal(scaffoldInstall.exitCode, 0, scaffoldInstall.stderr);
@@ -155,7 +160,7 @@ async function main(): Promise<void> {
     await git(gitDirectory, ["config", "user.email", "paseo@example.test"]);
     await writeFile(
       path.join(gitDirectory, "paseo-plugin.json"),
-      JSON.stringify({ id: "git-cli-e2e", requirements: { paseo: `>=${resolveCliVersion()}` } }),
+      JSON.stringify({ id: "git-cli-e2e", requirements: { paseo: "^0.8.0" } }),
     );
     await writeFile(path.join(gitDirectory, "index.server.ts"), pluginSource);
     await git(gitDirectory, ["add", "-A"]);
@@ -174,6 +179,10 @@ async function main(): Promise<void> {
       path.join(gitDirectory, "index.server.ts"),
       `${pluginSource}\nconst updated = true;\n`,
     );
+    await writeFile(
+      path.join(gitDirectory, "paseo-plugin.json"),
+      JSON.stringify({ id: "git-cli-e2e", requirements: { paseo: ">=99.0.0-beta.1" } }),
+    );
     await git(gitDirectory, ["add", "-A"]);
     await git(gitDirectory, ["commit", "-m", "update"]);
     const status = await context.paseo(["plugin", "status", "git-cli-e2e", "--json"]);
@@ -186,17 +195,17 @@ async function main(): Promise<void> {
     assert.equal(JSON.parse(update.stdout)[0].outcome, "updated");
 
     const installedCommit = JSON.parse(update.stdout)[0].plugin.installation.currentRevision;
-    const buildMarker = path.join(context.workDir, "incompatible-build-ran");
+    const buildMarker = path.join(context.workDir, "failed-build-ran");
     await writeFile(
       path.join(gitDirectory, "paseo-plugin.json"),
       JSON.stringify({
         id: "git-cli-e2e",
-        requirements: { paseo: ">=999.0.0" },
+        requirements: { paseo: ">=99.0.0-beta.1" },
         build: [
           [
             process.execPath,
             "-e",
-            'require("node:fs").writeFileSync(process.argv[1], "ran")',
+            'require("node:fs").writeFileSync(process.argv[1], "ran"); throw new Error("fixture build failed")',
             buildMarker,
           ],
         ],
@@ -204,16 +213,16 @@ async function main(): Promise<void> {
     );
     await git(gitDirectory, ["add", "-A"]);
     await git(gitDirectory, ["commit", "-m", "requires a future Paseo"]);
-    const incompatibleUpdate = await context.paseo([
+    const failedUpdate = await context.paseo([
       "plugin",
       "update",
       "git-cli-e2e",
       "--yes",
       "--json",
     ]);
-    assert.equal(incompatibleUpdate.exitCode, 1);
-    assert.match(JSON.parse(incompatibleUpdate.stdout)[0].error, /requires Paseo >=999.0.0/);
-    await assert.rejects(readFile(buildMarker), { code: "ENOENT" });
+    assert.equal(failedUpdate.exitCode, 1);
+    assert.match(JSON.parse(failedUpdate.stdout)[0].error, /fixture build failed/);
+    assert.equal(await readFile(buildMarker, "utf8"), "ran");
     const retained = await context.paseo(["plugin", "ls", "git-cli-e2e", "--json"]);
     assert.equal(retained.exitCode, 0, retained.stderr);
     assert.equal(JSON.parse(retained.stdout)[0].commit, installedCommit);
@@ -227,8 +236,7 @@ async function main(): Promise<void> {
       "--json",
     ]);
     assert.equal(incompatibleAdd.exitCode, 1);
-    assert.match(incompatibleAdd.stderr, /requires Paseo >=999.0.0/);
-    await assert.rejects(readFile(buildMarker), { code: "ENOENT" });
+    assert.match(incompatibleAdd.stderr, /fixture build failed/);
 
     const reload = await context.paseo(["plugin", "reload", "cli-e2e", "--json"]);
     assert.equal(reload.exitCode, 0, reload.stderr);

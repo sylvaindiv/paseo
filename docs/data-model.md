@@ -58,6 +58,7 @@ $PASEO_HOME/
 ├── projects/
 │   ├── projects.json                    # Project registry
 │   ├── workspaces.json                  # Workspace registry
+│   ├── todos/{hex-workspace-id}.json      # Shared project To-do lists
 │   ├── workspace-labels.json            # Shared host-local label catalog
 │   ├── workspace-labels.transaction.json # Recoverable catalog/assignment compound commit
 │   └── icons/                           # Host-local custom project icon images
@@ -596,6 +597,14 @@ blank the whole History screen, but mutation paths should repair or remove the o
 than treating it as valid.
 
 ---
+
+### Shared project To-do lists
+
+Keep project tasks keyed by `workspaceId`, outside the workspace record. Archiving and restoring a checkout must not erase its project progress. A new workspace gets an empty list even when it shares a path or branch with another workspace.
+
+All sessions and agent tools share one store per daemon home. Its serialized mutations check the caller's read revision before an atomic write; publish only committed lists. The persisted initialization marker survives deleting the last task, so taking over an empty list cannot silently recreate a discarded plan.
+
+Manual title and note edits protect those fields separately. Agents can still update progress, but cannot rewrite protected text or delete a protected task. Agent tools derive workspace ownership from the authenticated caller, while client RPCs require [workspace authority](permissions.md). Agents populate and maintain the list through tools; no plan text is parsed automatically.
 
 ## 6. Push Token Store
 

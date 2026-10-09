@@ -11,6 +11,7 @@ import {
   selectNewWorkspaceProject,
 } from "../support/helpers/new-workspace";
 import { seedWorkspace } from "../support/helpers/seed-client";
+import { openModelPicker, drillIntoProvider } from "../support/helpers/agent-profiles";
 
 const CREATE_AGENT_PREFERENCES_KEY = "@paseo:create-agent-preferences";
 
@@ -291,6 +292,84 @@ test.describe("New Workspace mode cycle safety", () => {
     }
   });
 });
+
+for (const provider of ["codex", "claude"] as const) {
+  for (const surface of ["workspace", "tab"] as const) {
+    test(`draft plan shortcut: ${provider}, ${surface}`, async ({ page }, testInfo) => {
+      const seeded = await seedWorkspace({ repoPrefix: "draft-plan-shortcut-" });
+      const configs: unknown[] = [];
+      await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
+        const server = ws.connectToServer();
+        ws.onMessage((frame) => {
+          const message = getSessionMessage(frame);
+          if (
+            message?.type === "create_agent_request" ||
+            message?.type === "agent.create.request"
+          ) {
+            configs.push(message.config);
+            return;
+          }
+          if (message?.type === "workspace.create.request" && message.agent) {
+            configs.push((message.agent as { config: unknown }).config);
+            return;
+          }
+          server.send(frame);
+        });
+        server.onMessage((frame) => ws.send(frame));
+      });
+      try {
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await gotoWorkspace(page, seeded.workspaceId);
+        if (surface === "workspace") {
+          await openGlobalNewWorkspaceComposer(page);
+          await selectNewWorkspaceProject(page, seeded);
+        } else {
+          await clickNewChat(page);
+        }
+        if (provider === "claude") {
+          await openModelPicker(page);
+          await page.getByRole("button", { name: "Back", exact: true }).click();
+          await drillIntoProvider(page, provider);
+          await page
+            .getByTestId(/^model-row-claude-/)
+            .first()
+            .click();
+        }
+        const input = page.getByRole("textbox", { name: "Message agent..." });
+        const stripe = page.getByTestId("message-input-plan-stripe");
+        await expect(page.getByTestId("mode-control")).toBeVisible();
+        const initiallyPlanning = provider === "codex";
+        await expect(stripe).toHaveCount(Number(initiallyPlanning));
+        await input.fill("Keep this unsent draft");
+        if (provider === "codex") {
+          const planButton = page.getByTestId("agent-feature-plan_mode");
+          for (const enabled of [false, true]) {
+            await planButton.click();
+            await expect(stripe).toHaveCount(Number(enabled));
+            await expect(planButton).toHaveAttribute("aria-pressed", String(enabled));
+          }
+        }
+        for (const enabled of [!initiallyPlanning, initiallyPlanning, !initiallyPlanning]) {
+          await input.press("Shift+Tab");
+          await expect(stripe).toHaveCount(Number(enabled));
+          await expect(input).toBeFocused();
+          await expect(input).toHaveValue("Keep this unsent draft");
+          expect(configs).toEqual([]);
+        }
+        await page.screenshot({ path: testInfo.outputPath("draft-plan.png") });
+        await input.press("Enter");
+        await expect.poll(() => configs.length).toBe(1);
+        expect(configs[0]).toMatchObject(
+          provider === "codex"
+            ? { provider, featureValues: { plan_mode: false } }
+            : { provider, modeId: "plan" },
+        );
+      } finally {
+        await seeded.cleanup();
+      }
+    });
+  }
+}
 
 test("Auto routing failure preserves the draft for retry and manual selection", async ({
   page,

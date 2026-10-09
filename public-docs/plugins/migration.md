@@ -281,7 +281,8 @@ pills or subscriptions keeps that code; only the wrapper goes away.
 
 ## 7. Declare the Paseo requirement
 
-After migrating the entries and imports, add the minimum runtime version to `paseo-plugin.json`:
+After migrating the entries and imports, you can declare the Paseo versions you tested in
+`paseo-plugin.json`:
 
 ```json
 {
@@ -290,12 +291,13 @@ After migrating the entries and imports, add the minimum runtime version to `pas
 }
 ```
 
-Keep your existing ID and build commands. Missing `requirements.paseo` means `<0.8.0`, so Paseo 0.8 and later
-reject the plugin even if its files have been moved. Adding the field alone does not migrate the
-code. Update the local `@getpaseo/plugin` development dependency to the version you target and
-reinstall dependencies before typechecking.
+The range is informational: Paseo validates its format but does not block loading when a daemon or
+app version falls outside it. Keep your existing ID and build commands. Adding the field alone does
+not migrate the code. Update the local `@getpaseo/plugin` development dependency to the version you
+target and reinstall dependencies before typechecking. A plugin can still fail if it calls an API
+that no longer exists.
 
-See [requirements](reference#requirements) for range and prerelease semantics.
+See [requirements](reference#requirements) for the optional version guidance.
 
 ## 8. Verify the migration
 

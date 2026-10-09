@@ -1,3 +1,4 @@
+import type { WorkspaceTodos, WorkspaceTodoMutation } from "@getpaseo/protocol/workspace-todos";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import type { TerminalActivity } from "@getpaseo/protocol/terminal-activity";
@@ -28,6 +29,12 @@ interface SeedProjectDescriptor {
  * prefer those wrappers over reaching for this client directly.
  */
 export interface SeedDaemonClient {
+  getWorkspaceTodos(workspaceId: string): Promise<{ list: WorkspaceTodos }>;
+  mutateWorkspaceTodos(
+    workspaceId: string,
+    revision: number,
+    mutation: WorkspaceTodoMutation,
+  ): Promise<WorkspaceTodos>;
   connect(): Promise<void>;
   close(): Promise<void>;
   addProject(cwd: string): Promise<{

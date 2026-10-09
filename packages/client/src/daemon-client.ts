@@ -1,3 +1,4 @@
+import type { WorkspaceTodoMutation } from "@getpaseo/protocol/workspace-todos";
 import { legacyUsageIcon } from "./legacy-usage-icons.js";
 import { subscribeTimeline, type TimelineMessage } from "./timeline-subscription/index.js";
 import { ProviderSnapshotUpdates } from "./provider-snapshots/index.js";
@@ -2498,6 +2499,33 @@ export class DaemonClient {
         return msg.payload;
       },
     });
+  }
+
+  getWorkspaceTodos(workspaceId: string) {
+    return this.sendNamespacedCorrelatedSessionRequest<"workspace.todos.get.response">({
+      message: { type: "workspace.todos.get.request", workspaceId },
+    });
+  }
+
+  observeWorkspaceTodos(workspaceId: string, options?: { signal?: AbortSignal }) {
+    return this.observe(
+      "workspace.todos.get.response",
+      { type: "workspace.todos.get.request", workspaceId, subscribe: {} },
+      options,
+    );
+  }
+
+  async mutateWorkspaceTodos(
+    workspaceId: string,
+    revision: number,
+    mutation: WorkspaceTodoMutation,
+  ) {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"workspace.todos.mutate.response">({
+        message: { type: "workspace.todos.mutate.request", workspaceId, revision, mutation },
+      });
+    if (payload.error || !payload.list) throw new Error(payload.error ?? "Unable to save To-do");
+    return payload.list;
   }
 
   listWorkspaceLabels(

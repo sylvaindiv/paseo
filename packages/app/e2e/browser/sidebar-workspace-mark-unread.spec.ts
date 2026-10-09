@@ -95,7 +95,7 @@ async function expectProjectTitleWeight(
   page: Page,
   projectKey: string,
   title: string,
-  weight: "600" | "700",
+  weight: "500" | "600" | "700",
 ) {
   await expect(projectRow(page, projectKey).getByText(title, { exact: true })).toHaveCSS(
     "font-weight",
@@ -103,17 +103,31 @@ async function expectProjectTitleWeight(
   );
 }
 
-async function markBackgroundWorkspaceAndReopen(page: Page, subject: MockAgentWorkspace) {
+async function markBackgroundWorkspaceAndReopen(
+  page: Page,
+  subject: MockAgentWorkspace,
+  readProjectWeight: "500" | "600" = "600",
+) {
   await test.step("background workspace gains green dot and clears when clicked", async () => {
     await expectWorkspaceTitleWeight(page, subject.workspaceId, subject.workspaceName, "400");
-    await expectProjectTitleWeight(page, subject.projectKey, subject.projectDisplayName, "600");
+    await expectProjectTitleWeight(
+      page,
+      subject.projectKey,
+      subject.projectDisplayName,
+      readProjectWeight,
+    );
     await markAsUnread(page, subject.workspaceId);
     await expectWorkspaceTitleWeight(page, subject.workspaceId, subject.workspaceName, "700");
     await expectProjectTitleWeight(page, subject.projectKey, subject.projectDisplayName, "700");
     await openWorkspace(page, subject.workspaceId);
     await expectStatus(page, subject.workspaceId, "done");
     await expectWorkspaceTitleWeight(page, subject.workspaceId, subject.workspaceName, "400");
-    await expectProjectTitleWeight(page, subject.projectKey, subject.projectDisplayName, "600");
+    await expectProjectTitleWeight(
+      page,
+      subject.projectKey,
+      subject.projectDisplayName,
+      readProjectWeight,
+    );
   });
 }
 
@@ -271,7 +285,7 @@ test("clicking a multi-agent workspace reveals and clears its marked agent", asy
   await expectSelectedAgent(page, workspaces.subject.agentId);
   await openWorkspace(page, workspaces.other.workspaceId);
   const newest = await addFinishedAgent(workspaces.subject);
-  await markBackgroundWorkspaceAndReopen(page, workspaces.subject);
+  await markBackgroundWorkspaceAndReopen(page, workspaces.subject, "500");
   await expectSelectedAgent(page, newest.id);
 });
 
