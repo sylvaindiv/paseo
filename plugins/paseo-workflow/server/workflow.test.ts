@@ -12,6 +12,8 @@ function fixture() {
   const prompts: Array<{ agentId: string; text: string; messageId: string }> = [];
   const decisions: string[] = [];
   const endedSources: string[] = [];
+  const claims: Array<{ context: Parameters<WorkflowPort["claimReview"]>[0]; active: boolean }> =
+    [];
   const agents = new Map<string, WorkflowAgent>([
     [
       "planner",
@@ -66,13 +68,6 @@ function fixture() {
       branch: "feature",
       dirty: " M existing.ts",
     }),
-    diff: async () => ({
-      head: "functional-commit",
-      text: "diff --git a/feature.ts b/feature.ts",
-      dirtyFiles: ["existing.ts"],
-      untrackedFiles: [],
-    }),
-    commitCount: async () => 1,
     create: async (input) => {
       launches.push(input);
       const id = `child-${launches.length}`;
@@ -96,7 +91,9 @@ function fixture() {
       decisions.push(requestId);
       agents.get(agentId)!.pendingPermissions = [];
     },
-    claimReview: async () => {},
+    claimReview: async (context, active) => {
+      claims.push({ context, active });
+    },
     ensurePlanPermission: async () => {
       throw new Error("Unexpected synthetic permission");
     },
@@ -111,6 +108,7 @@ function fixture() {
     prompts,
     decisions,
     endedSources,
+    claims,
     agents,
     removeProfile: (id: string) => {
       installed = installed.filter((profile) => profile.id !== id);
@@ -455,12 +453,12 @@ test("a closed transfer without an executor waits for a fresh profile choice and
   expect(f.decisions).toEqual([plan.permissionRequestId]);
 });
 
-test("permission lifecycle reviews once and approval selects the exact plan for same-agent final review", async () => {
+test("permission lifecycle records plans and approval without starting any automatic review", async () => {
   const f = fixture();
   const controller = new WorkflowController(f.port);
   await controller.planRequested(plan);
-  expect(f.launches).toHaveLength(1);
-  await controller.finished("child-1", "Clarify tests");
+  expect(f.launches).toEqual([]);
+  expect(f.decisions).toEqual([]);
   const next = { ...plan, callId: "plan-2", permissionRequestId: "permission-2", text: "Revised" };
   f.agents.get("planner")!.pendingPermissions = [
     {
@@ -471,55 +469,27 @@ test("permission lifecycle reviews once and approval selects the exact plan for 
     },
   ];
   await controller.planRequested(next);
-  expect(f.launches).toHaveLength(1);
+  expect(f.launches).toEqual([]);
   await controller.approved("planner", next.permissionRequestId);
   await controller.finished("planner", "Implemented in the same conversation");
-  expect(f.launches.at(-1)).toMatchObject({
-    launchProfileId: "paseo-workflow-final-review",
-    labels: { "paseo.workflow.plan": "plan-2" },
-  });
+  expect(f.launches).toEqual([]);
+  expect(f.prompts).toEqual([]);
+  expect((await f.port.read()).workflows.planner.activePlanId).toBe("plan-2");
 });
 
-test("an executor's question does not start final review without a reviewable delta", async () => {
+test.each([
+  "Which behavior do you prefer?",
+  "Implemented and committed",
+  "Validated; no commit authorized",
+])("an executor response never launches a final review: %s", async (response) => {
   const f = fixture();
-  const completedDiff = f.port.diff;
-  f.port.diff = async () => ({ head: "abc123", text: "", dirtyFiles: [], untrackedFiles: [] });
   const controller = new WorkflowController(f.port);
-
   await preparedHandoff(controller, f, plan);
-  await controller.finished("child-1", "Which behavior do you prefer?");
+  await controller.finished("child-1", response);
+  await new WorkflowController(f.port).status("planner", "workspace");
   expect(f.launches).toHaveLength(1);
-  f.port.diff = completedDiff;
-  await controller.finished("child-1", "Implemented and committed");
-  expect(f.launches).toHaveLength(2);
-});
-
-test("final review audits an uncommitted local result without requesting a commit", async () => {
-  const f = fixture();
-  f.port.git = async () => ({
-    startHead: "abc123",
-    targetBase: "abc123",
-    branch: "feature",
-    dirty: "",
-  });
-  f.port.diff = async () => ({
-    head: "abc123",
-    text: "diff --git a/feature.ts b/feature.ts",
-    dirtyFiles: ["feature.ts"],
-    untrackedFiles: [],
-  });
-  f.port.commitCount = async () => 0;
-  const controller = new WorkflowController(f.port);
-  await preparedHandoff(controller, f, plan);
-  await controller.finished("child-1", "Validated locally; no commit authorized.");
-  expect(f.launches).toHaveLength(2);
-  await controller.finished("child-2", '{"classification":"SIMPLE"}');
-  await controller.finished("child-3", '{"findings":[]}');
-  const saved = (await f.port.read()).workflows.planner.plans[plan.callId];
-  expect(saved.verification).toBeUndefined();
-  expect(saved.final?.phase).toBe("verification_required");
-  expect(f.prompts.at(-1)?.text).toContain("do not edit or commit");
-  expect(f.prompts.some(({ text }) => text.includes("commit your own changes"))).toBe(false);
+  expect(f.prompts).toHaveLength(1);
+  expect((await f.port.read()).workflows.planner.plans[plan.callId].final).toBeUndefined();
 });
 
 test("unrelated tool approvals never select a workflow plan or start final review", async () => {
@@ -532,253 +502,160 @@ test("unrelated tool approvals never select a workflow plan or start final revie
   expect((await f.port.read()).workflows.planner.activePlanId).toBeUndefined();
 });
 
-test.each([
-  ["SIMPLE", ["audit-economic"]],
-  ["STRUCTURAL", ["audit-deep"]],
-  ["SENSITIVE", ["audit-deep", "audit-security"]],
-] as const)(
-  "final review %s creates only its bounded read-only audit fanout and reserves writing for the manager",
-  async (classification, auditors) => {
+test.each(["classifying", "auditing", "deciding", "correcting", "delta", "committing"] as const)(
+  "persisted automatic final review in %s never resumes on reload, status or late results",
+  async (phase) => {
     const f = fixture();
-
+    await preparedHandoff(new WorkflowController(f.port), f, plan);
+    const state = await f.port.read();
+    state.workflows.planner.plans[plan.callId].final = {
+      phase,
+      managerId: "old-manager",
+      head: "head",
+      diff: "diff",
+      dirtyFiles: [],
+      audits: { "audit-deep": { agentId: "old-auditor" } },
+      deltaId: "old-delta",
+    };
+    for (const id of ["old-manager", "old-auditor", "old-delta"])
+      f.agents.set(id, {
+        id,
+        workspaceId: "workspace",
+        labels: {
+          "paseo.workflow.id": "planner",
+          "paseo.workflow.plan": plan.callId,
+        },
+        pendingPermissions: [],
+      });
+    await f.port.write(state);
     const controller = new WorkflowController(f.port);
-    await preparedHandoff(controller, f, plan);
-    await controller.finished("child-1", "Functional commit verified");
-    expect(f.launches[1]).toMatchObject({
-      launchProfileId: "paseo-workflow-final-review",
-      config: { writePolicy: "read_write" },
+    await controller.stopAutomaticReviews();
+    f.port.turn = async () => ({
+      key: "late",
+      items: [
+        {
+          type: "assistant_message",
+          text: '{"correct":true,"classification":"SENSITIVE","findings":[]}',
+        },
+      ],
     });
-    expect(f.prompts[1].text).toContain("diff --git");
-    await controller.finished("child-2", JSON.stringify({ classification }));
-    expect(f.launches.slice(2).map((input) => input.labels["paseo.workflow.role"])).toEqual(
-      auditors,
-    );
-    expect(
-      f.launches
-        .slice(2)
-        .every((input) => input.config.writePolicy === "read_only" && input.parent === "child-2"),
-    ).toBe(true);
-    await new WorkflowController(f.port).finished("child-2", JSON.stringify({ classification }));
-    expect(f.launches).toHaveLength(2 + auditors.length);
+    for (const id of ["old-manager", "old-auditor", "old-delta"]) {
+      await controller.finished(id, '{"classification":"SENSITIVE","findings":[]}');
+      await controller.turnEnded(id, "late");
+    }
+    await new WorkflowController(f.port).status("planner", "workspace");
+    expect(f.launches).toHaveLength(1);
+    expect(f.prompts).toHaveLength(1);
+    expect(f.decisions).toEqual([plan.permissionRequestId]);
+    expect((await f.port.read()).workflows.planner.plans[plan.callId].final).toMatchObject({
+      phase: "verification_required",
+      reason: "Automatic reviews disabled.",
+    });
   },
 );
 
-test("final review refuses unsafe corrections and treats manager assertions without tool evidence as verification_required", async () => {
-  const f = fixture();
-  f.port.git = async () => ({
-    startHead: "abc123",
-    targetBase: "target",
-    branch: "feature",
-    dirty: "",
-  });
-  f.port.diff = async () => ({
-    head: "functional-commit",
-    text: "functional diff",
-    dirtyFiles: [],
-    untrackedFiles: [],
-  });
-  const controller = new WorkflowController(f.port);
+test.each(["closing", "closed", "running", "outcome_unknown"] as const)(
+  "an old automatic plan review in %s releases its claim without revising or approving",
+  async (phase) => {
+    const f = fixture();
+    const controller = new WorkflowController(f.port);
+    await controller.review(plan, "manual");
+    const state = await f.port.read();
+    state.workflows.planner.plans[plan.callId].review = {
+      ...state.workflows.planner.plans[plan.callId].review!,
+      source: "automatic",
+      phase,
+    };
+    await f.port.write(state);
+    await new WorkflowController(f.port).stopAutomaticReviews();
+    await new WorkflowController(f.port).finished("child-1", "Please implement now");
+    await new WorkflowController(f.port).status("planner", "workspace");
+    expect(f.launches).toHaveLength(1);
+    expect(f.prompts).toHaveLength(1);
+    expect(f.decisions).toEqual([plan.permissionRequestId]);
+    expect(f.claims.at(-1)).toEqual({ context: plan, active: false });
+    expect((await f.port.read()).workflows.planner.plans[plan.callId].review).toMatchObject({
+      source: "automatic",
+      phase: "complete",
+      superseded: true,
+    });
+  },
+);
 
-  await preparedHandoff(controller, f, plan);
-  await controller.finished("child-1", "Done");
-  await controller.finished("child-2", '{"classification":"SIMPLE"}');
-  await controller.finished(
-    "child-3",
-    JSON.stringify({
-      findings: [
-        {
-          summary: "Missing boundary check",
-          files: ["feature.ts"],
-          certain: true,
-          local: true,
-          verifiable: true,
-          externalEffects: false,
-        },
-      ],
-    }),
+test("automatic review calls are rejected before claiming or closing a plan", async () => {
+  const f = fixture();
+  await expect(new WorkflowController(f.port).review(plan, "automatic")).rejects.toThrow(
+    "Automatic reviews disabled",
   );
-  await controller.finished(
-    "child-2",
-    JSON.stringify({
-      correct: true,
-      validationCommands: ["npx vitest run feature.test.ts --bail=1"],
-    }),
-  );
-  expect(f.prompts.at(-1)?.text).toContain("Do not commit");
-  await controller.finished("child-2", '{"validated":true}');
-  const final = (await f.port.read()).workflows.planner.plans["plan-1"].final;
-  expect(final?.phase).toBe("verification_required");
-  expect(final?.reason).toContain("evidence");
-  expect(f.launches).toHaveLength(3);
-  expect(f.prompts.every((prompt) => !prompt.text.startsWith("Create the correction commit"))).toBe(
-    true,
-  );
+  expect(f.launches).toEqual([]);
+  expect(f.prompts).toEqual([]);
+  expect(f.decisions).toEqual([]);
+  expect(f.claims).toEqual([]);
 });
 
-test("uncertain findings never authorize correction", async () => {
+test.each(["review", "handoff"] as const)(
+  "a canceled automatic review without a reviewer permits an explicit %s",
+  async (action) => {
+    const f = fixture();
+    const controller = new WorkflowController(f.port);
+    await controller.planRequested(plan);
+    const state = await f.port.read();
+    state.workflows.planner.plans[plan.callId].review = { source: "automatic", phase: "closing" };
+    await f.port.write(state);
+    await controller.stopAutomaticReviews();
+    const result =
+      action === "review"
+        ? await controller.review(plan, "manual")
+        : await preparedHandoff(controller, f, plan);
+    expect(result).toEqual({ agentId: "child-1" });
+    expect(f.launches).toHaveLength(1);
+    expect(f.decisions).toEqual([plan.permissionRequestId]);
+  },
+);
+
+test("manual replacement revalidates the plan and keeps its identity across a failed launch", async () => {
   const f = fixture();
   const controller = new WorkflowController(f.port);
-
-  await preparedHandoff(controller, f, plan);
-  await controller.finished("child-1", "Done");
-  await controller.finished("child-2", '{"classification":"SIMPLE"}');
-  await controller.finished(
-    "child-3",
-    JSON.stringify({
-      findings: [
-        {
-          summary: "Maybe redesign",
-          files: ["feature.ts"],
-          certain: false,
-          local: true,
-          verifiable: true,
-          externalEffects: false,
-        },
-      ],
-    }),
-  );
-  await controller.finished(
-    "child-2",
-    JSON.stringify({ correct: true, validationCommands: ["test"] }),
-  );
-  expect((await f.port.read()).workflows.planner.plans["plan-1"].final?.phase).toBe(
-    "verification_required",
-  );
-  expect(f.prompts.every((prompt) => !prompt.text.startsWith("Correct only"))).toBe(true);
-});
-
-test.each([
-  "verified",
-  "tool-after-check",
-  "foreign-dirty-file",
-  "untracked-correction",
-  "delta-concurrent-file",
-  "extra-commit",
-  "uncommitted",
-  "uncommitted-concurrent-file",
-])("correction evidence stays bounded (%s)", async (scenario) => {
-  const f = fixture();
-  f.port.git = async () => ({
-    startHead: "abc123",
-    targetBase: "target",
-    branch: "feature",
-    dirty: "",
+  await controller.planRequested(plan);
+  const state = await f.port.read();
+  state.workflows.planner.plans[plan.callId].review = {
+    source: "automatic",
+    phase: "closing",
+    agentId: "old-reviewer",
+    promptSent: true,
+  };
+  f.agents.set("old-reviewer", {
+    id: "old-reviewer",
+    workspaceId: "workspace",
+    pendingPermissions: [],
+    labels: { "paseo.workflow.id": "planner", "paseo.workflow.plan": plan.callId },
   });
-  f.port.diff = async () => ({
-    head: "functional-commit",
-    text: "functional diff",
-    dirtyFiles: [],
-    untrackedFiles: [],
+  await f.port.write(state);
+  await controller.stopAutomaticReviews();
+  const pending = f.agents.get("planner")!.pendingPermissions;
+  f.agents.get("planner")!.pendingPermissions = [];
+  await expect(controller.review(plan, "manual")).rejects.toThrow("no longer pending");
+  expect(f.launches).toEqual([]);
+  f.agents.get("planner")!.pendingPermissions = pending;
+  const create = f.port.create;
+  f.port.create = async () => {
+    throw new Error("Temporary spawn failure");
+  };
+  await expect(controller.review(plan, "manual")).rejects.toThrow("Temporary spawn failure");
+  f.port.create = create;
+  expect(await new WorkflowController(f.port).review(plan, "manual")).toEqual({
+    agentId: "child-1",
   });
-  const controller = new WorkflowController(f.port);
-
-  await preparedHandoff(controller, f, plan);
-  await controller.finished("child-1", "Done");
-  await controller.finished("child-2", '{"classification":"SIMPLE"}');
-  await controller.finished(
-    "child-3",
-    JSON.stringify({
-      findings: [
-        {
-          summary: "Boundary",
-          files: ["feature.ts"],
-          certain: true,
-          local: true,
-          verifiable: true,
-          externalEffects: false,
-        },
-      ],
-    }),
-  );
-  const command = "npx vitest run feature.test.ts --bail=1";
-  await controller.finished(
-    "child-2",
-    JSON.stringify({ correct: true, validationCommands: [command] }),
-  );
-  f.port.diff = async () => ({
-    head: "functional-commit",
-    text: "corrected delta",
-    dirtyFiles: scenario === "foreign-dirty-file" ? ["existing.ts", "feature.ts"] : ["feature.ts"],
-    untrackedFiles: scenario === "untracked-correction" ? ["feature.ts"] : [],
-  });
-  const checks: Parameters<WorkflowController["finished"]>[2] = [
-    {
-      type: "tool_call",
-      callId: "test",
-      name: "shell",
-      status: "completed",
-      error: null,
-      detail: { type: "shell", command, exitCode: 0 },
-    },
-  ];
-  if (scenario === "tool-after-check")
-    checks.push({
-      type: "tool_call",
-      callId: "edit",
-      name: "shell",
-      status: "completed",
-      error: null,
-      detail: { type: "shell", command: "modify-files", exitCode: 0 },
-    });
-  await controller.finished("child-2", "Checks passed", checks);
-  if (
-    scenario === "tool-after-check" ||
-    scenario === "foreign-dirty-file" ||
-    scenario === "untracked-correction"
-  ) {
-    expect((await f.port.read()).workflows.planner.plans["plan-1"].final?.phase).toBe(
-      "verification_required",
-    );
-    expect(f.launches).toHaveLength(3);
-    return;
-  }
-  expect(f.launches.at(-1)).toMatchObject({
-    parent: "child-2",
-    config: { writePolicy: "read_only" },
-    labels: { "paseo.workflow.role": "delta-review" },
-  });
-  if (scenario === "delta-concurrent-file")
-    f.port.diff = async () => ({
-      head: "functional-commit",
-      text: "corrected delta",
-      dirtyFiles: ["feature.ts", "other.ts"],
-      untrackedFiles: [],
-    });
-  await controller.finished("child-4", '{"findings":[]}');
-  if (scenario === "delta-concurrent-file") {
-    expect((await f.port.read()).workflows.planner.plans["plan-1"].final?.phase).toBe(
-      "verification_required",
-    );
-    expect(
-      f.prompts.every((prompt) => !prompt.text.startsWith("Create the correction commit")),
-    ).toBe(true);
-    return;
-  }
-  expect(f.prompts.at(-1)).toMatchObject({ agentId: "child-2" });
-  expect(f.prompts.at(-1)?.text).toMatch(/^Create the correction commit/);
-  await new WorkflowController(f.port).finished("child-4", '{"findings":[]}');
-  expect(f.launches).toHaveLength(4);
-  expect(
-    f.prompts.filter((prompt) => prompt.text.startsWith("Create the correction commit")),
-  ).toHaveLength(1);
-  const remainingFiles = scenario.startsWith("uncommitted") ? ["feature.ts"] : [];
-  if (scenario === "uncommitted-concurrent-file") remainingFiles.push("other.ts");
-  f.port.diff = async () => ({
-    head: scenario.startsWith("uncommitted") ? "functional-commit" : "correction-commit",
-    text: "corrected delta",
-    dirtyFiles: remainingFiles,
-    untrackedFiles: [],
-  });
-  f.port.commitCount = async () => (scenario === "extra-commit" ? 2 : 1);
-  await controller.finished(
-    "child-2",
-    scenario.startsWith("uncommitted") ? "Validated locally; commit not authorized" : "Committed",
-  );
-  expect((await f.port.read()).workflows.planner.plans["plan-1"].final?.phase).toBe(
-    scenario === "extra-commit" || scenario === "uncommitted-concurrent-file"
-      ? "verification_required"
-      : "complete",
-  );
+  expect(f.launches[0].idempotencyKey).toBe("workflow:planner:review:plan-1:manual");
+  expect(f.prompts[0].messageId).toBe("workflow:planner:review:plan-1:manual:prompt");
+  await controller.finished("old-reviewer", "Stale objections");
+  expect(f.prompts).toHaveLength(1);
+  f.port.turn = async (_id, _turnId, _expected, _approved, after) =>
+    after === "workflow:planner:review:plan-1:manual:prompt"
+      ? { key: "manual-result", items: [{ type: "assistant_message", text: "Manual objections" }] }
+      : null;
+  await new WorkflowController(f.port).turnEnded("child-1", "manual-result");
+  expect(f.prompts[1].text).toContain("Manual objections");
 });
 
 test("Router consumes persisted intent and request, persists its recommendation, and launches one planner", async () => {
@@ -955,10 +832,10 @@ test("reconcile recovers the latest canonically approved planner plan missed dur
     },
   });
   expect(recovered.plans["late-plan"]?.context.permissionRequestId).toBeUndefined();
-  expect(recovered.plans["late-plan"]?.final?.phase).toBe("classifying");
+  expect(recovered.plans["late-plan"]?.final).toBeUndefined();
   expect(
     f.launches.filter((launch) => launch.launchProfileId?.endsWith("final-review")),
-  ).toHaveLength(1);
+  ).toHaveLength(0);
 });
 
 test("handoff does not recover closing from a non-workflow denial", async () => {
@@ -1521,7 +1398,7 @@ test("a persisted complete decision never classifies again", async () => {
 });
 
 test.each(["paseo-workflow-executor-standard", "paseo-workflow-router", "paseo-workflow-planner"])(
-  "turnEnded starts final review for executor profile %s",
+  "turnEnded never starts final review for executor profile %s",
   async (selectedProfileId) => {
     const f = fixture();
 
@@ -1534,14 +1411,9 @@ test.each(["paseo-workflow-executor-standard", "paseo-workflow-router", "paseo-w
           }
         : null;
     await new WorkflowController(f.port).turnEnded("child-1", "turn-1");
-    expect(f.launches.at(-1)).toMatchObject({
-      launchProfileId: "paseo-workflow-final-review",
-      labels: {
-        "paseo.workflow.id": "planner",
-        "paseo.workflow.plan": "plan-1",
-        "paseo.workflow.role": "final-review",
-      },
-    });
+    expect(f.launches).toHaveLength(1);
+    expect(f.prompts).toHaveLength(1);
+    expect((await f.port.read()).workflows.planner.plans[plan.callId].final).toBeUndefined();
   },
 );
 
@@ -1564,8 +1436,8 @@ test("review closes the exact plan, launches one read-only child, and survives d
   const f = fixture();
   const controller = new WorkflowController(f.port);
   const results = await Promise.all([
-    controller.review(plan, "automatic"),
-    controller.review(plan, "automatic"),
+    controller.review(plan, "manual"),
+    controller.review(plan, "manual"),
   ]);
   expect(results).toEqual([{ agentId: "child-1" }, { agentId: "child-1" }]);
   expect(f.launches).toHaveLength(1);
@@ -1584,16 +1456,16 @@ test("review closes the exact plan, launches one read-only child, and survives d
   expect(f.prompts[0].text).toContain("Build the requested feature");
   expect(f.prompts[0].text).toContain("Exact (c) plan");
   expect(f.decisions).toEqual(["permission-1"]);
-  expect(await new WorkflowController(f.port).review(plan, "automatic")).toEqual({
+  expect(await new WorkflowController(f.port).review(plan, "manual")).toEqual({
     agentId: "child-1",
   });
   expect(f.launches).toHaveLength(1);
 });
 
-test("review objections request a new append-only plan and allow only one further manual review", async () => {
+test("manual review objections request a new plan without starting another review", async () => {
   const f = fixture();
   const controller = new WorkflowController(f.port);
-  await controller.review(plan, "automatic");
+  await controller.review(plan, "manual");
   await controller.finished("child-1", "Missing rollback validation");
   expect(f.prompts[1]).toMatchObject({ agentId: "planner" });
   expect(f.prompts[1].text).toContain("Missing rollback validation");
@@ -1606,36 +1478,17 @@ test("review objections request a new append-only plan and allow only one furthe
   };
   f.agents.get("planner")!.pendingPermissions = [
     {
-      id: "permission-2",
+      id: nextPlan.permissionRequestId,
       kind: "plan",
-      sourcePlanCallId: "plan-2",
-      input: { plan: "Revised plan" },
+      sourcePlanCallId: nextPlan.callId,
+      input: { plan: nextPlan.text },
     },
   ];
-  await expect(controller.review(nextPlan, "automatic")).rejects.toThrow("already been used");
-  f.port.timeline = async () => [
-    { type: "user_message", text: "Build the requested feature" },
-    {
-      type: "tool_call",
-      callId: "plan-2",
-      name: "Plan",
-      status: "running",
-      error: null,
-      detail: { type: "plan", text: "Revised plan" },
-    },
-  ];
-  await controller.review(nextPlan, "manual");
-  await controller.finished("child-2", "Looks good");
-  const lastPlan = { ...plan, callId: "plan-3", permissionRequestId: "permission-3" };
-  f.agents.get("planner")!.pendingPermissions = [
-    { id: "permission-3", kind: "plan", sourcePlanCallId: "plan-3", input: { plan: plan.text } },
-  ];
-  await expect(controller.review(lastPlan, "manual")).rejects.toThrow("already been used");
-  expect(f.launches).toHaveLength(2);
-  const saved = await f.port.read();
-  expect(saved.workflows.planner.plans["plan-1"].context.text).toBe("Exact (c) plan");
+  await controller.planRequested(nextPlan);
+  expect(f.launches).toHaveLength(1);
+  await expect(controller.review(nextPlan, "manual")).rejects.toThrow("already been used");
   await new WorkflowController(f.port).finished("child-1", "Late duplicate");
-  expect(f.prompts).toHaveLength(4);
+  expect(f.prompts).toHaveLength(2);
 });
 
 test("ends only the source session after a confirmed handoff and never on a failed launch", async () => {

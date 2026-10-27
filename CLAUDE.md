@@ -114,7 +114,8 @@ See [docs/development.md](docs/development.md) for full setup, build sync requir
 
 ## Local delivery branch
 
-Use `main` as the default PR target and the source of local Mac builds in `sylvaindiv/paseo`.
+New PRs for this project target `sylvaindiv/paseo:main`. Any operation on `getpaseo/paseo`
+requires an explicit user request. Use `main` as the source of local Mac builds.
 Keep agent work on its own branches. A correction ends with validated local code by default;
 it does not require a commit, publication, or rebuild. Publish or deliver only when the request
 or approved plan includes it, and integrate into `main` within those authorizations before local delivery.

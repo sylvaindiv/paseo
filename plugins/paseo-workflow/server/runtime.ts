@@ -195,24 +195,6 @@ export function runtime(
         dirty,
       };
     },
-    diff: async (cwd, base) => {
-      const [head, text, dirty] = await Promise.all([
-        git(cwd, ["rev-parse", "HEAD"]),
-        git(cwd, ["diff", "--no-ext-diff", base, "--"]),
-        git(cwd, ["status", "--porcelain=v1", "-z"]),
-      ]);
-      const entries = dirty.split("\0").filter(Boolean);
-      return {
-        head: head.trim(),
-        text,
-        dirtyFiles: entries.map((entry) => entry.slice(3)),
-        untrackedFiles: entries
-          .filter((entry) => entry.startsWith("?? "))
-          .map((entry) => entry.slice(3)),
-      };
-    },
-    commitCount: async (cwd, base) =>
-      Number((await git(cwd, ["rev-list", "--count", `${base}..HEAD`])).trim()),
     create: async ({ workspaceId, ...input }) => {
       const agent = await paseo.workspaces.ref(workspaceId).agents.create(input);
       const id = agent.id;
@@ -253,7 +235,11 @@ export function runtime(
       revision = (await settings.read()).revision;
     },
   };
-  return new WorkflowController(port);
+  const controller = new WorkflowController(port);
+  void controller.stopAutomaticReviews().catch((error) => {
+    console.error("[paseo-workflow] Failed to stop previous automatic reviews", error);
+  });
+  return controller;
 }
 
 export async function prepareAgent(
