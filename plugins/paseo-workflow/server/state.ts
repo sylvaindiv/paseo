@@ -80,6 +80,7 @@ export const workflowSettings = defineSettings({
                   agentId: z.string().optional(),
                   promptSent: z.boolean().optional(),
                   superseded: z.boolean().optional(),
+                  replacesAutomatic: z.boolean().optional(),
                 })
                 .optional(),
               handoff: z

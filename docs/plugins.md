@@ -83,34 +83,16 @@ an uncertain prompt receipt blocks automatic continuation. Older hosts do not ex
 The exact captured proposal is revalidated before approval. The host's private decision record
 survives provider-history refresh and daemon restart; see [plan persistence](data-model.md#plan-persistence).
 
+Plan reviews run only after an explicit review action. The plugin never starts a plan review,
+final audit, correction or delta review automatically. Reload and status reads stop any unfinished
+automatic operations recorded by older versions and release their plan review claims without
+approving or executing a plan. Late results from those operations cannot revise a plan or start
+another agent. Manual reviews and reviews requested through skills remain available.
+
 Lifecycle hooks are best-effort notifications, not durable delivery. An uncertain handoff prompt
-is not replayed; reopen its existing executor to inspect it. Status reconciles
-approved implementation, handoff and review/audit operations against the expected prompt and the
-host's completed-turn evidence.
-Stored closed agents can supply that evidence after history hydration. Native turn IDs or the
-host's [bounded completion evidence](data-model.md#plan-persistence) must match surviving history;
-legacy rows without either cannot continue. Loading a snapshot alone never proves a completed implementation.
-Only that turn's canonical response and tool results count; previous turns never authorize a
-correction. Reloading the plugin or repeating status must not create another child or resend an
-accepted prompt. `outcome_unknown` preserves an operation whose delivery or permission closure
-cannot be established; inspect the existing agent before retrying. A timeout is not proof that
-the operation failed before acceptance.
-
-Audits compare against the merge base of the remote default ref (`origin/HEAD`); a missing target
-requires verification instead of guessing a branch. Reviewable changes since the separate launch
-HEAD can be committed or uncommitted. No tracked delta exposes `verification_required` without
-requesting a commit. Uncommitted or pre-existing changes remain subject to manual attribution;
-auditing them does not authorize automatic corrections or a commit.
-
-Automatic corrections require a clean initial workspace and clean functional-commit boundary.
-The host rechecks the exact audited HEAD, diff and clean status before requesting any correction.
-Only the manager can write. Its final tool calls must show successful targeted checks; the host
-then checks the unchanged HEAD and agreed-file diff before one read-only delta review. Untracked
-files, later tools, concurrent changes or missing evidence produce `verification_required`, not
-an automatic second commit. The plugin never runs validation commands outside the manager's
-normal agent permissions. An agent's classification, green local checks or an accepted RPC do
-not prove a remote write, delivery or deployment. Report external results only with evidence
-from the system that owns them.
+is not replayed; reopen its existing executor to inspect it. Status reconciles handoffs and explicit
+plan reviews against the expected prompt and the host's completed-turn evidence. A timeout is not
+proof that an operation failed before acceptance.
 
 Global Mac capture requests also use this plugin for routing and idempotent creation.
 See [Mac capture requests](desktop-capture.md) for the native helper and control boundary.

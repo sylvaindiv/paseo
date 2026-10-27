@@ -150,11 +150,15 @@ test("picker hides Workflow profiles from rows, direct selection, and the Tab cy
   ]);
   act(() => result.current?.applyProfile("workflow-planner"));
   expect(applyProfile).not.toHaveBeenCalled();
+  act(() => result.current?.applyProfile("paseo-workflow-executor-standard"));
+  expect(applyProfile).not.toHaveBeenCalled();
+  act(() => result.current?.applyNextProfile());
   act(() => result.current?.applyNextProfile());
   act(() => result.current?.applyNextProfile());
   expect(applyProfile.mock.calls.map(([profile]) => profile.launchProfileId)).toEqual([
     "ordinary-profile",
     "second-profile",
+    "lowercase-workflow",
   ]);
 });
 

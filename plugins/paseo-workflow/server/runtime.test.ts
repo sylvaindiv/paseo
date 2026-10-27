@@ -250,21 +250,21 @@ test("transcript history requests projected pages while timeline and turn defaul
 });
 
 test.each([
-  ["assistant", true],
-  ["tool", true],
-  ["absent", false],
-  ["denied", false],
-  ["wrong-call", false],
-  ["legacy", false],
-  ["equal-seq", false],
-  ["wrong-turn", false],
-  ["no-output", false],
-  ["blank-output", false],
-  ["plan-only", false],
-  ["running-tool", false],
-  ["synthetic-pending", false],
-  ["synthetic-unknown", false],
-] as const)("canonical same-turn execution proof: %s", async (proof, accepted) => {
+  "assistant",
+  "tool",
+  "absent",
+  "denied",
+  "wrong-call",
+  "legacy",
+  "equal-seq",
+  "wrong-turn",
+  "no-output",
+  "blank-output",
+  "plan-only",
+  "running-tool",
+  "synthetic-pending",
+  "synthetic-unknown",
+] as const)("execution completion never starts an automatic review: %s", async (proof) => {
   const plan: AgentTimelineItem = {
     type: "tool_call",
     callId: proof === "wrong-call" ? "other-plan" : "plan",
@@ -373,10 +373,8 @@ test.each([
     );
   await createRuntime().status("planner", "workspace");
   await createRuntime().status("planner", "workspace");
-  expect(state.workflows.planner!.plans.plan!.final?.phase).toBe(
-    accepted ? "classifying" : undefined,
-  );
-  expect(prompts).toHaveLength(accepted ? 1 : 0);
+  expect(state.workflows.planner!.plans.plan!.final).toBeUndefined();
+  expect(prompts).toEqual([]);
 });
 
 test.each(["persistence", "runtimeInfo"])(

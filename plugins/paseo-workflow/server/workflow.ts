@@ -1,12 +1,6 @@
 import { profileId, type Role } from "../shared/profiles";
 import { decisionJson, routerDecision } from "../shared/decisions";
-import {
-  classification,
-  auditorsFor,
-  auditDecision,
-  correctionDecision,
-  type FinalReview,
-} from "../shared/final-review";
+import type { FinalReview } from "../shared/final-review";
 import { type ExecutionDecision } from "./execution-routing";
 import type {
   AgentPermissionRequest,
@@ -58,6 +52,7 @@ interface Review {
   agentId?: string;
   promptSent?: boolean;
   superseded?: boolean;
+  replacesAutomatic?: boolean;
 }
 interface Handoff {
   // COMPAT(workflow-executor-selection): added in v0.8.0, remove after 2027-09-13.
@@ -138,11 +133,6 @@ export interface WorkflowPort {
     afterMessageId?: string,
   ): Promise<{ key: string; items: AgentTimelineItem[] } | null>;
   git(cwd: string): Promise<Workflow["git"]>;
-  diff(
-    cwd: string,
-    base: string,
-  ): Promise<{ head: string; text: string; dirtyFiles: string[]; untrackedFiles: string[] }>;
-  commitCount(cwd: string, base: string): Promise<number>;
   create(input: WorkflowLaunch): Promise<string>;
   send(agentId: string, text: string, messageId: string): Promise<void>;
   revise(context: PlanContext, text: string, messageId: string): Promise<boolean>;
@@ -361,31 +351,25 @@ function reviewerPrompt(workflow: Workflow | undefined, agentId: string) {
   const plan = Object.values(workflow.plans).find(
     (entry) => entry.review?.agentId === agentId && entry.review.phase === "running",
   );
-  return plan ? `workflow:${workflow.id}:review:${plan.context.callId}:prompt` : undefined;
-}
-
-function finalCandidates(final: FinalReview): string[] {
-  if (final.phase === "auditing")
-    return Object.values(final.audits)
-      .filter((audit) => !audit.result)
-      .map((audit) => audit.agentId);
-  if (final.phase === "delta" && final.deltaId) return [final.deltaId];
-  return ["classifying", "deciding", "correcting", "committing"].includes(final.phase)
-    ? [final.managerId]
-    : [];
+  return plan ? `${reviewKey(workflow, plan)}:prompt` : undefined;
 }
 
 function planCandidates(plan: Workflow["plans"][string]): string[] {
-  const candidates: string[] = [];
-  if (
-    (plan.handoff?.phase === "running" || plan.handoff?.phase === "outcome_unknown") &&
-    plan.handoff.agentId &&
-    !plan.final
-  )
-    candidates.push(plan.handoff.agentId);
-  if (plan.review?.phase === "running" && plan.review.agentId) candidates.push(plan.review.agentId);
-  if (plan.final) candidates.push(...finalCandidates(plan.final));
-  return candidates;
+  return plan.review?.source === "manual" && plan.review.phase === "running" && plan.review.agentId
+    ? [plan.review.agentId]
+    : [];
+}
+
+function stoppedAutomaticReview(review: Review | undefined) {
+  return review?.source === "automatic" && review.superseded === true;
+}
+
+function currentReview(review: Review | undefined) {
+  return stoppedAutomaticReview(review) ? undefined : review;
+}
+
+function reviewKey(workflow: Workflow, plan: Workflow["plans"][string]) {
+  return `workflow:${workflow.id}:review:${plan.context.callId}${plan.review?.replacesAutomatic ? ":manual" : ""}`;
 }
 
 export class WorkflowController {
@@ -394,9 +378,35 @@ export class WorkflowController {
 
   dispose() {}
 
-  async planRequested(context: PlanContext, automaticReview = true) {
-    const automatic = await this.serial(async () => {
-      const agent = automaticReview
+  stopAutomaticReviews() {
+    return this.serial(async () => {
+      const state = await this.port.read();
+      for (const workflow of Object.values(state.workflows))
+        await this.stopWorkflowReviews(state, workflow);
+    });
+  }
+
+  private async stopWorkflowReviews(state: WorkflowState, workflow: Workflow) {
+    for (const plan of Object.values(workflow.plans)) {
+      const review = plan.review;
+      if (review?.source === "automatic" && review.phase !== "complete") {
+        review.phase = "complete";
+        review.superseded = true;
+        await this.port.write(state);
+      }
+      if (review?.source === "automatic" && review.superseded)
+        await this.port.claimReview(actionContext(plan.context), false);
+      if (plan.final && !["complete", "verification_required"].includes(plan.final.phase)) {
+        plan.final.phase = "verification_required";
+        plan.final.reason = "Automatic reviews disabled.";
+        await this.port.write(state);
+      }
+    }
+  }
+
+  async planRequested(context: PlanContext, requirePending = true) {
+    return this.serial(async () => {
+      const agent = requirePending
         ? await this.pending(context)
         : await this.port.agent(context.agentId);
       const state = await this.port.read();
@@ -406,12 +416,7 @@ export class WorkflowController {
         throw new Error("Plan calls are append-only. Submit a new call ID.");
       workflow.plans[context.callId] ??= { context };
       await this.port.write(state);
-      return (
-        automaticReview &&
-        !Object.values(workflow.plans).some((plan) => plan.review?.source === "automatic")
-      );
     });
-    if (automatic) await this.review(context, "automatic");
   }
 
   approved(agentId: string, requestId: string) {
@@ -531,6 +536,7 @@ export class WorkflowController {
       const state = await this.port.read();
       const agent = await this.port.agent(context.agentId);
       const workflow = await this.workflow(state, agent);
+      await this.stopWorkflowReviews(state, workflow);
       const latestPlan = await this.reconcilePlanTimeline(state, workflow);
       const previous = workflow.plans[context.callId];
       if (previous && !samePlan(previous.context, context))
@@ -542,7 +548,7 @@ export class WorkflowController {
       await this.refreshPlannerTranscript(state, workflow);
       const plan = previous ?? (workflow.plans[context.callId] = { context });
       if (plan.handoff?.phase !== "closed") await this.available(context);
-      if (plan.review || plan.approved)
+      if (currentReview(plan.review) || plan.approved)
         throw new Error("This plan is already reviewed or approved.");
       const profile = await this.handoffProfile(plan.handoff, selectedProfileId);
       const config = profile ? await this.handoffConfig(profile, workflow.workspaceId) : undefined;
@@ -658,11 +664,11 @@ export class WorkflowController {
     await this.port.endHandoffSource(plan.context.agentId);
     return executorId;
   }
-  finished(agentId: string, text: string, timeline: readonly AgentTimelineItem[] = []) {
+  finished(agentId: string, text: string) {
     return this.serial(async () => {
       const agent = await this.port.agent(agentId);
       const state = await this.port.read();
-      return this.finishNow(state, agent, text, timeline);
+      return this.finishNow(state, agent, text);
     });
   }
 
@@ -670,7 +676,6 @@ export class WorkflowController {
     state: WorkflowState,
     agent: WorkflowAgent,
     text: string,
-    timeline: readonly AgentTimelineItem[],
   ): Promise<boolean> {
     const agentId = agent.id;
     if (
@@ -680,20 +685,15 @@ export class WorkflowController {
       return this.routerFinished(agent, state, text);
     const workflow = state.workflows[agent.labels["paseo.workflow.id"] ?? agent.id];
     if (!workflow) return false;
+    await this.stopWorkflowReviews(state, workflow);
     const plan = workflow.plans[agent.labels["paseo.workflow.plan"] ?? workflow.activePlanId ?? ""];
     if (!plan) return false;
-    if (
-      (plan.handoff?.agentId === agentId &&
-        (plan.handoff.phase === "running" || plan.handoff.phase === "outcome_unknown")) ||
-      (workflow.plannerId === agentId && plan.approved)
-    )
-      return this.startFinal(state, workflow, plan);
-    if (plan.review?.agentId === agentId) {
+    if (plan.review?.source === "manual" && plan.review.agentId === agentId) {
       if (plan.review.phase !== "running") return false;
       await this.reviewFinished(state, workflow, plan, text);
       return true;
     }
-    return this.finalFinished(state, workflow, plan, agentId, text, timeline);
+    return false;
   }
 
   turnEnded(agentId: string, turnId: string | null) {
@@ -713,7 +713,7 @@ export class WorkflowController {
     const turn = await this.port.turn(
       agent.id,
       turnId,
-      this.expectedPrompt(workflow, agent.id),
+      undefined,
       implementationPlan?.approved ? implementationPlan.context.callId : undefined,
       reviewSource ?? handoffPrompt(workflow, agent.id),
     );
@@ -730,41 +730,12 @@ export class WorkflowController {
       !text.trim().startsWith("```")
     )
       return;
-    if (!(await this.finishNow(state, agent, text, turn.items))) return;
+    if (!(await this.finishNow(state, agent, text))) return;
     const current = state.workflows[agent.labels["paseo.workflow.id"] ?? agent.id];
     if (current) {
       (current.handledTurns ??= {})[agent.id] = turn.key;
       await this.port.write(state);
     }
-  }
-
-  private expectedPrompt(workflow: Workflow | undefined, agentId: string): string | undefined {
-    if (!workflow) return undefined;
-    for (const plan of Object.values(workflow.plans)) {
-      const prefix = `workflow:${workflow.id}`;
-      const callId = plan.context.callId;
-      if (plan.review?.agentId === agentId) return undefined;
-      const final = plan.final;
-      if (!final) continue;
-      if (final.deltaId === agentId) return `${prefix}:${callId}:delta:prompt`;
-      for (const [role, audit] of Object.entries(final.audits)) {
-        if (audit.agentId === agentId) return `${prefix}:${callId}:${role}:prompt`;
-      }
-      if (final.managerId !== agentId) continue;
-      switch (final.phase) {
-        case "classifying":
-          return `${prefix}:final:${callId}:classify`;
-        case "deciding":
-          return `${prefix}:${callId}:correction-decision`;
-        case "correcting":
-          return `${prefix}:${callId}:correct`;
-        case "committing":
-          return `${prefix}:${callId}:correction-commit`;
-        default:
-          return undefined;
-      }
-    }
-    return undefined;
   }
 
   private async reconcilePlanTimeline(state: WorkflowState, workflow: Workflow) {
@@ -801,6 +772,7 @@ export class WorkflowController {
   }
 
   private async reconcile(state: WorkflowState, workflow: Workflow) {
+    await this.stopWorkflowReviews(state, workflow);
     // One bounded pass over existing operations, never replay arbitrary agent history.
     await this.reconcilePlanTimeline(state, workflow);
     const candidates = new Set<string>();
@@ -810,8 +782,6 @@ export class WorkflowController {
         profileId("router")
     )
       candidates.add(workflow.routerId ?? workflow.plannerId);
-    const activePlan = workflow.plans[workflow.activePlanId ?? ""];
-    if (activePlan?.approved && !activePlan.final) candidates.add(workflow.plannerId);
     for (const plan of Object.values(workflow.plans)) {
       await this.resumePlan(state, workflow, plan);
       for (const id of planCandidates(plan)) candidates.add(id);
@@ -832,49 +802,6 @@ export class WorkflowController {
     }
     if (plan.review?.phase === "complete")
       await this.port.claimReview(actionContext(plan.context), false);
-  }
-
-  private async finalFinished(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-    agentId: string,
-    text: string,
-    timeline: readonly AgentTimelineItem[],
-  ): Promise<boolean> {
-    const final = plan.final;
-    if (!final) return false;
-    if (!workflow.git.targetBase) {
-      final.phase = "verification_required";
-      final.reason =
-        "The audited target base is unavailable. Start a new workflow with an explicit remote default reference.";
-      await this.port.write(state);
-      return true;
-    }
-    if (final.phase === "auditing")
-      return this.auditFinished(state, workflow, plan, agentId, text, final);
-    if (final.phase === "delta" && final.deltaId === agentId) {
-      await this.deltaFinished(state, workflow, plan, text, final);
-      return true;
-    }
-    if (final.managerId !== agentId) return false;
-    switch (final.phase) {
-      case "classifying":
-        await this.classifyFinal(state, workflow, plan, agentId, text);
-        break;
-      case "deciding":
-        await this.decideCorrection(state, workflow, plan, agentId, text, final);
-        break;
-      case "correcting":
-        await this.correctionFinished(state, workflow, plan, agentId, final, timeline);
-        break;
-      case "committing":
-        await this.commitFinished(state, workflow, final);
-        break;
-      default:
-        return false;
-    }
-    return true;
   }
 
   private async routerFinished(agent: WorkflowAgent, state: WorkflowState, text: string) {
@@ -909,340 +836,6 @@ export class WorkflowController {
     workflow.routed = true;
     await this.port.write(state);
     return true;
-  }
-
-  private async startFinal(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-  ) {
-    if (plan.final) return false;
-    const workspace = await this.port.workspace(workflow.workspaceId);
-    // COMPAT(workflow-start-head): added in v0.8.0, remove after 2027-09-13.
-    const startHead = workflow.git.startHead ?? workflow.git.base;
-    const verify = async (reason: string) => {
-      plan.verification = reason;
-      await this.port.write(state);
-      return true;
-    };
-    if (!startHead || !workflow.git.targetBase)
-      return verify(
-        "The target base cannot be resolved. Configure refs/remotes/origin/HEAD and start a new workflow; no audit or correction has run.",
-      );
-    const snapshot = await this.port.diff(workspace.cwd, workflow.git.targetBase);
-    const progress = await this.port.diff(workspace.cwd, startHead);
-    if (!progress.text.trim())
-      return verify(
-        "No reviewable tracked delta was confirmed after workflow start. Report the local result and validation evidence for manual verification; do not create a commit to satisfy the workflow.",
-      );
-    const manager = await this.profile("final-review");
-    await this.refreshPlannerTranscript(state, workflow);
-    const managerId = await this.port.create({
-      workspaceId: workflow.workspaceId,
-      launchProfileId: manager.id,
-      idempotencyKey: `workflow:${workflow.id}:final:${plan.context.callId}`,
-      config: profileConfig(manager, false),
-      labels: {
-        "paseo.workflow.id": workflow.id,
-        "paseo.workflow.plan": plan.context.callId,
-        "paseo.workflow.role": "final-review",
-      },
-    });
-    await this.port.send(
-      managerId,
-      `Compare intention, request, plan, base and diff. The approved plan and explicit user authorization take precedence over generic workflow instructions; review grants no additional authorization to edit or commit. A validated uncommitted local result is valid when no commit was authorized. Do not edit, commit or delegate yet. Classify SIMPLE (local change), STRUCTURAL (architecture/contracts), or SENSITIVE (security, permissions, secrets, payments or external effects). Return only JSON {"classification":"SIMPLE|STRUCTURAL|SENSITIVE"}.\n${briefing(workflow, plan.context.text)}\nReviewed HEAD: ${snapshot.head}\nDiff (may include uncommitted changes):\n${snapshot.text}`,
-      `workflow:${workflow.id}:final:${plan.context.callId}:classify`,
-    );
-    plan.final = {
-      phase: "classifying",
-      managerId,
-      head: snapshot.head,
-      diff: snapshot.text,
-      dirtyFiles: snapshot.dirtyFiles,
-      ambiguousWorkingTree: Boolean(
-        workflow.git.dirty.trim() || snapshot.dirtyFiles.length || snapshot.untrackedFiles.length,
-      ),
-      audits: {},
-    };
-    delete plan.verification;
-    await this.port.write(state);
-    return true;
-  }
-
-  private async classifyFinal(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-    agentId: string,
-    text: string,
-  ) {
-    const final = plan.final!;
-    const parsed = decisionJson(text);
-    const level = classification.parse(
-      typeof parsed === "object" && parsed !== null && "classification" in parsed
-        ? parsed.classification
-        : undefined,
-    );
-    const profiles = await Promise.all(auditorsFor(level).map((role) => this.profile(role)));
-    for (const profile of profiles) {
-      const role = profile.id.slice("paseo-workflow-".length);
-      const id = await this.port.create({
-        workspaceId: workflow.workspaceId,
-        parent: agentId,
-        launchProfileId: profile.id,
-        idempotencyKey: `workflow:${workflow.id}:${plan.context.callId}:${role}`,
-        config: profileConfig(profile, true),
-        labels: {
-          "paseo.workflow.id": workflow.id,
-          "paseo.workflow.plan": plan.context.callId,
-          "paseo.workflow.role": role,
-        },
-      });
-      await this.port.send(
-        id,
-        `Audit ${role}. Read only; never edit, execute mutations, commit or delegate. Compare intention/request/plan/base/diff. Return only JSON {"findings":[{"summary":"...","files":["relative/path"],"certain":true,"local":true,"verifiable":true,"externalEffects":false}]}. Do not present assumptions as certain findings.\n${briefing(workflow, plan.context.text)}\nDiff:\n${final.diff}`,
-        `workflow:${workflow.id}:${plan.context.callId}:${role}:prompt`,
-      );
-      final.audits[role] = { agentId: id };
-    }
-    final.classification = level;
-    final.phase = "auditing";
-    await this.port.write(state);
-    return;
-  }
-
-  private async auditFinished(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-    agentId: string,
-    text: string,
-    final: FinalReview,
-  ) {
-    const audit = Object.values(final.audits).find((entry) => entry.agentId === agentId);
-    if (!audit || audit.result) return false;
-    audit.result = auditDecision.parse(decisionJson(text));
-    if (Object.values(final.audits).every((entry) => entry.result)) {
-      const findings = Object.values(final.audits).flatMap((entry) => entry.result!.findings);
-      if (findings.length === 0) {
-        const workspace = await this.port.workspace(workflow.workspaceId);
-        const current = await this.port.diff(workspace.cwd, workflow.git.targetBase!);
-        const ambiguous =
-          final.ambiguousWorkingTree ||
-          workflow.git.dirty.trim() ||
-          current.dirtyFiles.length ||
-          current.untrackedFiles.length ||
-          current.head !== final.head ||
-          current.text !== final.diff;
-        final.phase = ambiguous ? "verification_required" : "complete";
-        if (ambiguous)
-          final.reason =
-            "The working tree cannot be attributed completely to this workflow (pre-existing changes, untracked files or a changed audited diff). Review it manually.";
-        await this.port.send(
-          final.managerId,
-          ambiguous
-            ? `Verification required: ${final.reason} Report this limit; do not edit or commit.`
-            : "The audits found no defects. Report the review outcome. Do not edit or create another commit.",
-          `workflow:${workflow.id}:${plan.context.callId}:final-report`,
-        );
-      } else {
-        final.phase = "deciding";
-        await this.port.send(
-          final.managerId,
-          `Evaluate these findings. Do not edit or commit yet. Return only JSON {"correct":true|false,"validationCommands":["exact targeted command"]}. Return correct:false if correction is outside the approved plan or explicit user authorization. Authorize correction only for certain, local, verifiable defects with no external effect; all other findings need user direction. Never modify pre-existing dirty files.\n${JSON.stringify({ findings, protectedFiles: final.dirtyFiles })}`,
-          `workflow:${workflow.id}:${plan.context.callId}:correction-decision`,
-        );
-      }
-    }
-    await this.port.write(state);
-    return true;
-  }
-
-  private async correctionBoundaryUnchanged(workflow: Workflow, final: FinalReview) {
-    if (!workflow.git.targetBase) return false;
-    const workspace = await this.port.workspace(workflow.workspaceId);
-    const current = await this.port.diff(workspace.cwd, workflow.git.targetBase);
-    return (
-      current.head === final.head &&
-      current.text === final.diff &&
-      current.dirtyFiles.length === 0 &&
-      current.untrackedFiles.length === 0
-    );
-  }
-
-  private async decideCorrection(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-    agentId: string,
-    text: string,
-    final: FinalReview,
-  ) {
-    const decision = correctionDecision.parse(decisionJson(text));
-    const findings = Object.values(final.audits).flatMap((entry) => entry.result!.findings);
-    const safe = findings.every(
-      (finding) =>
-        finding.certain &&
-        finding.local &&
-        finding.verifiable &&
-        !finding.externalEffects &&
-        finding.files.every((file) => !final.dirtyFiles.includes(file)),
-    );
-    if (
-      !decision.correct ||
-      !safe ||
-      decision.validationCommands.length === 0 ||
-      final.dirtyFiles.length > 0 ||
-      workflow.git.dirty.trim() ||
-      !(await this.correctionBoundaryUnchanged(workflow, final))
-    ) {
-      final.phase = "verification_required";
-      final.reason =
-        "The findings or current HEAD/diff/status do not match the audited correction boundary. Review them manually; no correction was started.";
-    } else {
-      final.validationCommands = decision.validationCommands;
-      final.phase = "correcting";
-      await this.port.send(
-        agentId,
-        `Correct only the agreed certain/local/verifiable defects. You are the only writer. Preserve all pre-existing dirty files. Do not commit, delegate, push, merge, deploy or cause external effects. Run these targeted validations through your normal agent tools and permissions, then report. Do not run a full suite.\n${JSON.stringify({ findings, validationCommands: decision.validationCommands, protectedFiles: final.dirtyFiles })}`,
-        `workflow:${workflow.id}:${plan.context.callId}:correct`,
-      );
-    }
-    await this.port.write(state);
-    return;
-  }
-
-  private async correctionFinished(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-    agentId: string,
-    final: FinalReview,
-    timeline: readonly AgentTimelineItem[],
-  ) {
-    // Any later tool can invalidate a successful check. Fail closed instead of interpreting commands.
-    const checks = timeline
-      .filter((item) => item.type === "tool_call")
-      .slice(-(final.validationCommands?.length ?? 0));
-    const verified = final.validationCommands?.every((command) =>
-      checks.some(
-        (item) =>
-          item.status === "completed" &&
-          !item.error &&
-          item.detail.type === "shell" &&
-          item.detail.command === command &&
-          item.detail.exitCode === 0,
-      ),
-    );
-    const allowedFiles = new Set(
-      Object.values(final.audits).flatMap((audit) =>
-        audit.result!.findings.flatMap((finding) => finding.files),
-      ),
-    );
-    const workspace = await this.port.workspace(workflow.workspaceId);
-    const snapshot = await this.port.diff(workspace.cwd, final.head);
-    if (
-      !verified ||
-      snapshot.head !== final.head ||
-      !snapshot.text.trim() ||
-      snapshot.untrackedFiles.length > 0 ||
-      snapshot.dirtyFiles.some((file) => !allowedFiles.has(file))
-    ) {
-      final.phase = "verification_required";
-      final.reason =
-        "Successful final targeted tool evidence and a delta confined to the agreed files are required. No automatic second commit.";
-    } else {
-      final.phase = "delta";
-      final.correctionDiff = snapshot.text;
-      const auditor = await this.profile(
-        final.classification === "SIMPLE" ? "audit-economic" : "audit-deep",
-      );
-      const deltaId = await this.port.create({
-        workspaceId: workflow.workspaceId,
-        parent: agentId,
-        launchProfileId: auditor.id,
-        idempotencyKey: `workflow:${workflow.id}:${plan.context.callId}:delta`,
-        config: profileConfig(auditor, true),
-        labels: {
-          "paseo.workflow.id": workflow.id,
-          "paseo.workflow.plan": plan.context.callId,
-          "paseo.workflow.role": "delta-review",
-        },
-      });
-      await this.port.send(
-        deltaId,
-        `Read-only review of the corrected delta, once. Never edit or commit. Return the same findings JSON as an audit.\n${snapshot.text}`,
-        `workflow:${workflow.id}:${plan.context.callId}:delta:prompt`,
-      );
-      final.deltaId = deltaId;
-    }
-    await this.port.write(state);
-    return;
-  }
-
-  private async deltaFinished(
-    state: WorkflowState,
-    workflow: Workflow,
-    plan: Workflow["plans"][string],
-    text: string,
-    final: FinalReview,
-  ) {
-    const result = auditDecision.parse(decisionJson(text));
-    const workspace = await this.port.workspace(workflow.workspaceId);
-    const snapshot = await this.port.diff(workspace.cwd, final.head);
-    const allowedFiles = new Set(
-      Object.values(final.audits).flatMap((audit) =>
-        audit.result!.findings.flatMap((finding) => finding.files),
-      ),
-    );
-    if (
-      result.findings.length > 0 ||
-      snapshot.head !== final.head ||
-      snapshot.text !== final.correctionDiff ||
-      snapshot.untrackedFiles.length > 0 ||
-      snapshot.dirtyFiles.some((file) => !allowedFiles.has(file))
-    ) {
-      final.phase = "verification_required";
-      final.reason =
-        "The single corrected-delta review found a defect or the verified delta changed. Review manually; no automatic commit.";
-    } else {
-      await this.port.send(
-        final.managerId,
-        "Create the correction commit for exactly the verified delta only if the approved plan or explicit user authorization permits that commit. Otherwise leave the validated delta uncommitted and report the local result; workflow review does not authorize a commit. Stage explicit files/hunks only when committing is authorized; preserve concurrent and unrelated edits. Recheck HEAD and diff before committing and stop if they changed. Never push, merge or deploy. Report the result and checks.",
-        `workflow:${workflow.id}:${plan.context.callId}:correction-commit`,
-      );
-      final.phase = "committing";
-    }
-    await this.port.write(state);
-    return;
-  }
-
-  private async commitFinished(state: WorkflowState, workflow: Workflow, final: FinalReview) {
-    const workspace = await this.port.workspace(workflow.workspaceId);
-    const snapshot = await this.port.diff(workspace.cwd, final.head);
-    const allowedFiles = new Set(
-      Object.values(final.audits).flatMap((audit) =>
-        audit.result!.findings.flatMap((finding) => finding.files),
-      ),
-    );
-    const finalized =
-      snapshot.head === final.head
-        ? snapshot.dirtyFiles.every((file) => allowedFiles.has(file))
-        : snapshot.dirtyFiles.length === 0 &&
-          (await this.port.commitCount(workspace.cwd, final.head)) === 1;
-    if (
-      snapshot.text === final.correctionDiff &&
-      snapshot.untrackedFiles.length === 0 &&
-      finalized
-    ) {
-      final.phase = "complete";
-    } else {
-      final.phase = "verification_required";
-      final.reason =
-        "The local correction result could not be confirmed against the verified delta.";
-    }
-    await this.port.write(state);
-    return;
   }
 
   private async reviewFinished(
@@ -1397,16 +990,20 @@ export class WorkflowController {
 
   review(context: PlanContext, source: "automatic" | "manual") {
     return this.serial(async () => {
+      if (source !== "manual") throw new Error("Automatic reviews disabled.");
       const state = await this.port.read();
       const agent = await this.port.agent(context.agentId);
       const workflow = await this.workflow(state, agent);
+      await this.stopWorkflowReviews(state, workflow);
       await this.reconcilePlanTimeline(state, workflow);
       const previous = workflow.plans[context.callId];
       if (previous && !samePlan(previous.context, context))
         throw new Error("This plan context does not match the recorded plan.");
-      if (previous?.review?.phase === "running" || previous?.review?.phase === "complete")
-        return { agentId: previous.review.agentId! };
-      if (previous?.review?.phase === "outcome_unknown")
+      const replacesAutomatic = stoppedAutomaticReview(previous?.review);
+      const review = currentReview(previous?.review);
+      if (review && ["running", "complete"].includes(review.phase))
+        return { agentId: review.agentId! };
+      if (review?.phase === "outcome_unknown")
         throw new Error(
           "Reviewer delivery outcome_unknown. Open the reviewer to inspect it; automatic retry is disabled.",
         );
@@ -1420,6 +1017,10 @@ export class WorkflowController {
         throw new Error(`The ${source} plan review has already been used.`);
       const plan = previous ?? (workflow.plans[context.callId] = { context });
       plan.handoffRequested = false;
+      if (replacesAutomatic) {
+        await this.pending(context);
+        plan.review = { source, phase: "closing", replacesAutomatic: true };
+      }
       if (plan.review?.phase !== "closed") {
         await this.pending(context);
         await this.port.claimReview(context, true);
@@ -1432,7 +1033,7 @@ export class WorkflowController {
           workspaceId: workflow.workspaceId,
           parent: context.agentId,
           launchProfileId: reviewer.id,
-          idempotencyKey: `workflow:${workflow.id}:review:${context.callId}`,
+          idempotencyKey: reviewKey(workflow, plan),
           config: profileConfig(reviewer, true),
           labels: {
             "paseo.workflow.id": workflow.id,
@@ -1472,7 +1073,7 @@ export class WorkflowController {
       await this.port.send(
         childId,
         `Review this plan. Report objections, omissions, contradictions and assumptions. Do not edit, execute, commit, or delegate.\n${briefing(workflow, plan.context.text)}`,
-        `workflow:${workflow.id}:review:${plan.context.callId}:prompt`,
+        `${reviewKey(workflow, plan)}:prompt`,
       );
     } catch (error) {
       if (error instanceof Error && error.message.includes("agent_request_not_accepted"))

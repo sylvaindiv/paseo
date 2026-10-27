@@ -21,11 +21,15 @@ describe("handoff plan presentation", () => {
       visibleHandoffProfiles([
         { id: "first", name: "First" },
         { id: "workflow", name: "Workflow · planner" },
+        { id: "paseo-workflow-executor-standard", name: "Workflow · executor-standard" },
+        { id: "paseo-workflow-executor-advanced", name: "Workflow · executor-advanced" },
         { id: "lowercase", name: "workflow helper" },
         { id: "last", name: "Last" },
       ]).map(({ id }) => id),
     ).toEqual(["first", "lowercase", "last"]);
-    expect(visibleHandoffProfiles([{ id: "only", name: "Workflow planner" }])).toEqual([]);
+    expect(
+      visibleHandoffProfiles([{ id: "paseo-workflow-planner", name: "Workflow planner" }]),
+    ).toEqual([]);
   });
 
   it("extracts a newly recorded handoff without changing multiline Markdown", () => {
