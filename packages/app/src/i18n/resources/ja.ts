@@ -2800,6 +2800,7 @@ export const ja: TranslationResources = {
         featuresLabel: "機能",
         featureCount: "{{count}}個の機能",
         featureCountOne: "{{count}}個の機能",
+        showInHandoff: "引き継ぎの候補にする",
         notesLabel: "使用する場面",
         notesPlaceholder: "UI作業に使用 — コンポーネント、レイアウト、デザイントークンなど。",
         notesHint: "別のエージェントを起動するとき、このプロファイルを選ぶために使用されます。",

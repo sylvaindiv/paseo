@@ -5868,6 +5868,8 @@ export class DaemonClient {
         input,
       },
       responseType: "plugin.rpc.invoke.response",
+      // Allow the daemon's five-minute plugin budget to report its own timeout.
+      timeout: 305_000,
     });
     return payload.output;
   }

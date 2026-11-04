@@ -7521,3 +7521,40 @@ test("a release rejected by an old connection does not close its replacement", a
   expect(client.getConnectionState().status).toBe("connected");
   await expect(client.close()).resolves.toBeUndefined();
 });
+
+test("waits beyond the plugin invocation budget before timing out a handoff", async () => {
+  useHeartbeatClock();
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen();
+  await connected;
+  const result = client.invokePluginRpc(
+    "paseo-workflow",
+    "workflow.plan.handoff_to_profile.request",
+    {},
+  );
+  let settled = false;
+  void result.then(
+    () => {
+      settled = true;
+      return undefined;
+    },
+    () => {
+      settled = true;
+      return undefined;
+    },
+  );
+  await vi.advanceTimersByTimeAsync(300_000);
+  expect(settled).toBe(false);
+  const rejection = expect(result).rejects.toThrow("Timeout waiting for message (305000ms)");
+  await vi.advanceTimersByTimeAsync(5_000);
+  await rejection;
+});

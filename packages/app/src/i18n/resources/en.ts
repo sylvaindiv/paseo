@@ -2901,6 +2901,7 @@ export const en = {
         featuresLabel: "Features",
         featureCount: "{{count}} features",
         featureCountOne: "{{count}} feature",
+        showInHandoff: "Offer for handoff",
         notesLabel: "When to use",
         notesPlaceholder: "Use for UI work — components, layout and design tokens.",
         notesHint: "Helps agents choose this profile when starting another agent.",

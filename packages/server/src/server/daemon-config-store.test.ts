@@ -146,6 +146,7 @@ describe("DaemonConfigStore", () => {
           thinkingOptionId: "think-hard",
           featureValues: { webSearch: true },
           notes: "Use for components, layout and design tokens.",
+          showInHandoff: false,
         },
       ],
     });
@@ -161,6 +162,7 @@ describe("DaemonConfigStore", () => {
         thinkingOptionId: "think-hard",
         featureValues: { webSearch: true },
         notes: "Use for components, layout and design tokens.",
+        showInHandoff: false,
       },
     ]);
     expect(store.get().agentProfiles).toHaveLength(1);

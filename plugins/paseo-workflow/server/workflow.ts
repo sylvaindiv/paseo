@@ -474,7 +474,9 @@ export class WorkflowController {
         context = actionContext(closed.context);
       return {
         ...this.statusView(workflow, context, latest?.callId),
-        profiles: (await this.port.profiles()).map(({ id, name }) => ({ id, name })),
+        profiles: (await this.port.profiles())
+          .filter((profile) => profile.showInHandoff !== false)
+          .map(({ id, name }) => ({ id, name })),
       };
     });
   }

@@ -81,6 +81,7 @@ export interface AgentProfileFormState {
   name: string;
   icon: string;
   color: string;
+  showInHandoff: boolean;
   notes: string;
   provider: string;
   modelId: string;
@@ -124,6 +125,7 @@ export interface AgentProfileFormModel {
   applyFeaturesUnavailable: (requestKey: string) => void;
   setName: (value: string) => void;
   setAppearance: (value: { icon: string; color: string }) => void;
+  setShowInHandoff: (value: boolean) => void;
   setNotes: (value: string) => void;
   setProvider: (providerId: string, display: AgentProfileFormDisplay) => void;
   setModel: (modelId: string, display: AgentProfileFormDisplay | null) => void;
@@ -356,6 +358,7 @@ function buildSubmitValue(state: AgentProfileFormState): AgentProfileValue | nul
     ...(state.postApprovalModeId.trim()
       ? { postApprovalModeId: state.postApprovalModeId.trim() }
       : {}),
+    ...(!state.showInHandoff ? { showInHandoff: false } : {}),
     ...(notes ? { notes } : {}),
   };
 }
@@ -392,6 +395,7 @@ function buildInitialState(snapshot: AgentProfileFormSnapshot): AgentProfileForm
     name,
     icon: profile.icon ?? "",
     color: profile.color ?? "",
+    showInHandoff: profile.showInHandoff !== false,
     notes: profile.notes ?? "",
     provider,
     modelId,
@@ -559,6 +563,7 @@ export function openAgentProfileForm(snapshot: AgentProfileFormSnapshot): AgentP
     setName: (value) => publish((current) => ({ ...current, name: value })),
     setAppearance: (value) =>
       publish((current) => ({ ...current, icon: value.icon, color: value.color })),
+    setShowInHandoff: (value) => publish((current) => ({ ...current, showInHandoff: value })),
     setNotes: (value) => publish((current) => ({ ...current, notes: value })),
     setProvider: (providerId, display) =>
       publish((current) => {

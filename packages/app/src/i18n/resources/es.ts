@@ -2832,6 +2832,7 @@ export const es: TranslationResources = {
         featuresLabel: "Características",
         featureCount: "{{count}} características",
         featureCountOne: "{{count}} característica",
+        showInHandoff: "Ofrecer para el traspaso",
         notesLabel: "Cuándo usarlo",
         notesPlaceholder: "Úselo para trabajo de UI: componentes, diseño y tokens de diseño.",
         notesHint: "Ayuda a los agentes a elegir este perfil al iniciar otro agente.",

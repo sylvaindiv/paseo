@@ -126,7 +126,10 @@ export function PlanActions({
   const host = useHostRuntimeSnapshot(serverId);
   const { profiles } = useAgentProfiles(serverId);
   const handoffProfiles = useMemo(
-    () => (profiles ? visibleAgentProfiles(profiles) : null),
+    () =>
+      profiles
+        ? visibleAgentProfiles(profiles).filter((profile) => profile.showInHandoff !== false)
+        : null,
     [profiles],
   );
   const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);

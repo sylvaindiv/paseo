@@ -151,7 +151,16 @@ test("status exposes the current plan and ordered profiles without preparing han
     plan,
     profiles: profiles.map(({ id, name }) => ({ id, name })),
   });
-  f.port.profiles = async () => [];
+  const hiddenProfile = { ...profiles[0], showInHandoff: false };
+  f.port.profiles = async () => [
+    hiddenProfile,
+    { ...profiles[1], showInHandoff: true },
+    ...profiles.slice(2),
+  ];
+  expect(await controller.status("planner", "workspace")).toMatchObject({
+    profiles: profiles.slice(1).map(({ id, name }) => ({ id, name })),
+  });
+  f.port.profiles = async () => [hiddenProfile];
   expect(await controller.status("planner", "workspace")).toMatchObject({ plan, profiles: [] });
   f.agents.get("planner")!.pendingPermissions[0].input = { plan: "replacement" };
   const oldTimeline = await fixture().port.timeline("planner");
@@ -172,6 +181,7 @@ test("handoff preserves a non-plan profile's settings to a root in the same work
       thinkingOptionId: "high",
       featureValues: { plan_mode: false },
       postApprovalModeId: "auto",
+      showInHandoff: false,
     },
   ];
   await new WorkflowController(f.port).handoff(plan, "custom");

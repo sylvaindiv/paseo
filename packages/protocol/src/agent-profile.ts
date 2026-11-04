@@ -26,6 +26,7 @@ export const AgentProfileSchema = z
     featureValues: z.record(z.string(), z.unknown()).optional(),
     /** Free text, surfaced to orchestrating agents by the `list_profiles` MCP tool. */
     notes: z.string().optional(),
+    showInHandoff: z.boolean().optional(),
   })
   .passthrough();
 

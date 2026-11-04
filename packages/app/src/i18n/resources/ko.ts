@@ -2786,6 +2786,7 @@ export const ko: TranslationResources = {
         featuresLabel: "기능",
         featureCount: "기능 {{count}}개",
         featureCountOne: "기능 {{count}}개",
+        showInHandoff: "인계 후보로 표시",
         notesLabel: "사용 시점",
         notesPlaceholder: "UI 작업에 사용 — 컴포넌트, 레이아웃, 디자인 토큰.",
         notesHint: "에이전트가 다른 에이전트를 시작할 때 이 프로필을 선택하는 데 사용됩니다.",

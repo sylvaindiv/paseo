@@ -2815,6 +2815,7 @@ export const ptBR: TranslationResources = {
         featuresLabel: "Recursos",
         featureCount: "{{count}} recursos",
         featureCountOne: "{{count}} recurso",
+        showInHandoff: "Oferecer para transferência",
         notesLabel: "Quando usar",
         notesPlaceholder: "Use para trabalho de UI — componentes, layout e tokens de design.",
         notesHint: "Ajuda os agentes a escolher este perfil ao iniciar outro agente.",

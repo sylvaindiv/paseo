@@ -153,6 +153,32 @@ describe("openAgentProfileForm", () => {
     expect(state.modelId).toBe("claude-haiku-4-5");
   });
 
+  it.each([undefined, true, false])("opens an existing handoff preference of %s", (value) => {
+    const model = openAgentProfileForm({
+      mode: "edit",
+      profile: { id: "p1", name: "UI work", provider: "claude", showInHandoff: value },
+    });
+    expect(model.getState().showInHandoff).toBe(value !== false);
+  });
+
+  it("defaults to visible and keeps a canceled change out of the saved profile", () => {
+    const model = openWithCatalog({ mode: "create" });
+    model.setName("UI work");
+    selectClaude(model);
+    expect(model.getState().showInHandoff).toBe(true);
+
+    model.setShowInHandoff(false);
+    const saved = { id: "p1", ...model.getState().submitValue! };
+    expect(saved.showInHandoff).toBe(false);
+    const openEdit = () => openAgentProfileForm({ mode: "edit", profile: saved });
+    const edit = openEdit();
+    expect(edit.getState().showInHandoff).toBe(false);
+    edit.setShowInHandoff(true);
+    expect(edit.getState().submitValue).not.toHaveProperty("showInHandoff");
+    edit.close();
+    expect(openEdit().getState().showInHandoff).toBe(false);
+  });
+
   it("lists only enabled providers", () => {
     const model = openWithCatalog({ mode: "create" });
 

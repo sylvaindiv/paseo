@@ -2906,6 +2906,7 @@ export const fr: TranslationResources = {
         featuresLabel: "Fonctionnalités",
         featureCount: "{{count}} fonctionnalités",
         featureCountOne: "{{count}} fonctionnalité",
+        showInHandoff: "Proposer pour le handoff",
         notesLabel: "Quand l’utiliser",
         notesPlaceholder:
           "À utiliser pour le travail sur l’UI — composants, mise en page et tokens de design.",

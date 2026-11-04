@@ -67,6 +67,27 @@ describe("desktop agent widget", () => {
     ).toBe(false);
   });
 
+  it("projects only visible handoff profiles in host order", () => {
+    const hidden = { id: "hidden", name: "Hidden", showInHandoff: false };
+    const legacy = { id: "legacy", name: "Legacy" };
+    const visible = { id: "visible", name: "Visible", showInHandoff: true };
+    const project = (handoffProfiles?: (typeof hidden | typeof legacy | typeof visible)[]) =>
+      projectWidgetRequest({
+        serverId: "host",
+        agentId: "agent",
+        request: plan,
+        agentTitle: "Planner",
+        workspace: "Paseo",
+        handoffProfiles,
+      })?.handoffProfiles;
+    expect(project([legacy, hidden, visible])).toEqual([
+      legacy,
+      { id: "visible", name: "Visible" },
+    ]);
+    expect(project([hidden])).toEqual([]);
+    expect(project()).toBeUndefined();
+  });
+
   it("projects pending plans safely and approves the provider's primary action", () => {
     const item = projectWidgetRequest({
       serverId: "host",

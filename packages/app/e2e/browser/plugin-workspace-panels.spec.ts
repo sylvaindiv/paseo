@@ -556,13 +556,22 @@ test("workflow profile panel transfers the exact plan with the selected host pro
       thinkingOptionId: "high",
     },
   ];
+  const hiddenProfile = {
+    ...profiles[0],
+    id: "workflow-panel-hidden",
+    name: "Hidden profile",
+    showInHandoff: false,
+  };
   const session = await seedMockAgentWorkspace({
     repoPrefix: "workflow-profile-panel-",
     title: "Workflow panel source",
     initialPrompt: "Emit synthetic plan approval.",
   });
   try {
-    await client.patchDaemonConfig({ pluginsEnabled: true, agentProfiles: profiles });
+    await client.patchDaemonConfig({
+      pluginsEnabled: true,
+      agentProfiles: [...profiles, hiddenProfile],
+    });
     await client.installDirectoryPlugin(
       path.resolve(__dirname, "../../../../plugins/paseo-workflow"),
     );
@@ -577,6 +586,12 @@ test("workflow profile panel transfers the exact plan with the selected host pro
     await expect(row.getByRole("button")).toHaveText(profiles.map((profile) => profile.name));
     await capture(page, testInfo, "workflow-profile-panel-compact");
     await page.setViewportSize(WIDE_VIEWPORT);
+    await client.patchDaemonConfig({ agentProfiles: [hiddenProfile] });
+    await expect(row).toContainText("Aucun profil disponible");
+    await expect(row.getByRole("button")).toHaveCount(0);
+    await capture(page, testInfo, "workflow-profile-panel-empty");
+    await client.patchDaemonConfig({ agentProfiles: [...profiles, hiddenProfile] });
+    await expect(row.getByRole("button")).toHaveText(profiles.map((profile) => profile.name));
     const before = (await client.invokePluginRpc("paseo-workflow", "workflow.status.get.request", {
       workspaceId: session.workspaceId,
       agentId: session.agentId,
