@@ -125,6 +125,7 @@ export function PlanActions({
   const compact = useIsCompactFormFactor();
   const host = useHostRuntimeSnapshot(serverId);
   const { profiles } = useAgentProfiles(serverId);
+  const handoffProfiles = profiles?.filter((profile) => profile.showInHandoff !== false);
   const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);
   const supportsStructuredPlans = useHostFeature(serverId, "structuredPlanApproval");
   const installed = useInstalledPlugins();
@@ -328,8 +329,8 @@ export function PlanActions({
       {profileActions.map((action) => (
         <View key={action.id} testID="plan-handoff-profiles" style={styles.profiles}>
           <Text style={styles.profileLabel}>{action.title} :</Text>
-          {profiles?.length ? (
-            profiles.map((profile) => (
+          {handoffProfiles?.length ? (
+            handoffProfiles.map((profile) => (
               <ProfileButton
                 key={profile.id}
                 actionId={action.id}
@@ -342,7 +343,9 @@ export function PlanActions({
             ))
           ) : (
             <Text style={styles.profileLabel}>
-              {profiles ? t("workspace.git.workflow.noProfiles") : t("common.states.loading")}
+              {handoffProfiles
+                ? t("workspace.git.workflow.noProfiles")
+                : t("common.states.loading")}
             </Text>
           )}
         </View>

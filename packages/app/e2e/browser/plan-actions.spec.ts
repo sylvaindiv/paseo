@@ -29,6 +29,13 @@ const profiles = [
   },
 ];
 
+const hiddenProfile = {
+  id: "hidden-profile",
+  name: "Hidden profile",
+  provider: "mock",
+  showInHandoff: false,
+};
+
 const handedOffPlan = `# Long handoff plan
 
 ## Keep the original Markdown
@@ -104,7 +111,10 @@ test("handoff returns to the executor workspace after the source plan closes", a
     initialPrompt: "Emit synthetic plan approval.",
   });
   try {
-    await client.patchDaemonConfig({ pluginsEnabled: true, agentProfiles: profiles });
+    await client.patchDaemonConfig({
+      pluginsEnabled: true,
+      agentProfiles: [...profiles, hiddenProfile],
+    });
     await client.installDirectoryPlugin(plugin.directory);
     await openAgentRoute(page, session);
     const executor = await session.client.createAgent({
@@ -293,7 +303,9 @@ test("plan actions keep exact context, isolate errors, lock remotely, and overfl
       .boundingBox();
     expect(lastProfileBox!.y).toBeGreaterThan(firstProfileBox!.y);
     await card.screenshot({ path: testInfo.outputPath("handoff-profiles-mobile.png") });
-    await client.patchDaemonConfig({ agentProfiles: [] });
+    await client.patchDaemonConfig({
+      agentProfiles: [hiddenProfile],
+    });
     await expect(profileRow).toContainText("No agent profiles available");
     await expect(profileRow.getByRole("button")).toHaveCount(0);
     await card.screenshot({ path: testInfo.outputPath("handoff-profiles-empty.png") });

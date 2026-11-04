@@ -2708,6 +2708,7 @@ export const zhCN: TranslationResources = {
         featuresLabel: "Features",
         featureCount: "{{count}} 个 Feature",
         featureCountOne: "{{count}} 个 Feature",
+        showInHandoff: "作为交接候选",
         notesLabel: "适用场景",
         notesPlaceholder: "用于 UI 工作 — 组件、布局和设计 token。",
         notesHint: "帮助 Agent 在启动另一个 Agent 时选择此配置。",

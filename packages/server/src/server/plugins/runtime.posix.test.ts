@@ -1019,6 +1019,40 @@ export default function contribute(server: any) { server.registerProvider(provid
     await runtime.stopAll();
   });
 
+  it("waits for a slow handoff RPC and still bounds unresponsive invocations", async () => {
+    const directory = await createPlugin("slow", `export default function contribute() {}`);
+    const child = createReloadChild("slow", [], ["handoff"]);
+    const sent: Array<{ type: string; requestId?: string }> = [];
+    const send = child.send.bind(child);
+    child.send = (message, callback) => {
+      sent.push(message);
+      return send(message, callback);
+    };
+    const runtime = createTestRuntime({ spawnChild: () => child });
+    await runtime.startPlugin("slow", directory);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const result = runtime.invoke("slow", "handoff", {});
+      const resolved = expect(result).resolves.toEqual({ agentId: "executor" });
+      await vi.advanceTimersByTimeAsync(120_000);
+      const request = sent.find((message) => message.type === "invoke")!;
+      child.emitMessage({
+        type: "result",
+        requestId: request.requestId,
+        output: { agentId: "executor" },
+      });
+      await resolved;
+      const timeout = expect(runtime.invoke("slow", "handoff", {})).rejects.toThrow(
+        "Plugin RPC timed out",
+      );
+      await vi.advanceTimersByTimeAsync(300_000);
+      await timeout;
+    } finally {
+      vi.useRealTimers();
+      await runtime.stopAll();
+    }
+  });
+
   it("rejects pending RPCs when the plugin stops", async () => {
     const directory = await createPlugin(
       "pending",

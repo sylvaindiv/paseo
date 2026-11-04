@@ -386,6 +386,17 @@ function OpenAgentProfileEditModal({
           </Field>
         ) : null}
 
+        <View style={styles.handoffRow}>
+          <Text style={styles.featureLabel}>{t("settings.host.agentProfiles.showInHandoff")}</Text>
+          <Switch
+            value={state.showInHandoff}
+            onValueChange={model.setShowInHandoff}
+            disabled={state.isSubmitting}
+            accessibilityLabel={t("settings.host.agentProfiles.showInHandoff")}
+            testID="agent-profile-handoff-switch"
+          />
+        </View>
+
         <Field
           label={t("settings.host.agentProfiles.notesLabel")}
           hint={t("settings.host.agentProfiles.notesHint")}
@@ -533,6 +544,12 @@ const styles = StyleSheet.create((theme) => ({
   body: {
     gap: theme.spacing[4],
     paddingBottom: theme.spacing[2],
+  },
+  handoffRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
   },
   nameRow: {
     flexDirection: "row",

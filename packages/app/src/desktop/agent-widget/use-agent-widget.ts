@@ -77,7 +77,7 @@ export function useAgentWidget(serverId: string): void {
         agentTitle: agent.title ?? agent.provider,
         workspace: workspace ? `${workspace.projectDisplayName} · ${workspace.name}` : agent.cwd,
         workspaceId: agent.workspaceId ?? undefined,
-        handoffProfiles: profiles?.map(({ id, name }) => ({ id, name })),
+        handoffProfiles: profiles ?? undefined,
         handoffDisabledReason: handoffReason(
           serverId,
           agent.workspaceId ?? undefined,

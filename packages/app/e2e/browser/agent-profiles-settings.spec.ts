@@ -1,5 +1,6 @@
-import { test } from "../support/fixtures";
+import { expect, test } from "../support/fixtures";
 import {
+  agentProfileRow,
   createAgentProfile,
   createAgentProfileFromEmptyState,
   editAgentProfile,
@@ -19,6 +20,40 @@ import {
 const MOCK_PROVIDER_LABEL = "Mock Load Test";
 
 test.describe("Agent profiles settings", () => {
+  test("handoff preference persists on save and discards canceled edits", async ({
+    page,
+  }, testInfo) => {
+    const seed = await seedAgentProfiles([]);
+    try {
+      await openAgentProfileSettings(page);
+      await createAgentProfileFromEmptyState(page, {
+        name: "Implementation",
+        provider: MOCK_PROVIDER_LABEL,
+        model: "One minute stream",
+      });
+      const edit = agentProfileRow(page, "Implementation").getByRole("button", {
+        name: "Edit profile",
+      });
+      const modal = page.getByTestId("agent-profile-edit-modal");
+      const toggle = modal.getByRole("switch", { name: "Offer for handoff" });
+      await edit.click();
+      await expect(toggle).toHaveAttribute("aria-checked", "true");
+      await toggle.click();
+      await modal.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(modal).toHaveCount(0);
+      await edit.click();
+      await expect(toggle).toHaveAttribute("aria-checked", "false");
+      await modal.screenshot({ path: testInfo.outputPath("profile-handoff-disabled.png") });
+      await toggle.click();
+      await modal.getByTestId("agent-profile-cancel-button").click();
+      await expect(modal).toHaveCount(0);
+      await edit.click();
+      await expect(toggle).toHaveAttribute("aria-checked", "false");
+    } finally {
+      await seed.restore();
+    }
+  });
+
   test("legacy model favourites migrate into provider-and-model-only host profiles", async ({
     page,
   }) => {

@@ -40,6 +40,8 @@ import { evaluateBundle } from "./bundle-evaluator.js";
 const CLIENT_ENTRY_FILENAMES = ["index.client.ts", "index.client.tsx"] as const;
 const SERVER_ENTRY_FILENAMES = ["index.server.ts", "index.server.tsx"] as const;
 const REQUEST_TIMEOUT_MS = 30_000;
+// RPCs can orchestrate provider discovery, agent creation and prompt delivery.
+const INVOCATION_TIMEOUT_MS = 5 * 60_000;
 const MAX_LOG_ENTRIES = 500;
 const MAX_LOG_BYTES = 256 * 1024;
 const MAX_LOG_LINE_BYTES = 16 * 1024;
@@ -603,13 +605,16 @@ export class PluginRuntime {
     if (!child) throw new Error(`Plugin ${pluginId} has no server entry`);
     const requestId = message.requestId;
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        loaded.pending.delete(requestId);
-        if (message.type === "hook") {
-          void send(child, { type: "hook.cancel", requestId }).catch(() => {});
-        }
-        reject(new Error(`Plugin RPC timed out: ${pluginId}.${message.type}`));
-      }, REQUEST_TIMEOUT_MS);
+      const timeout = setTimeout(
+        () => {
+          loaded.pending.delete(requestId);
+          if (message.type === "hook") {
+            void send(child, { type: "hook.cancel", requestId }).catch(() => {});
+          }
+          reject(new Error(`Plugin RPC timed out: ${pluginId}.${message.type}`));
+        },
+        message.type === "invoke" ? INVOCATION_TIMEOUT_MS : REQUEST_TIMEOUT_MS,
+      );
       loaded.pending.set(requestId, { resolve, reject, timeout });
       void send(child, message).catch((error) => {
         clearTimeout(timeout);

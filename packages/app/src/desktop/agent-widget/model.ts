@@ -2,6 +2,7 @@ import type {
   AgentPermissionRequest,
   AgentPermissionResponse,
 } from "@getpaseo/protocol/agent-types";
+import type { AgentProfile } from "@getpaseo/protocol/agent-profile";
 import type { WidgetAction, WidgetRequest } from "@getpaseo/protocol/desktop-agent-widget";
 import type { HostProjectListItem } from "@/projects/host-projects";
 import type { ProjectIconRenderData } from "@/projects/icons";
@@ -42,7 +43,7 @@ interface RequestInput {
   workspace: string;
   workspaceId?: string;
   handoffDisabledReason?: string;
-  handoffProfiles?: { id: string; name: string }[];
+  handoffProfiles?: readonly Pick<AgentProfile, "id" | "name" | "showInHandoff">[];
 }
 function handoffDisabledReason(input: RequestInput, plan: unknown): string | undefined {
   if (input.handoffDisabledReason) return input.handoffDisabledReason;
@@ -71,7 +72,9 @@ export function projectWidgetRequest(input: RequestInput): WidgetRequest | null 
     planCallId: request.sourcePlanCallId,
     planText: typeof plan === "string" ? plan : undefined,
     handoffDisabledReason: handoffDisabledReason(input, plan),
-    handoffProfiles: input.handoffProfiles,
+    handoffProfiles: input.handoffProfiles
+      ?.filter((profile) => profile.showInHandoff !== false)
+      .map(({ id, name }) => ({ id, name })),
     project: input.project,
     agentTitle,
     workspace,

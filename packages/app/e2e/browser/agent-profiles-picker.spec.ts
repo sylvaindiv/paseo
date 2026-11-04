@@ -34,6 +34,7 @@ const PROFILE = {
   model: "one-minute-stream",
   modeId: "approval-test",
   notes: "Use for UI work.",
+  showInHandoff: false,
 };
 
 const PROFILE_SUMMARY = "Mock Load Test · One minute stream · Approval test";
