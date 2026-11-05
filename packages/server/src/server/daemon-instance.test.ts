@@ -44,6 +44,24 @@ describe("daemon instance identity across a reboot", () => {
     await rm(paseoHome, { recursive: true, force: true });
   });
 
+  test.each([false, true])(
+    "an explicit busy refusal never signals the supervisor (force=%s)",
+    async (force) => {
+      bystander = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+      });
+      const pid = bystander.pid!;
+      await writeLock(paseoHome, lockFor(pid, new Date()));
+      const busy = Object.assign(new Error("Un agent travaille encore."), { code: "DAEMON_BUSY" });
+      const requestShutdown = vi.fn().mockRejectedValue(busy);
+      await expect(
+        stopDaemonInstance(paseoHome, { force, requestShutdown, timeoutMs: 100 }),
+      ).rejects.toBe(busy);
+      expect(requestShutdown).toHaveBeenCalledTimes(1);
+      expect(await readDaemonInstance(paseoHome)).toMatchObject({ pid });
+    },
+  );
+
   test("a lock stamped before this boot has no running owner", async () => {
     await writeLock(paseoHome, lockFor(process.pid, new Date(bootedAt() - 60 * 60_000)));
 

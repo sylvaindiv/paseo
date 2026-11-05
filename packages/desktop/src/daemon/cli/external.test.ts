@@ -81,6 +81,20 @@ describe("external CLI", () => {
     );
   });
 
+  it("preserves a structured daemon refusal from CLI stderr", async () => {
+    mockExternalCliOutput({
+      stdout: "",
+      stderr: JSON.stringify({
+        error: { code: "DAEMON_BUSY", message: "Un agent travaille encore." },
+      }),
+      exitCode: 1,
+    });
+    await expect(runExternalCliJsonCommand(["daemon", "stop", "--json"])).rejects.toMatchObject({
+      code: "DAEMON_BUSY",
+      message: "Un agent travaille encore.",
+    });
+  });
+
   it("parses JSON output from an isolated CLI process", async () => {
     mockExternalCliOutput({ stdout: '{"localDaemon":"running"}\n' });
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { fork, spawn, type ChildProcess } from "child_process";
 import path from "node:path";
 import {
@@ -18,6 +19,7 @@ interface SupervisorLogFileOptions {
 }
 
 type WorkerLifecycleMessage =
+  | { type: "paseo:shutdown-decision"; requestId: string; accepted: boolean }
   | {
       type: "paseo:shutdown";
       reason?: string;
@@ -38,6 +40,7 @@ interface SupervisorHeartbeatMessage {
 
 interface SupervisorGracefulShutdownMessage {
   type: "paseo:graceful-shutdown";
+  requestId: string;
   reason: string;
 }
 
@@ -73,6 +76,12 @@ function parseLifecycleMessage(msg: unknown): WorkerLifecycleMessage | null {
     return null;
   }
   const type = (msg as { type?: unknown }).type;
+  if (type === "paseo:shutdown-decision") {
+    const { requestId, accepted } = msg as { requestId?: unknown; accepted?: unknown };
+    return typeof requestId === "string" && typeof accepted === "boolean"
+      ? { type, requestId, accepted }
+      : null;
+  }
   if (type === "paseo:shutdown") {
     const reason = (msg as { reason?: unknown }).reason;
     return {
@@ -189,6 +198,16 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   let lifecycleFailed = false;
   let publication = Promise.resolve();
   let forceKillTimer: NodeJS.Timeout | null = null;
+  let pendingShutdown: {
+    requestId: string;
+    reason: string;
+    restart: boolean;
+    timer: NodeJS.Timeout;
+  } | null = null;
+  const clearPendingShutdown = () => {
+    if (pendingShutdown) clearTimeout(pendingShutdown.timer);
+    pendingShutdown = null;
+  };
   const durableLog = createDurableLog(options.logFile, (message) => {
     process.stderr.write(`[${options.name}] ${message}\n`);
   });
@@ -336,6 +355,21 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
         return;
       }
 
+      if (lifecycleMessage.type === "paseo:shutdown-decision") {
+        if (!pendingShutdown || lifecycleMessage.requestId !== pendingShutdown.requestId) return;
+        const { reason, restart } = pendingShutdown;
+        clearPendingShutdown();
+        writeLifecycleLog("Worker shutdown decision", {
+          reason,
+          accepted: lifecycleMessage.accepted,
+        });
+        if (!lifecycleMessage.accepted) return;
+        restarting = restart;
+        shuttingDown = !restart;
+        scheduleForceKill(reason);
+        return;
+      }
+
       if (lifecycleMessage.type === "paseo:ready") {
         reachedReady = true;
         writeLifecycleLog("Worker ready", { listen: lifecycleMessage.listen });
@@ -376,6 +410,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     child.on("exit", (code, signal) => {
       clearInterval(heartbeat);
       clearForceKillTimer();
+      clearPendingShutdown();
       child = null;
       publication = publication
         .then(() => options.onWorkerExit?.())
@@ -421,13 +456,26 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     });
   };
 
-  const requestWorkerShutdown = (reason: string): void => {
-    if (!child) {
+  const requestWorkerShutdown = (reason: string, restart: boolean): void => {
+    if (!child || pendingShutdown || restarting || shuttingDown) {
       return;
     }
     const currentChild = child;
+    const requestId = randomUUID();
+    // Silence is not consent. Expiration only permits a fresh request; it never
+    // arms the termination timer or leaves a deferred stop behind.
+    const timer = setTimeout(() => {
+      writeLifecycleLog("Worker shutdown decision timed out; preserving worker", {
+        reason,
+        requestId,
+      });
+      clearPendingShutdown();
+    }, 5_000);
+    timer.unref();
+    pendingShutdown = { requestId, reason, restart, timer };
     const message: SupervisorGracefulShutdownMessage = {
       type: "paseo:graceful-shutdown",
+      requestId,
       reason,
     };
     writeLifecycleLog("Supervisor requesting graceful worker shutdown", {
@@ -459,21 +507,15 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     if (!child || restarting || shuttingDown) {
       return;
     }
-    restarting = true;
     writeLifecycleLog("Restart requested", { reason });
-    log(`${reason}. Stopping worker for restart...`);
-    requestWorkerShutdown(reason);
-    scheduleForceKill(reason);
+    requestWorkerShutdown(reason, true);
   };
 
   const requestShutdown = (reason: string) => {
     if (shuttingDown) {
       return;
     }
-    shuttingDown = true;
-    restarting = false;
     writeLifecycleLog("Supervisor shutdown requested", { reason });
-    log(`${reason}. Stopping worker...`);
     if (!child) {
       void publication.then(() => {
         exitSupervisor(lifecycleFailed ? 1 : 0);
@@ -481,8 +523,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       });
       return;
     }
-    requestWorkerShutdown(reason);
-    scheduleForceKill(reason);
+    requestWorkerShutdown(reason, false);
   };
 
   const forwardSignal = (signal: NodeJS.Signals) => {

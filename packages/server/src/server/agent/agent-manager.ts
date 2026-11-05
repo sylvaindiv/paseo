@@ -1,3 +1,4 @@
+import { DaemonBusyError } from "../lifecycle-reasons.js";
 import { agentBrowserEnv } from "../agent-browser-env.js";
 import { interactiveResponsesForHome } from "../interactive-responses.js";
 import { projectTimelineRows } from "./timeline-projection.js";
@@ -911,6 +912,38 @@ export class AgentManager {
 
   setMcpBaseUrl(url: string | null): void {
     this.mcpBaseUrl = url;
+  }
+
+  assertShutdownAllowed(): void {
+    const agentIds = Array.from(this.agents.values())
+      .filter(
+        (agent) =>
+          agent.lifecycle === "initializing" ||
+          this.hasInFlightRun(agent.id) ||
+          agent.pendingPermissions.size > 0 ||
+          agent.pendingReplacement ||
+          this.sessionEventTails.has(agent.id),
+      )
+      .map((agent) => agent.id);
+    const subagentIds = this.providerSubagents
+      .listAll()
+      .filter((agent) => agent.status === "running")
+      .map((agent) => agent.id);
+    if (agentIds.length || subagentIds.length || this.agentRegistrationTasks.size) {
+      this.logger.warn(
+        { agentIds, subagentIds, pendingRegistrations: this.agentRegistrationTasks.size },
+        "Daemon lifecycle request refused: agents busy",
+      );
+      throw new DaemonBusyError();
+    }
+  }
+
+  prepareForSafeShutdown(): void {
+    if (!this.acceptingAgentRegistrations) return;
+    // No await between inspection and admission closure: a turn or registration
+    // admitted first blocks shutdown; one arriving later is rejected.
+    this.assertShutdownAllowed();
+    this.prepareForShutdown();
   }
 
   prepareForShutdown(): void {
@@ -2529,6 +2562,7 @@ export class AgentManager {
    * broadcast like normal timeline events.
    */
   tryRunOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions): boolean {
+    this.assertAcceptingAgentRegistrations();
     const agent = this.requireSessionAgent(agentId);
     const handler = agent.session.tryHandleOutOfBand?.(prompt);
     if (!handler) {
@@ -2665,6 +2699,7 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): AsyncGenerator<AgentStreamEvent> {
+    this.assertAcceptingAgentRegistrations();
     const existingAgent = this.requireSessionAgent(agentId);
     this.logger.trace(
       {
@@ -2865,6 +2900,7 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AsyncGenerator<AgentStreamEvent>> {
+    this.assertAcceptingAgentRegistrations();
     const snapshot = this.requireAgent(agentId);
     if (
       snapshot.lifecycle !== "running" &&

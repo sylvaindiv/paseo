@@ -29,6 +29,8 @@ export interface DaemonRuntimeConfig {
 
 export interface DaemonSessionHost {
   emit(msg: SessionOutboundMessage): void;
+  assertShutdownAllowed(): void;
+  prepareForRestart(): void;
   emitLifecycleIntent(intent: {
     type: "restart";
     clientId: string;
@@ -102,6 +104,8 @@ export class DaemonSession {
       desktopManaged: this.daemonRuntimeConfig?.desktopManaged === true,
       emit: (msg) => this.host.emit(msg),
       emitLifecycleIntent: (intent) => this.host.emitLifecycleIntent(intent),
+      assertShutdownAllowed: () => this.host.assertShutdownAllowed(),
+      prepareForRestart: () => this.host.prepareForRestart(),
       sessionLogger: this.logger,
     });
   }

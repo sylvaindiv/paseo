@@ -1,12 +1,17 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, stat, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hashDaemonPassword } from "@getpaseo/server/auth";
-import { startDaemonInstance, readDaemonInstance } from "@getpaseo/server/daemon-control";
+import { BUILTIN_PROVIDER_IDS } from "@getpaseo/protocol/provider-manifest";
+import {
+  startDaemonInstance,
+  readDaemonInstance,
+  stopDaemonInstance,
+} from "@getpaseo/server/daemon-control";
 import { expect, test } from "vitest";
 import { connectToDaemon } from "../../utils/client.js";
 
@@ -686,3 +691,105 @@ test("onboarding preserves an existing MCP choice unless explicitly supplied", a
     await f.close();
   }
 }, 60_000);
+
+test.runIf(process.platform !== "win32")(
+  "busy agents survive CLI stop, restart, direct signals and client reconnection",
+  async () => {
+    const f = await fixture();
+    const home = f.homes[0]!;
+    let client: Awaited<ReturnType<typeof connectToDaemon>> | undefined;
+    let agentId: string | undefined;
+    let launchedPid: number | undefined;
+    try {
+      await f.configure(home, `127.0.0.1:${await port()}`);
+      const configPath = path.join(home, "config.json");
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      config.agents = {
+        ...config.agents,
+        providers: Object.fromEntries(BUILTIN_PROVIDER_IDS.map((id) => [id, { enabled: false }])),
+      };
+      await writeFile(configPath, JSON.stringify(config));
+      const launch = await f.ok(["daemon", "start", "--home", home, "--timeout", "30"]);
+      launchedPid = launch.pid;
+      client = await connectToDaemon({ target: { kind: "instance", home }, timeout: 30_000 });
+      await client.fetchAgents({ subscribe: {} });
+      await client.patchDaemonConfig({ pluginsEnabled: true });
+      const pluginDirectory = path.join(f.root, "busy-provider");
+      await cp(path.join(repo, "plugin-examples/provider-direct"), pluginDirectory, {
+        recursive: true,
+      });
+      const providerPath = path.join(pluginDirectory, "server/provider.ts");
+      const source = await readFile(providerPath, "utf8");
+      const started =
+        'state.emit({ type: "session.turn", sessionId: input.sessionId, turnId, state: "started" });';
+      expect(source).toContain(started);
+      await writeFile(
+        providerPath,
+        source
+          .replace(started, started + '\n  if (text === "hold") return;')
+          .replace("  publishChild(input.sessionId, session.turn, state);", ""),
+      );
+      await client.installDirectoryPlugin(pluginDirectory);
+      const { workspace } = await client.createWorkspace({
+        source: { kind: "directory", path: f.root },
+        title: "Shutdown test",
+      });
+      expect(workspace).not.toBeNull();
+      const agent = await client.createAgent({
+        provider: "direct-example",
+        cwd: f.root,
+        workspaceId: workspace!.id,
+        title: "Busy agent",
+      });
+      agentId = agent.id;
+      await client.sendMessage(agent.id, "hold");
+      const workerPid = (await client.getDaemonStatus()).pid;
+      for (const command of [["stop"], ["stop", "--force"], ["restart"]]) {
+        const refused = await f.run([
+          "--json",
+          "daemon",
+          ...command,
+          "--home",
+          home,
+          "--timeout",
+          "2",
+        ]);
+        expect(refused.code, refused.stderr).toBe(1);
+        expect(JSON.parse(refused.stderr).error.code).toBe("DAEMON_BUSY");
+      }
+      for (const pid of [launch.pid, workerPid]) {
+        process.kill(pid, "SIGTERM");
+        process.kill(pid, "SIGINT");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 11_000));
+      expect((await client.getDaemonStatus()).pid).toBe(workerPid);
+      await client.close();
+      expect((await f.ok(["start", "--home", home])).pid).toBe(launch.pid);
+      client = await connectToDaemon({ target: { kind: "instance", home }, timeout: 30_000 });
+      await client.fetchAgents({ subscribe: {} });
+      expect((await client.getDaemonStatus()).pid).toBe(workerPid);
+      await client.cancelAgent(agent.id);
+      await client.sendMessage(agent.id, "after protection");
+      expect((await client.waitForFinish(agent.id, 30_000)).status).toBe("idle");
+      await client.close();
+      client = undefined;
+      const restart = await f.ok(["restart", "--home", home, "--timeout", "30"]);
+      expect(restart.supervisorPid).toBe(launch.pid);
+      expect(restart.workerPid).not.toBe(workerPid);
+      await f.ok(["daemon", "stop", "--home", home]);
+    } catch (error) {
+      const log = await readFile(path.join(home, "daemon.log"), "utf8").catch(() => "");
+      throw new Error(`${String(error)}\nDaemon log:\n${log}`, { cause: error });
+    } finally {
+      if (client && agentId) await client.cancelAgent(agentId).catch(() => undefined);
+      await client?.close();
+      const remaining = await readDaemonInstance(home);
+      if (remaining && remaining.pid === launchedPid) {
+        // Test-only emergency cleanup, scoped to the exact launch captured above.
+        await stopDaemonInstance(home, { instance: remaining, force: true, timeoutMs: 1_000 });
+      }
+      await f.close();
+    }
+  },
+  120_000,
+);

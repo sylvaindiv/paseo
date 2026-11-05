@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
-async function runWorker(worker: string, publicationDelay = 0) {
+async function runWorker(worker: string, publicationDelay = 0, timeoutMs = 5_000) {
   const home = await mkdtemp(path.join(tmpdir(), "paseo-readiness-"));
   const workerPath = path.join(home, "worker.mjs");
   const runnerPath = path.join(home, "runner.mjs");
@@ -49,7 +49,7 @@ async function runWorker(worker: string, publicationDelay = 0) {
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error(output));
-      }, 5_000);
+      }, timeoutMs);
       child.once("error", reject);
       child.once("close", (exitCode) => {
         clearTimeout(timer);
@@ -90,7 +90,7 @@ test("a replacement worker must independently reach ready", async () => {
     if (existsSync(marker)) process.exit(0);
     writeFileSync(marker, "started");
     process.on("message", message => {
-      if (message.type === "paseo:graceful-shutdown") process.exit(0);
+      if (message.type === "paseo:graceful-shutdown") process.send({ type: "paseo:shutdown-decision", requestId: message.requestId, accepted: true }, () => process.exit(0));
     });
     process.send({ type: "paseo:ready", listen: "test-endpoint", serverId: "srv_test" });
     process.send({ type: "paseo:restart" });
@@ -113,10 +113,42 @@ test("exit clears publication after an in-flight ready write", async () => {
 test("requested shutdown before first readiness exits successfully", async () => {
   const result = await runWorker(`
     process.on("message", message => {
-      if (message.type === "paseo:graceful-shutdown") process.exit(0);
+      if (message.type === "paseo:graceful-shutdown") process.send({ type: "paseo:shutdown-decision", requestId: message.requestId, accepted: true }, () => process.exit(0));
     });
     process.send({ type: "paseo:shutdown", reason: "cancelled_start" });
   `);
   expect(result.code).toBe(0);
   expect(result.events).toEqual([null]);
+});
+
+test("refused and unanswered shutdown requests never kill the worker or queue a later stop", async () => {
+  const result = await runWorker(
+    `
+    let requests = 0;
+    process.on("message", message => {
+      if (message.type !== "paseo:graceful-shutdown") return;
+      requests++;
+      if (requests === 1) {
+        process.send({ type: "paseo:shutdown-decision", requestId: message.requestId, accepted: false });
+        setTimeout(() => process.kill(process.ppid, "SIGTERM"), 50);
+      } else if (requests === 2) {
+        // No answer, followed by a stale acceptance, must not authorize a kill.
+        process.send({ type: "paseo:shutdown-decision", requestId: "stale", accepted: true });
+      } else {
+        process.send({ type: "paseo:shutdown-decision", requestId: message.requestId, accepted: true }, () => process.exit(0));
+      }
+    });
+    process.send({ type: "paseo:ready", listen: "protected", serverId: "srv_test" });
+    process.kill(process.ppid, "SIGTERM");
+    setTimeout(() => {
+      console.log("worker survived refused and unanswered requests");
+      process.kill(process.ppid, "SIGTERM");
+    }, 11_000);
+  `,
+    0,
+    15_000,
+  );
+  expect(result.output).toContain("worker survived refused and unanswered requests");
+  expect(result.code).toBe(0);
+  expect(result.output).not.toContain("forcing process tree kill");
 });

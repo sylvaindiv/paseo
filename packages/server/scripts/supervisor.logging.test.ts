@@ -47,7 +47,10 @@ async function runSupervisorFixture(options: {
   }
   await writeFile(
     workerPath,
-    `process.send?.({ type: "paseo:ready", listen: "fixture", serverId: "srv_fixture" });\n${options.workerSource}`,
+    `process.on("message", message => {
+      if (message?.type === "paseo:graceful-shutdown") process.send?.({ type: "paseo:shutdown-decision", requestId: message.requestId, accepted: true });
+    });
+process.send?.({ type: "paseo:ready", listen: "fixture", serverId: "srv_fixture" });\n${options.workerSource}`,
   );
   await writeFile(
     runnerPath,
@@ -333,7 +336,7 @@ describe("supervisor durable logging", () => {
     expect(result.log).not.toContain('"msg":"Worker heartbeat timed out; restarting worker"');
   }, 25_000);
 
-  test("forces shutdown when a worker ignores the graceful shutdown request", async () => {
+  test("forces shutdown only after the worker accepts but fails to exit", async () => {
     const result = await runSupervisorFixture({
       timeoutMs: 15_000,
       workerSource: `

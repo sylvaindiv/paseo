@@ -10,6 +10,7 @@ import { getProcessDiagnostics } from "./process-diagnostics.js";
 process.title = "Paseo Daemon";
 
 type SupervisorLifecycleMessage =
+  | { type: "paseo:shutdown-decision"; requestId: string; accepted: boolean }
   | {
       type: "paseo:shutdown";
       reason: string;
@@ -151,10 +152,30 @@ async function main() {
     options?: {
       reason?: string;
       successExitCode?: number;
+      requestId?: string;
     },
   ) => {
     const reason = options?.reason ?? `worker_received_${signal}`;
     if (!shutdownPromise) {
+      try {
+        if (!daemon) throw new Error("Daemon initialization is still in progress");
+        daemon.agentManager.prepareForSafeShutdown();
+      } catch (error) {
+        logger.warn({ err: error, signal, reason }, "Daemon shutdown refused; preserving agents");
+        if (options?.requestId)
+          sendSupervisorLifecycleMessage({
+            type: "paseo:shutdown-decision",
+            requestId: options.requestId,
+            accepted: false,
+          });
+        return;
+      }
+      if (options?.requestId)
+        sendSupervisorLifecycleMessage({
+          type: "paseo:shutdown-decision",
+          requestId: options.requestId,
+          accepted: true,
+        });
       logger.info(
         { signal, reason, ...getProcessDiagnostics() },
         `${signal} received, shutting down gracefully...`,
@@ -186,6 +207,12 @@ async function main() {
         }
       })();
     } else {
+      if (options?.requestId)
+        sendSupervisorLifecycleMessage({
+          type: "paseo:shutdown-decision",
+          requestId: options.requestId,
+          accepted: true,
+        });
       logger.info(
         { signal, reason, ...getProcessDiagnostics() },
         `${signal} received while shutdown is already in progress`,
@@ -278,9 +305,11 @@ async function main() {
         return;
       }
       if (type === "paseo:graceful-shutdown") {
-        const reason = (message as { reason?: unknown }).reason;
+        const { reason, requestId } = message as { reason?: unknown; requestId?: unknown };
+        if (typeof requestId !== "string") return;
         beginShutdown("Supervisor shutdown request", {
           reason: typeof reason === "string" ? reason : "supervisor_requested_shutdown",
+          requestId,
         });
       }
     });
@@ -307,6 +336,8 @@ async function main() {
   };
 
   installSupervisorLivenessGuard();
+  process.on("SIGTERM", () => beginShutdown("SIGTERM"));
+  process.on("SIGINT", () => beginShutdown("SIGINT"));
 
   try {
     daemon = await createPaseoDaemon(
@@ -337,9 +368,6 @@ async function main() {
     logger.fatal({ err }, "Daemon failed to start listening");
     throw err;
   }
-
-  process.on("SIGTERM", () => beginShutdown("SIGTERM"));
-  process.on("SIGINT", () => beginShutdown("SIGINT"));
 
   process.on("uncaughtException", (err) => {
     logger.fatal({ err }, "Uncaught exception — daemon crashing");

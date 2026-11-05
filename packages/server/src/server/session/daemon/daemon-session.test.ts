@@ -48,6 +48,8 @@ function makeSubsystem(overrides: {
   const emitted: SessionOutboundMessage[] = [];
   const restartIntents: Parameters<DaemonSessionHost["emitLifecycleIntent"]>[0][] = [];
   const host: DaemonSessionHost = {
+    assertShutdownAllowed: () => {},
+    prepareForRestart: () => {},
     emit: (msg) => emitted.push(msg),
     emitLifecycleIntent: (intent) => restartIntents.push(intent),
   };

@@ -1644,6 +1644,132 @@ function fakeCodexEmitting(args: FakeCodexEmitterArgs): AgentClient {
 
 const logger = createTestLogger();
 
+test("safe shutdown refuses a pending turn without closing admission or deferring shutdown", async () => {
+  const manager = new AgentManager({ clients: { codex: new TestAgentClient() }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+    workspaceId: undefined,
+  });
+  const stream = manager.streamAgent(agent.id, "keep working");
+  expect(() => manager.prepareForSafeShutdown()).toThrow("Un agent travaille encore.");
+  await drainAsyncGenerator(stream);
+  await manager.runAgent(agent.id, "still available");
+  manager.prepareForSafeShutdown();
+  expect(() => manager.streamAgent(agent.id, "too late")).toThrow(AgentManagerShuttingDownError);
+  expect(() => manager.prepareForSafeShutdown()).not.toThrow();
+  await expect(
+    manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+      workspaceId: undefined,
+    }),
+  ).rejects.toThrow(AgentManagerShuttingDownError);
+  await manager.closeAgent(agent.id);
+});
+
+test("safe shutdown protects a creation before it registers its agent", async () => {
+  const client = new HeldAgentCreationClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const creation = manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+    workspaceId: undefined,
+  });
+  await client.waitForCreationToStart();
+  expect(() => manager.prepareForSafeShutdown()).toThrow("Un agent travaille encore.");
+  client.finishCreating();
+  const agent = await creation;
+  await manager.runAgent(agent.id, "creation survived");
+  manager.prepareForSafeShutdown();
+  await manager.closeAgent(agent.id);
+});
+
+test.each(["turn", "permission", "subagent"])(
+  "safe shutdown protects live %s activity on an otherwise idle session",
+  async (activity) => {
+    const client = new SessionRecordingAgentClient();
+    const manager = new AgentManager({ clients: { codex: client }, logger });
+    const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+      workspaceId: undefined,
+    });
+    const session = client.sessions[0]!;
+    if (activity === "turn")
+      session.pushEvent({ type: "turn_started", provider: "codex", turnId: "autonomous" });
+    if (activity === "permission")
+      session.pushEvent({
+        type: "permission_requested",
+        provider: "codex",
+        request: { id: "permission", provider: "codex", kind: "tool", name: "Read" },
+      });
+    if (activity === "subagent")
+      session.pushEvent({
+        type: "provider_subagent",
+        provider: "codex",
+        event: { type: "upsert", id: "child", status: "running" },
+      });
+    expect(() => manager.prepareForSafeShutdown()).toThrow("Un agent travaille encore.");
+    if (activity === "turn")
+      session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "autonomous" });
+    if (activity === "permission")
+      session.pushEvent({
+        type: "permission_resolved",
+        provider: "codex",
+        requestId: "permission",
+        resolution: { behavior: "allow" },
+      });
+    if (activity === "subagent")
+      session.pushEvent({
+        type: "provider_subagent",
+        provider: "codex",
+        event: { type: "upsert", id: "child", status: "completed" },
+      });
+    await vi.waitFor(() => expect(() => manager.assertShutdownAllowed()).not.toThrow());
+    await manager.runAgent(agent.id, "refusal did not close admission");
+    manager.prepareForSafeShutdown();
+    await manager.closeAgent(agent.id);
+  },
+);
+
+test("safe shutdown protects a resume before it registers its agent", async () => {
+  const started = deferred<void>();
+  const release = deferred<void>();
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(
+      handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      started.resolve();
+      await release.promise;
+      return super.resumeSession(handle, config);
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const resume = manager.resumeAgentFromPersistence(
+    { provider: "codex", sessionId: "saved-session" },
+    { cwd: process.cwd() },
+  );
+  await started.promise;
+  expect(() => manager.prepareForSafeShutdown()).toThrow("Un agent travaille encore.");
+  release.resolve();
+  const agent = await resume;
+  await manager.runAgent(agent.id, "resumed");
+  manager.prepareForSafeShutdown();
+  await manager.closeAgent(agent.id);
+});
+
+test("safe shutdown protects runtime initialization and managed subagents", async () => {
+  const client = new HeldRuntimeInfoClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const creating = manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+    workspaceId: undefined,
+    labels: { [PARENT_AGENT_ID_LABEL]: randomUUID() },
+  });
+  await client.waitForRuntimeInfo();
+  expect(() => manager.prepareForSafeShutdown()).toThrow("Un agent travaille encore.");
+  client.finishRuntimeInfo();
+  const agent = await creating;
+  const stream = manager.streamAgent(agent.id, "child work");
+  expect(() => manager.prepareForSafeShutdown()).toThrow("Un agent travaille encore.");
+  await drainAsyncGenerator(stream);
+  manager.prepareForSafeShutdown();
+  await manager.closeAgent(agent.id);
+});
+
 test("does not register a session that finishes starting after shutdown begins", async () => {
   const client = new HeldAgentCreationClient();
   const manager = new AgentManager({

@@ -1,3 +1,4 @@
+import { DaemonBusyError } from "../../lifecycle-reasons.js";
 import { SessionDelivery } from "../owned-subscriptions/index.js";
 import { describe, expect, test } from "vitest";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
@@ -25,10 +26,14 @@ function createController(input: {
   updater: TestUpdater;
   daemonVersion?: string | null;
   desktopManaged?: boolean;
+  assertShutdownAllowed?: () => void;
+  prepareForRestart?: () => void;
 }): ControllerHarness {
   const emitted: SessionOutboundMessage[] = [];
   const restartIntents: RestartIntent[] = [];
   const controller = new DaemonSelfUpdateSessionController({
+    assertShutdownAllowed: input.assertShutdownAllowed ?? (() => {}),
+    prepareForRestart: input.prepareForRestart ?? (() => {}),
     clientId: "client-1",
     daemonVersion: input.daemonVersion ?? "0.1.15",
     desktopManaged: input.desktopManaged,
@@ -192,6 +197,8 @@ test("self-update progress is request-owned through the final delivery boundary"
   delivery.attach(sibling, true);
   let lateProgress: (() => void) | undefined;
   const controller = new DaemonSelfUpdateSessionController({
+    assertShutdownAllowed: () => {},
+    prepareForRestart: () => {},
     clientId: "safe-update",
     daemonVersion: "0.8.0",
     sessionLogger: createTestLogger(),
@@ -222,3 +229,37 @@ test("self-update progress is request-owned through the final delivery boundary"
   lateProgress?.();
   expect(frames).toHaveLength(3);
 });
+
+test.each(["before update", "before restart"])(
+  "refuses a busy daemon %s without announcing success",
+  async (stage) => {
+    let updates = 0;
+    const refuse = () => {
+      throw new DaemonBusyError();
+    };
+    const { controller, emitted, restartIntents } = createController({
+      updater: {
+        async update() {
+          updates++;
+          return { success: true, error: null, newVersion: "1.2.3" };
+        },
+      },
+      assertShutdownAllowed: stage === "before update" ? refuse : () => {},
+      prepareForRestart: stage === "before restart" ? refuse : () => {},
+    });
+    await controller.dispatch(updateRequest);
+    expect(updates).toBe(stage === "before update" ? 0 : 1);
+    expect(emitted).toEqual([
+      {
+        type: "rpc_error",
+        payload: {
+          requestId: "update-1",
+          requestType: "daemon.update.request",
+          error: "Un agent travaille encore.",
+          code: "DAEMON_BUSY",
+        },
+      },
+    ]);
+    expect(restartIntents).toEqual([]);
+  },
+);

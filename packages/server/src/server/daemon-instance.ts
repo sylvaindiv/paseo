@@ -102,37 +102,41 @@ async function requestInstanceStop(
 ) {
   let forced = false;
   let usedLifecycleRpc = false;
-  if (process.platform === "win32") {
-    if (instance.listen && options.requestShutdown) {
-      try {
-        await options.requestShutdown({ ...instance, listen: instance.listen });
-        usedLifecycleRpc = true;
-      } catch (error) {
-        if (!options.force) throw error;
-        const current = await getPidLockInfo(home);
-        if (current && !isSamePidLock(instance, current))
-          throw new DaemonInstanceError(
-            "DAEMON_REPLACED",
-            `Supervisor changed for ${home}; refusing forced cleanup.`,
-          );
-        await killTree(instance.pid, "SIGKILL");
-        forced = true;
-      }
-    } else if (!options.force) {
-      throw new DaemonInstanceError(
-        "STOP_NO_GRACEFUL_CHANNEL",
-        `PID ${instance.pid} for ${home} has no graceful shutdown channel. Use --force explicitly to terminate it.`,
-      );
-    } else {
+  if (instance.listen && options.requestShutdown) {
+    try {
+      await options.requestShutdown({ ...instance, listen: instance.listen });
+      usedLifecycleRpc = true;
+    } catch (error) {
+      // --force is recovery for an unreachable process, never an override of a
+      // live daemon's refusal (including busy, authorization and handler errors).
+      const code = error && typeof error === "object" && "code" in error ? error.code : null;
+      if (
+        !options.force ||
+        ![
+          "DAEMON_CONNECTION_LOST",
+          "DAEMON_REQUEST_TIMEOUT",
+          "DAEMON_UNREACHABLE",
+          "DAEMON_NOT_READY",
+        ].includes(String(code))
+      )
+        throw error;
+      const current = await getPidLockInfo(home);
+      if (current && !isSamePidLock(instance, current))
+        throw new DaemonInstanceError(
+          "DAEMON_REPLACED",
+          `Supervisor changed for ${home}; refusing forced cleanup.`,
+        );
       await killTree(instance.pid, "SIGKILL");
       forced = true;
     }
+  } else if (!options.force) {
+    throw new DaemonInstanceError(
+      "STOP_NO_GRACEFUL_CHANNEL",
+      `PID ${instance.pid} for ${home} has no graceful shutdown channel. Use --force explicitly to terminate it.`,
+    );
   } else {
-    try {
-      process.kill(instance.pid, "SIGTERM");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
+    await killTree(instance.pid, "SIGKILL");
+    forced = true;
   }
   return { forced, usedLifecycleRpc };
 }

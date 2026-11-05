@@ -58,6 +58,23 @@ work is gone. Report that exit as a turn failure so the agent lands in `error` w
 Claude and OMP report exits between turns. OMP relaunches from its session file on the next prompt;
 the unfinished turn is lost.
 
+### Daemon shutdown
+
+Stopping or restarting the daemon refuses while an agent is initializing, running, waiting for
+permission, or has an admitted turn or provider subagent. Pending registrations and provider events
+also block the decision. The daemon closes admission synchronously only after that check passes.
+A refused request is discarded; finishing a turn never triggers a deferred shutdown.
+
+Quitting the desktop may leave the daemon running even when stop-on-quit is enabled. The desktop
+closes normally after a busy refusal or an uncertain stop result and reconnects to the same daemon
+on its next launch. Local CLI stops use the lifecycle RPC on every platform. `--force` cannot
+bypass a busy refusal; it is recovery for an inaccessible process.
+
+The supervisor waits for a correlated worker acceptance before arming its termination deadline.
+A refusal, missing reply, or repeated signal cannot authorize a kill. Direct worker SIGTERM/SIGINT
+requests use the same activity check. Crashes, SIGKILL, supervisor loss, and host shutdown remain
+outside this protection.
+
 ### Cancellation
 
 Provider interruption is idempotent at the `AgentSession` boundary. It resolves when the prior

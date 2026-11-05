@@ -93,6 +93,39 @@ describe("quit-lifecycle", () => {
     expect(events).toEqual([]);
   });
 
+  it.each(["DAEMON_BUSY", "DAEMON_UNREACHABLE"])(
+    "preserves the daemon on %s and still closes the interface",
+    async (code) => {
+      const error = Object.assign(new Error("Un agent travaille encore."), { code });
+      const preserved: unknown[] = [];
+      const exits: number[] = [];
+      const lifecycle = createQuitLifecycle({
+        app: { exit: (value) => exits.push(value) },
+        closeTransportSessions: () => {},
+        stopDesktopManagedDaemonIfNeeded: () =>
+          stopDesktopManagedDaemonOnQuitIfNeeded({
+            settingsStore: { get: async () => SETTINGS_STOP_ON_QUIT },
+            isDesktopManagedDaemonRunning: () => true,
+            stopDaemon: async () => {
+              throw error;
+            },
+            showShutdownFeedback: () => {},
+            onDaemonPreserved: (reason) => preserved.push(reason),
+          }),
+        installAppUpdateOnQuit: async () => false,
+        createUpdateDeadlineSignal: () => new AbortController().signal,
+        onStopError: () => {
+          throw new Error("refusal must preserve the daemon");
+        },
+        onUpdateError: () => {},
+      });
+      lifecycle.handleBeforeQuit({ preventDefault() {} });
+      await waitForQuitLifecycle();
+      expect(preserved).toEqual([error]);
+      expect(exits).toEqual([0]);
+    },
+  );
+
   it("shows feedback then stops a desktop-managed daemon", async () => {
     const events: string[] = [];
 

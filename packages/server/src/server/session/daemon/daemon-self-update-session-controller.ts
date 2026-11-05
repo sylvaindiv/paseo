@@ -1,3 +1,4 @@
+import { DaemonBusyError } from "../../lifecycle-reasons.js";
 import type pino from "pino";
 import type { SessionInboundMessage, SessionOutboundMessage } from "../../messages.js";
 import {
@@ -29,6 +30,8 @@ export interface DaemonSelfUpdateSessionControllerOptions {
   emitLifecycleIntent: (intent: DaemonSelfUpdateRestartIntent) => void;
   sessionLogger: pino.Logger;
   updater?: Pick<DaemonSelfUpdater, "update">;
+  assertShutdownAllowed: () => void;
+  prepareForRestart: () => void;
 }
 
 function isDaemonSelfUpdateMessage(msg: SessionInboundMessage): msg is DaemonUpdateRequest {
@@ -44,7 +47,7 @@ export class DaemonSelfUpdateSessionController {
   private readonly sessionLogger: pino.Logger;
   private readonly updater: Pick<DaemonSelfUpdater, "update">;
 
-  constructor(options: DaemonSelfUpdateSessionControllerOptions) {
+  constructor(private readonly options: DaemonSelfUpdateSessionControllerOptions) {
     this.clientId = options.clientId;
     this.daemonVersion = options.daemonVersion;
     this.desktopManaged = options.desktopManaged === true;
@@ -65,6 +68,7 @@ export class DaemonSelfUpdateSessionController {
     const previousVersion = this.daemonVersion;
 
     try {
+      this.options.assertShutdownAllowed();
       const result = await this.updater.update({
         daemonVersion: previousVersion,
         desktopManaged: this.desktopManaged,
@@ -72,6 +76,7 @@ export class DaemonSelfUpdateSessionController {
         logger: this.sessionLogger,
       });
 
+      if (result.success) this.options.prepareForRestart();
       this.emitResponse({
         requestId: msg.requestId,
         success: result.success,
@@ -90,14 +95,14 @@ export class DaemonSelfUpdateSessionController {
         reason: "daemon_update",
       });
     } catch (error) {
-      if (error instanceof DaemonSelfUpdateInProgressError) {
+      if (error instanceof DaemonSelfUpdateInProgressError || error instanceof DaemonBusyError) {
         this.emit({
           type: "rpc_error",
           payload: {
             requestId: msg.requestId,
             requestType: "daemon.update.request",
             error: error.message,
-            code: "already_updating",
+            code: error instanceof DaemonBusyError ? error.code : "already_updating",
           },
         });
         return;

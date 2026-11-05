@@ -33,6 +33,7 @@ export interface StopOnQuitDeps {
   isDesktopManagedDaemonRunning: () => boolean;
   stopDaemon: () => Promise<unknown>;
   showShutdownFeedback: () => void;
+  onDaemonPreserved?: (error: unknown) => void;
 }
 
 export function registerExternalQuitSignals({
@@ -40,14 +41,14 @@ export function registerExternalQuitSignals({
   quit,
 }: {
   signals: ExternalQuitSignalSource;
-  quit: () => void;
+  quit: (signal: NodeJS.Signals) => void;
 }): void {
   let quitRequested = false;
   for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] satisfies NodeJS.Signals[]) {
     signals.on(signal, () => {
       if (quitRequested) return;
       quitRequested = true;
-      quit();
+      quit(signal);
     });
   }
 }
@@ -69,8 +70,15 @@ export async function stopDesktopManagedDaemonOnQuitIfNeeded(
   }
 
   deps.showShutdownFeedback();
-  await deps.stopDaemon();
-  return true;
+  try {
+    await deps.stopDaemon();
+    return true;
+  } catch (error) {
+    // A refusal or uncertain result must never turn quitting the UI into a
+    // forced stop. The daemon remains independently owned by its supervisor.
+    deps.onDaemonPreserved?.(error);
+    return false;
+  }
 }
 
 function waitForUpdateDeadline(signal: AbortSignal): Promise<boolean> {

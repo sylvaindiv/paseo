@@ -1,3 +1,4 @@
+import { DaemonBusyError } from "./lifecycle-reasons.js";
 import { AgentBrowserError, agentBrowserDashboardsForHome } from "./agent-browser.js";
 import type { DesktopToolsBroker } from "./desktop-tools/broker.js";
 import { selectResponseContext } from "./response-context.js";
@@ -1050,6 +1051,8 @@ export class Session {
       host: {
         emit: (msg) => this.emit(msg),
         emitLifecycleIntent: (intent) => this.emitLifecycleIntent(intent),
+        assertShutdownAllowed: () => this.agentManager.assertShutdownAllowed(),
+        prepareForRestart: () => this.agentManager.prepareForSafeShutdown(),
       },
       clientId: this.clientId,
       paseoHome: this.paseoHome,
@@ -2159,8 +2162,11 @@ export class Session {
               payload: {
                 requestId,
                 requestType: msg.type,
-                error: `Request failed: ${err.message}`,
-                code: "handler_error",
+                error:
+                  error instanceof DaemonBusyError
+                    ? error.message
+                    : `Request failed: ${err.message}`,
+                code: error instanceof DaemonBusyError ? error.code : "handler_error",
               },
             });
           } catch (emitError) {
@@ -3245,6 +3251,7 @@ export class Session {
   }
 
   private async handleRestartServerRequest(requestId: string, reason?: string): Promise<void> {
+    this.agentManager.prepareForSafeShutdown();
     const lifecycleReason = normalizeClientRestartRpcReason(reason);
     const payload: { status: string } & Record<string, unknown> = {
       status: "restart_requested",
@@ -3270,6 +3277,7 @@ export class Session {
   }
 
   private async handleShutdownServerRequest(requestId: string): Promise<void> {
+    this.agentManager.prepareForSafeShutdown();
     const reason = CLIENT_SHUTDOWN_RPC_REASON;
     this.sessionLogger.warn({ reason }, "Shutdown requested via websocket");
     this.emit({

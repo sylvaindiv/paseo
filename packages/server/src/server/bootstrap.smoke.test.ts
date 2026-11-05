@@ -599,6 +599,53 @@ describe("paseo daemon bootstrap", () => {
     }
   });
 
+  test("busy lifecycle RPCs preserve the connection and agent across client reconnects", async () => {
+    const handle = await createTestPaseoDaemon();
+    const manager = handle.daemon.agentManager;
+    let client = new DaemonClient({
+      url: `ws://127.0.0.1:${handle.port}/ws`,
+      appVersion: "0.1.82",
+    });
+    try {
+      await client.connect();
+      const agent = await manager.createAgent(
+        { provider: "codex", cwd: handle.paseoHome },
+        undefined,
+        { workspaceId: undefined },
+      );
+      const stream = manager.streamAgent(agent.id, "continue after reconnect");
+      const workerPid = (await client.getDaemonStatus()).pid;
+      await expect(client.shutdownServer()).rejects.toMatchObject({
+        code: "DAEMON_BUSY",
+        message: expect.stringContaining("Un agent travaille encore."),
+      });
+      await expect(client.restartServer("test_busy")).rejects.toMatchObject({
+        code: "DAEMON_BUSY",
+      });
+      await client.close();
+      client = new DaemonClient({ url: `ws://127.0.0.1:${handle.port}/ws`, appVersion: "0.1.82" });
+      await client.connect();
+      expect((await client.getDaemonStatus()).pid).toBe(workerPid);
+      expect(manager.getAgent(agent.id)).toMatchObject({
+        id: agent.id,
+        persistence: agent.persistence,
+      });
+      for await (const _event of stream) {
+        /* drain the admitted turn */
+      }
+      await manager.runAgent(agent.id, "a new turn still works");
+      await expect(client.shutdownServer()).resolves.toMatchObject({
+        status: "shutdown_requested",
+      });
+      expect(() => manager.streamAgent(agent.id, "too late")).toThrow(
+        AgentManagerShuttingDownError,
+      );
+    } finally {
+      await client.close();
+      await handle.close();
+    }
+  });
+
   test("stops new connections and agent registrations before closing agents", async () => {
     const shutdown = await beginDaemonShutdownWithAgentClosing();
     try {

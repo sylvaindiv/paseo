@@ -85,6 +85,25 @@ export async function runExternalCliJsonCommand(args: string[]): Promise<unknown
       stderr: stderr.slice(0, 500),
       command: invocation.command,
     });
+    let failure: unknown;
+    try {
+      failure = JSON.parse(stderr);
+    } catch {
+      // Non-JSON failures retain the original diagnostic.
+    }
+    if (failure && typeof failure === "object" && "error" in failure) {
+      const error = failure.error;
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        typeof error.code === "string" &&
+        "message" in error &&
+        typeof error.message === "string"
+      ) {
+        throw Object.assign(new Error(error.message), { code: error.code });
+      }
+    }
     throw new Error(externalCliFailureMessage(result.exitCode, stdout, stderr));
   }
 

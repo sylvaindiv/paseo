@@ -1192,6 +1192,7 @@ const quitLifecycle = createQuitLifecycle({
       isDesktopManagedDaemonRunning: isDesktopManagedDaemonRunningSync,
       stopDaemon: () => stopDesktopDaemonViaCli("quit"),
       showShutdownFeedback: showDaemonShutdownDialog,
+      onDaemonPreserved: (error) => log.info("[desktop daemon] preserved on quit", { error }),
     }),
   installAppUpdateOnQuit: async (signal) => {
     const settings = await getDesktopSettingsStore().get();
@@ -1215,8 +1216,17 @@ electronAutoUpdater.on("before-quit-for-update", () => {
   log.info("[auto-updater] before-quit-for-update", { currentVersion: app.getVersion() });
   quitLifecycle.handleBeforeQuitForUpdate();
 });
-app.on("before-quit", quitLifecycle.handleBeforeQuit);
-registerExternalQuitSignals({ signals: process, quit: () => app.quit() });
+app.on("before-quit", (event) => {
+  log.info("[desktop] quit requested");
+  quitLifecycle.handleBeforeQuit(event);
+});
+registerExternalQuitSignals({
+  signals: process,
+  quit: (signal) => {
+    log.info("[desktop] external quit signal", { signal });
+    app.quit();
+  },
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
