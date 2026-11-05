@@ -981,11 +981,19 @@ function buildInitialWorkspaceAgentConfig(
 }
 
 async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<SubmitOutcome> {
-  const { payload, composerState, ensureWorkspace, serverId, clearDraft } = input;
+  const { payload, ensureWorkspace, serverId, clearDraft } = input;
+  let { composerState } = input;
   const clearConsumedDraft = captureWorkspaceDraftCleanup(input);
   const { text, attachments, cwd } = payload;
   if (!composerState) {
     throw new Error(input.labels.composerStateRequired);
+  }
+  if (!input.launchProfile) {
+    composerState = {
+      ...composerState,
+      featureValues: await composerState.resolveFeatureValuesForSubmit(),
+    };
+    input = { ...input, composerState };
   }
   const provider = input.launchProfile?.provider ?? composerState.selectedProvider;
   if (!provider) {

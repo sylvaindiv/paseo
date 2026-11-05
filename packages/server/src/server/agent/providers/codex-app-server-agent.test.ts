@@ -7286,3 +7286,49 @@ describe("Codex denied plan approvals", () => {
     });
   });
 });
+
+test("draft features reuse catalog discovery without creating a Codex thread", async () => {
+  const server = createFakeCodexAppServer({
+    "model/list": () => ({
+      data: [
+        {
+          id: "model-a",
+          isDefault: true,
+          serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+        },
+      ],
+    }),
+    "collaborationMode/list": () => ({ data: [{ name: "Plan", mode: "plan" }] }),
+  });
+  const client = createProviderWithFakeAppServer(server);
+  await client.fetchCatalog({ scope: "workspace", cwd: "/repo", force: false });
+  const features = await client.listFeatures({ provider: "codex", cwd: "/repo", model: "model-a" });
+  expect(features.map((feature) => feature.id)).toEqual(["service_tier", "plan_mode"]);
+  expect(server.requests().filter((request) => request.method === "initialize")).toHaveLength(1);
+  expect(
+    server.requests().filter((request) => String(request.method).startsWith("thread/")),
+  ).toEqual([]);
+});
+
+test("concurrent draft capability requests share discovery and keep model-specific features", async () => {
+  const server = createFakeCodexAppServer({
+    "model/list": () => ({
+      data: [
+        { id: "fast", serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }] },
+        { id: "normal" },
+      ],
+    }),
+    "collaborationMode/list": () => ({ data: [] }),
+  });
+  const client = createProviderWithFakeAppServer(server);
+  const [fast, normal] = await Promise.all([
+    client.listFeatures({ provider: "codex", cwd: "/repo", model: "fast" }),
+    client.listFeatures({ provider: "codex", cwd: "/other", model: "normal" }),
+  ]);
+  expect(fast.map((feature) => feature.id)).toEqual(["service_tier"]);
+  expect(normal).toEqual([]);
+  expect(server.requests().filter((request) => request.method === "initialize")).toHaveLength(1);
+  expect(
+    server.requests().filter((request) => String(request.method).startsWith("thread/")),
+  ).toEqual([]);
+});

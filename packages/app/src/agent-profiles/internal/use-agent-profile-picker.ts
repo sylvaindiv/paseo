@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useRef } from "react";
+import type { AgentConfigApply } from "@getpaseo/protocol/messages";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { mergeCreateAgentSelectionPreferences } from "@/create-agent-preferences/preferences";
 import { useFormPreferences } from "@/hooks/use-form-preferences";
@@ -16,6 +17,24 @@ import {
 } from "./materialize-profile";
 import { buildAgentProfileTags } from "./profile-summary";
 import { useAgentProfiles } from "./use-agent-profiles";
+
+function mergeProfileConfig(current: AgentConfigApply, next: AgentConfigApply): AgentConfigApply {
+  return {
+    ...current,
+    ...next,
+    ...(current.featureValues || next.featureValues
+      ? {
+          featureValues: { ...current.featureValues, ...next.featureValues },
+        }
+      : {}),
+  };
+}
+
+function pendingProfileConfig(queue: {
+  pending: { config: AgentConfigApply } | null;
+}): AgentConfigApply {
+  return queue.pending?.config ?? {};
+}
 
 /** The draft composer owns profile application as one state transition. */
 export interface DraftAgentProfileControls {
@@ -44,6 +63,7 @@ export interface AgentProfilePicker {
   rows: AgentProfilePickerRow[];
   applyProfile: (profileId: string) => void;
   applyNextProfile: () => boolean;
+  pendingConfig: AgentConfigApply | null;
 }
 
 export interface UseAgentProfilePickerInput {
@@ -78,6 +98,21 @@ export function useAgentProfilePicker(
   const client = useSessionStore((state) => state.sessions[serverId ?? ""]?.client ?? null);
   const toast = useToast();
   const lastAppliedProfileIdRef = useRef<string | null>(null);
+  const agentId = target.kind === "agent" ? target.agentId : null;
+  const queue = useMemo(
+    () => ({
+      serverId,
+      agentId,
+      running: false,
+      pending: null as { profile: MaterializedAgentProfile; config: AgentConfigApply } | null,
+      desired: {} as AgentConfigApply,
+    }),
+    [serverId, agentId],
+  );
+  const [pending, setPending] = useState<{ owner: typeof queue; config: AgentConfigApply } | null>(
+    null,
+  );
+  const pendingConfig = pending?.owner === queue ? pending.config : null;
 
   const applicableProfiles = useMemo(() => {
     if (!isSupported || !profiles) {
@@ -120,7 +155,7 @@ export function useAgentProfilePicker(
           preferences: current,
           provider: resolved.provider,
           modelId: resolved.modelId,
-          modeId: resolved.modeId,
+          modeId: resolved.modeId || undefined,
           thinkingOptionId: resolved.thinkingOptionId,
           ...(Object.keys(resolved.featureValues).length > 0
             ? { featureValues: resolved.featureValues }
@@ -151,20 +186,51 @@ export function useAgentProfilePicker(
       if (!reconciled) {
         return;
       }
-      persistSelection(reconciled);
-      if (!client) {
-        return;
-      }
+      if (!client) return;
       lastAppliedProfileIdRef.current = profileId;
-      void client
-        .applyAgentConfig(target.agentId, toAgentConfigApply(reconciled))
-        .then((notice) => showProviderNoticeToast(toast, notice))
-        .catch((error) => {
-          console.warn("[useAgentProfilePicker] applyAgentConfig failed", error);
-          toast.error(toErrorMessage(error));
-        });
+      const next = toAgentConfigApply(reconciled);
+      queue.desired = mergeProfileConfig(queue.desired, next);
+      // Only coalesce requests that have not started. Omitted fields must not
+      // replay an in-flight setter if that setter fails.
+      queue.pending = {
+        profile: reconciled,
+        config: mergeProfileConfig(queue.pending?.config ?? {}, next),
+      };
+      setPending({ owner: queue, config: queue.desired });
+      if (queue.running) return;
+      queue.running = true;
+      void (async () => {
+        try {
+          while (queue.pending) {
+            const request = queue.pending;
+            queue.pending = null;
+            try {
+              const notice = await client.applyAgentConfig(target.agentId, request.config);
+              persistSelection({
+                ...request.profile,
+                modelId: request.config.modelId ?? "",
+                modeId: request.config.modeId ?? "",
+                thinkingOptionId: request.config.thinkingOptionId ?? "",
+                featureValues: request.config.featureValues ?? {},
+              });
+              showProviderNoticeToast(toast, notice);
+            } catch (error) {
+              console.warn("[useAgentProfilePicker] applyAgentConfig failed", error);
+              toast.error(toErrorMessage(error));
+              queue.desired = pendingProfileConfig(queue);
+              setPending((current) =>
+                current?.owner === queue ? { owner: queue, config: queue.desired } : current,
+              );
+            }
+          }
+        } finally {
+          queue.running = false;
+          queue.desired = {};
+          setPending((current) => (current?.owner === queue ? null : current));
+        }
+      })();
     },
-    [applicableProfiles, client, persistSelection, target, toast],
+    [applicableProfiles, client, persistSelection, queue, target, toast],
   );
 
   const applyNextProfile = useCallback(() => {
@@ -178,7 +244,10 @@ export function useAgentProfilePicker(
   }, [applicableProfiles, applyProfile, client, target]);
 
   return useMemo(
-    () => (isSupported && profiles !== null ? { rows, applyProfile, applyNextProfile } : null),
-    [applyNextProfile, applyProfile, isSupported, profiles, rows],
+    () =>
+      isSupported && profiles !== null
+        ? { rows, applyProfile, applyNextProfile, pendingConfig }
+        : null,
+    [applyNextProfile, applyProfile, isSupported, profiles, rows, pendingConfig],
   );
 }

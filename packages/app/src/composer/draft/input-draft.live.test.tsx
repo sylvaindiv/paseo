@@ -33,6 +33,11 @@ vi.mock("@/attachments/service", () => ({
   garbageCollectAttachments: async () => undefined,
 }));
 
+vi.mock("@/runtime/host-runtime", () => ({
+  useHostRuntimeClient: () => null,
+  useHostRuntimeIsConnected: () => false,
+}));
+
 vi.mock("@/hooks/use-agent-form-state", () => ({
   useAgentFormState: useAgentFormStateMock.mockReturnValue({
     selectedServerId: "host-1",

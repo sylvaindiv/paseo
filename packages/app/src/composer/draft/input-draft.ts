@@ -78,6 +78,7 @@ type DraftComposerState = UseAgentFormStateResult & {
   effectiveThinkingOptionId: string;
   featureValues: Record<string, unknown> | undefined;
   agentControls: DraftAgentControlsProps;
+  resolveFeatureValuesForSubmit: () => Promise<Record<string, unknown> | undefined>;
   commandDraft: DraftCommandTarget;
 };
 
@@ -298,6 +299,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     featureValues: draftFeatureValues,
     setFeatureValue: setDraftFeatureValue,
     applyProfileFeatureValues,
+    resolveForSubmit: resolveFeatureValuesForSubmit,
   } = useDraftAgentFeatures({
     serverId: formState.selectedServerId,
     provider: formState.selectedProvider,
@@ -313,7 +315,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
   const applyDraftAgentProfile = useCallback(
     (profile: Parameters<typeof formState.applyProfileFromUser>[0]) => {
       formState.applyProfileFromUser(profile);
-      applyProfileFeatureValues(profile.featureValues);
+      applyProfileFeatureValues(profile.featureValues, profile.provider);
     },
     [applyProfileFeatureValues, formState],
   );
@@ -347,6 +349,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
       effectiveModelId,
       effectiveThinkingOptionId,
       featureValues: draftFeatureValues,
+      resolveFeatureValuesForSubmit,
       agentControls: buildDraftAgentControls({
         formState,
         features: draftFeatures,
@@ -362,6 +365,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     effectiveThinkingOptionId,
     draftFeatures,
     draftFeatureValues,
+    resolveFeatureValuesForSubmit,
     applyDraftAgentProfile,
     formState,
     setDraftFeatureValue,

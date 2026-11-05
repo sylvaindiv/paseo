@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { router } from "expo-router";
 import {
   View,
+  ActivityIndicator,
   Text,
   Pressable,
   Keyboard,
@@ -1758,6 +1759,32 @@ export const AgentControls = memo(function AgentControls({
     availableProviders: profileProviders,
     target: profileTarget,
   });
+  const displayedConfig = useMemo(() => {
+    const pending = agentProfiles?.pendingConfig;
+    const featureValues = pending?.featureValues;
+    return {
+      isApplying: Boolean(pending),
+      modelId: pending?.modelId ?? modelSelection.activeModelId ?? undefined,
+      thinkingOptionId: pending?.thinkingOptionId ?? modelSelection.selectedThinkingId ?? undefined,
+      features: featureValues
+        ? agent?.features?.map((feature) =>
+            Object.prototype.hasOwnProperty.call(featureValues, feature.id)
+              ? ({ ...feature, value: featureValues[feature.id] } as AgentFeature)
+              : feature,
+          )
+        : agent?.features,
+      modeControl:
+        modeControl && pending?.modeId
+          ? { ...modeControl, selectedModeId: pending.modeId, disabled: true }
+          : modeControl,
+    };
+  }, [
+    agentProfiles,
+    agent?.features,
+    modelSelection.activeModelId,
+    modelSelection.selectedThinkingId,
+    modeControl,
+  ]);
   const handleEditAgentProfiles = useEditAgentProfilesNavigation(serverId, agentProfiles !== null);
   const profileEditor = useAgentProfileEditor(serverId);
   const profileActions = resolveAgentProfileEditorActions(agentProfiles !== null, profileEditor);
@@ -1887,11 +1914,14 @@ export const AgentControls = memo(function AgentControls({
     <>
       {commandCenterRegistration}
       {profileEditor.element}
+      {displayedConfig.isApplying ? (
+        <ActivityIndicator size="small" testID="agent-profile-applying" />
+      ) : null}
       <ControlledAgentControls
         provider={agent.provider}
         modelSelectorProviders={agentModelSelectorProviders}
         modelOptions={modelOptions}
-        selectedModelId={modelSelection.activeModelId ?? undefined}
+        selectedModelId={displayedConfig.modelId}
         onSelectModel={handleSelectModel}
         agentProfiles={agentProfiles}
         onApplyAgentProfile={agentProfiles?.applyProfile}
@@ -1899,9 +1929,9 @@ export const AgentControls = memo(function AgentControls({
         onCreateAgentProfile={profileActions.create}
         onEditAgentProfile={profileActions.edit}
         thinkingOptions={thinkingOptions.length > 0 ? thinkingOptions : undefined}
-        selectedThinkingOptionId={modelSelection.selectedThinkingId ?? undefined}
+        selectedThinkingOptionId={displayedConfig.thinkingOptionId}
         onSelectThinkingOption={handleSelectThinkingOption}
-        features={agent.features}
+        features={displayedConfig.features}
         onSetFeature={handleSetFeature}
         isModelLoading={snapshotIsLoading || selectedProviderIsLoading}
         onModelSelectorOpen={handleModelSelectorOpen}
@@ -1909,7 +1939,7 @@ export const AgentControls = memo(function AgentControls({
         isRetryingModelProvider={snapshotIsRefreshing}
         onDropdownClose={onDropdownClose}
         disabled={!client}
-        modeControl={modeControl}
+        modeControl={displayedConfig.modeControl}
         modelSelectorServerId={serverId}
         isCompactLayout={isCompactLayout}
       />

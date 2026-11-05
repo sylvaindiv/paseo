@@ -1,4 +1,9 @@
-import { expect, test } from "../support/fixtures";
+import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
+import { execFile } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
+import { expect, test, type Page } from "../support/fixtures";
 import {
   applyProfileFromPicker,
   closeModelPicker,
@@ -39,7 +44,255 @@ const PROFILE = {
 
 const PROFILE_SUMMARY = "Mock Load Test · One minute stream · Approval test";
 
+async function measureComposerTyping(
+  page: Page,
+  prefix: string,
+  scriptName = "profile-composer-typing.mjs",
+  environment: Record<string, string> = {},
+) {
+  const statePath = `${prefix}-state.json`;
+  await page.context().storageState({ path: statePath });
+  // Run the existing benchmark against this worker's isolated host and browser state.
+  const original = await readFile(path.resolve("scripts", scriptName), "utf8");
+  const script = original
+    .replace(
+      "chromium.launch({ headless })",
+      "chromium.launch({ headless, channel: process.env.PASEO_PROFILE_BROWSER_CHANNEL || undefined })",
+    )
+    .replace(
+      "browser.newPage({ viewport: { width: 1440, height: 1000 } })",
+      "browser.newPage({ viewport: { width: 1440, height: 1000 }, storageState: process.env.PASEO_PROFILE_STORAGE_STATE })",
+    );
+  const scriptPath = `${prefix}.mjs`;
+  await writeFile(scriptPath, script);
+  const { stdout } = await promisify(execFile)(process.execPath, [scriptPath], {
+    env: {
+      ...process.env,
+      PASEO_PROFILE_APP_URL: new URL(page.url()).origin,
+      PASEO_PROFILE_STORAGE_STATE: statePath,
+      PASEO_PROFILE_BROWSER_CHANNEL:
+        test.info().project.use.channel ?? test.info().project.use.launchOptions?.channel ?? "",
+      PASEO_PROFILE_TYPING_KEYS: "60",
+      PASEO_PROFILE_TYPING_REPEATS: "1",
+      ...environment,
+    },
+    timeout: 60_000,
+    maxBuffer: 2_000_000,
+  });
+  return JSON.parse(stdout);
+}
+
+async function delayProfileRequests(page: Page, delayMs: number) {
+  const stats = { requests: 0 };
+  await page.routeWebSocket(daemonWsRoutePattern(), (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage(async (message) => {
+      const envelope = JSON.parse(String(message));
+      if (envelope.type === "session" && envelope.message?.type === "agent.config.apply.request") {
+        stats.requests++;
+        if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      server.send(message);
+    });
+    server.onMessage((message) => socket.send(message));
+  });
+  return stats;
+}
+
+async function measureProfileCycle(element: HTMLElement) {
+  const samples: number[] = [];
+  const longTasks: number[] = [];
+  const requests: { at: number; label: string }[] = [];
+  const changes: string[] = [];
+  let skipped = 0;
+  const currentLabel = () =>
+    document.querySelector('[aria-label^="Select model ("]')?.getAttribute("aria-label") ?? "";
+  let lastLabel = currentLabel();
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) longTasks.push(entry.duration);
+  });
+  observer.observe({ type: "longtask" });
+  const mutations = new MutationObserver(() => {
+    const label = currentLabel();
+    if (!label || label === lastLabel) return;
+    lastLabel = label;
+    const index = requests.findIndex((request) => request.label === label);
+    if (index < 0) return;
+    skipped += index;
+    const [request] = requests.splice(0, index + 1).slice(-1);
+    changes.push(label);
+    samples.push(performance.now() - request.at);
+  });
+  mutations.observe(document.body, { subtree: true, attributes: true, childList: true });
+  element.focus();
+  try {
+    for (let i = 0; i < 20; i++) {
+      requests.push({
+        at: performance.now(),
+        label: `Select model (${i % 2 === 0 ? "One minute stream" : "Ten second stream"})`,
+      });
+      element.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", code: "Tab", bubbles: true, cancelable: true }),
+      );
+      element.dispatchEvent(new KeyboardEvent("keyup", { key: "Tab", code: "Tab", bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  } finally {
+    mutations.disconnect();
+    observer.disconnect();
+  }
+  samples.sort((a, b) => a - b);
+  return {
+    changes,
+    samples,
+    skipped: skipped + requests.length,
+    p50: samples[Math.floor(samples.length * 0.5)],
+    p95: samples[Math.ceil(samples.length * 0.95) - 1],
+    longTasks,
+  };
+}
+
 test.describe("Agent profiles in the model picker", () => {
+  for (const delayMs of [0, 150]) {
+    test(`rapid Tab keeps every selection with ${delayMs}ms host latency`, async ({
+      page,
+    }, testInfo) => {
+      test.setTimeout(120_000);
+      const configRequests = await delayProfileRequests(page, delayMs);
+      const seed = await seedAgentProfiles([
+        { ...PROFILE, id: "perf-a", model: "one-minute-stream" },
+        { ...PROFILE, id: "perf-b", model: "ten-second-stream" },
+      ]);
+      const workspace = await seedMockAgentWorkspace({
+        repoPrefix: "profile-perf-",
+        title: "Profile performance",
+        model: "e2e-fast-stream",
+      });
+      try {
+        await openAgentRoute(page, workspace);
+        await expectComposerVisible(page);
+        const input = page.getByRole("textbox", { name: "Message agent..." });
+        await input.fill("Keep this draft");
+        const report = await input.evaluate(measureProfileCycle);
+        console.log(
+          "PROFILE_PERF",
+          JSON.stringify({ delayMs, configRequests: configRequests.requests, ...report }),
+        );
+        await testInfo.attach("profile-latency.json", {
+          body: JSON.stringify(report),
+          contentType: "application/json",
+        });
+        expect(report.skipped).toBe(0);
+        expect(report.changes).toHaveLength(20);
+        await expectComposerModel(page, "Ten second stream");
+        await expect(input).toBeFocused();
+        await expect(input).toHaveValue("Keep this draft");
+        await expect(page.getByTestId("agent-profile-applying")).toHaveCount(0);
+        await expectWorkspaceAgentConfiguration(workspace, {
+          provider: "mock",
+          model: "ten-second-stream",
+          modeId: "approval-test",
+        });
+        await page.screenshot({ path: testInfo.outputPath("rapid-tab.png") });
+        const typing = await measureComposerTyping(page, testInfo.outputPath("typing"));
+        console.log("TYPING_PERF", JSON.stringify(typing));
+        await testInfo.attach("typing-latency.json", {
+          body: JSON.stringify(typing),
+          contentType: "application/json",
+        });
+      } finally {
+        await workspace.cleanup();
+        await seed.restore();
+      }
+    });
+  }
+
+  test("daily navigation and typing remain responsive during streaming", async ({
+    page,
+    e2eWorkerClient,
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    const first = await seedMockAgentWorkspace({
+      repoPrefix: "daily-first-",
+      title: "First conversation",
+      model: "one-minute-stream",
+    });
+    const second = await seedMockAgentWorkspace({
+      repoPrefix: "daily-second-",
+      title: "Second conversation",
+      model: "one-minute-stream",
+    });
+    try {
+      await openAgentRoute(page, first);
+      await expectComposerVisible(page);
+      const navigation = await measureComposerTyping(
+        page,
+        testInfo.outputPath("navigation"),
+        "profile-workspace-switching.mjs",
+        {
+          PASEO_PROFILE_WORKSPACE_DIGITS: "21",
+          PASEO_PROFILE_RETAINED_REPEATS: "3",
+        },
+      );
+      console.log("NAVIGATION_PERF", JSON.stringify(navigation));
+      await testInfo.attach("navigation.json", {
+        body: JSON.stringify(navigation),
+        contentType: "application/json",
+      });
+      await e2eWorkerClient.sendAgentMessage(first.agentId, "Stream benchmark");
+      await e2eWorkerClient.sendAgentMessage(second.agentId, "Stream benchmark");
+      const typing = await measureComposerTyping(page, testInfo.outputPath("stream-typing"));
+      console.log("STREAM_TYPING_PERF", JSON.stringify(typing));
+      await testInfo.attach("stream-typing.json", {
+        body: JSON.stringify(typing),
+        contentType: "application/json",
+      });
+    } finally {
+      await first.cleanup();
+      await second.cleanup();
+    }
+  });
+
+  test("a failed profile shows the applied settings and lets Tab recover", async ({
+    page,
+  }, testInfo) => {
+    const seed = await seedAgentProfiles([
+      { ...PROFILE, id: "partial-failure", featureValues: { unsupported: true } },
+      { ...PROFILE, id: "recovery", model: "ten-second-stream" },
+    ]);
+    const workspace = await seedMockAgentWorkspace({
+      repoPrefix: "profile-failure-",
+      title: "Profile recovery",
+      model: "e2e-fast-stream",
+    });
+    try {
+      await openAgentRoute(page, workspace);
+      await expectComposerVisible(page);
+      const input = page.getByRole("textbox", { name: "Message agent..." });
+      await input.fill("Keep this draft");
+      await page.keyboard.press("Tab");
+      await expect(
+        page.getByText("Agent session does not support setting features", { exact: true }).first(),
+      ).toBeVisible();
+      await expectComposerModel(page, "One minute stream");
+      await expect(page.getByTestId("agent-profile-applying")).toHaveCount(0);
+      await page.screenshot({ path: testInfo.outputPath("profile-error.png") });
+      await page.keyboard.press("Tab");
+      await expectComposerModel(page, "Ten second stream");
+      await expect(page.getByTestId("agent-profile-applying")).toHaveCount(0);
+      await expect(input).toHaveValue("Keep this draft");
+      await expectWorkspaceAgentConfiguration(workspace, {
+        provider: "mock",
+        model: "ten-second-stream",
+        modeId: "approval-test",
+      });
+    } finally {
+      await workspace.cleanup();
+      await seed.restore();
+    }
+  });
+
   test("Shift+Tab still toggles plan after Tab and leaves the background agent unchanged", async ({
     page,
   }, testInfo) => {

@@ -29,6 +29,7 @@ vi.mock("./use-agent-profiles", () => ({
         id: "second-profile",
         name: "Second",
         provider: "codex",
+        model: "fast",
       },
       {
         id: "workflow-planner",
@@ -39,6 +40,7 @@ vi.mock("./use-agent-profiles", () => ({
         id: "lowercase-workflow",
         name: "workflow helper",
         provider: "codex",
+        featureValues: { plan_mode: false },
       },
     ],
   }),
@@ -194,4 +196,101 @@ test("Tab applies a profile to the running agent only when its modes are ready",
   rerender({ availableModeIds: ["plan"] });
   act(() => expect(result.current?.applyNextProfile()).toBe(true));
   expect(applyAgentConfig).toHaveBeenCalledWith("agent", { modeId: "plan" });
+});
+
+test("rapid profiles serialize and coalesce while preserving omitted fields", async () => {
+  let finish!: (value: null) => void;
+  applyAgentConfig
+    .mockReset()
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValue(null);
+  const { result } = renderHook(() =>
+    useAgentProfilePicker({
+      serverId: "host",
+      availableProviders: ["codex"],
+      target: { kind: "agent", agentId: "agent", availableModeIds: ["plan"] },
+    }),
+  );
+  act(() => {
+    result.current!.applyNextProfile();
+    result.current!.applyNextProfile();
+    result.current!.applyNextProfile();
+  });
+  expect(applyAgentConfig).toHaveBeenCalledTimes(1);
+  expect(result.current!.pendingConfig).toEqual({
+    modeId: "plan",
+    modelId: "fast",
+    featureValues: { plan_mode: false },
+  });
+  await act(async () => finish(null));
+  expect(applyAgentConfig).toHaveBeenCalledTimes(2);
+  expect(applyAgentConfig).toHaveBeenLastCalledWith("agent", {
+    modelId: "fast",
+    featureValues: { plan_mode: false },
+  });
+  expect(result.current!.pendingConfig).toBeNull();
+});
+
+test("a rejected profile releases pending state and the next selection can succeed", async () => {
+  applyAgentConfig
+    .mockReset()
+    .mockRejectedValueOnce(new Error("Unavailable"))
+    .mockResolvedValue(null);
+  const { result } = renderHook(() =>
+    useAgentProfilePicker({
+      serverId: "host",
+      availableProviders: ["codex"],
+      target: { kind: "agent", agentId: "agent", availableModeIds: ["plan"] },
+    }),
+  );
+  await act(async () => result.current!.applyNextProfile());
+  expect(result.current!.pendingConfig).toBeNull();
+  await act(async () => result.current!.applyNextProfile());
+  expect(applyAgentConfig).toHaveBeenCalledTimes(2);
+  expect(result.current!.pendingConfig).toBeNull();
+});
+
+test("a queued profile does not retry omitted settings that the previous profile rejected", async () => {
+  let reject!: (error: Error) => void;
+  let finish!: (value: null) => void;
+  applyAgentConfig
+    .mockReset()
+    .mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValue(null);
+  const { result } = renderHook(() =>
+    useAgentProfilePicker({
+      serverId: "host",
+      availableProviders: ["codex"],
+      target: { kind: "agent", agentId: "agent", availableModeIds: ["plan"] },
+    }),
+  );
+  act(() => {
+    result.current!.applyProfile("ordinary-profile");
+    result.current!.applyProfile("second-profile");
+  });
+  await act(async () => reject(new Error("Mode unavailable")));
+  expect(applyAgentConfig).toHaveBeenLastCalledWith("agent", { modelId: "fast" });
+  act(() => result.current!.applyNextProfile());
+  expect(result.current!.pendingConfig).toEqual({
+    modelId: "fast",
+    featureValues: { plan_mode: false },
+  });
+  await act(async () => finish(null));
+  expect(result.current!.pendingConfig).toBeNull();
 });

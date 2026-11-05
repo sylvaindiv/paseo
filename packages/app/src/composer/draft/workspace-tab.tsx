@@ -515,7 +515,12 @@ export function WorkspaceDraftAgentTab({
         workspaceDirectory: draftWorkingDirectory,
         workspaceId: workspaceFields?.id ?? null,
         autoSubmitConfig,
-        composerState,
+        composerState: autoSubmitConfig
+          ? composerState
+          : {
+              ...composerState,
+              featureValues: await composerState.resolveFeatureValuesForSubmit(),
+            },
         hostDisconnectedMessage: t("workspace.terminal.hostDisconnected"),
         selectModelMessage: t("workspaceSetup.errors.selectModel"),
       });

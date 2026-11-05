@@ -7340,6 +7340,12 @@ export class CodexAppServerAgentClient implements AgentClient {
   readonly capabilities = CODEX_APP_SERVER_CAPABILITIES;
   private goalsEnabledPromise: Promise<boolean> | null = null;
   private autoReviewEnabledPromise: Promise<boolean> | null = null;
+  private modelDiscovery: Promise<AgentModelDefinition[]> | null = null;
+  private draftCapabilities: {
+    models: CodexModel[];
+    planModeAvailable: boolean | null;
+    fetchedAt: number;
+  } | null = null;
 
   constructor(
     private readonly logger: Logger,
@@ -7663,7 +7669,43 @@ export class CodexAppServerAgentClient implements AgentClient {
       : DEFAULT_CODEX_MODE_ID;
   }
 
-  private async fetchModelsFromAppServer(
+  async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
+    if (
+      !this.draftCapabilities ||
+      this.draftCapabilities.planModeAvailable === null ||
+      Date.now() - this.draftCapabilities.fetchedAt >= 300_000
+    ) {
+      await this.fetchModelsFromAppServer();
+    }
+    const capabilities = this.draftCapabilities;
+    if (!capabilities || capabilities.planModeAvailable === null)
+      throw new Error("Could not load Codex options. Please retry.");
+    const model = config.model
+      ? capabilities.models.find(
+          (entry) => entry.id === config.model || entry.model === config.model,
+        )
+      : (capabilities.models.find((entry) => entry.isDefault) ?? capabilities.models[0]);
+    return buildCodexFeatures({
+      serviceTiers: model?.serviceTiers ?? [],
+      serviceTier: readCodexServiceTier(config.featureValues) ?? "default",
+      planModeEnabled: Boolean(config.featureValues?.plan_mode),
+      planModeAvailable: capabilities.planModeAvailable,
+    });
+  }
+
+  private fetchModelsFromAppServer(
+    context?: ProviderRefreshContext,
+  ): Promise<AgentModelDefinition[]> {
+    // Catalog and draft discovery share metadata, never a throwaway conversation.
+    if (!this.modelDiscovery) {
+      this.modelDiscovery = this.discoverModelsFromAppServer(context).finally(() => {
+        this.modelDiscovery = null;
+      });
+    }
+    return this.modelDiscovery;
+  }
+
+  private async discoverModelsFromAppServer(
     context?: ProviderRefreshContext,
   ): Promise<AgentModelDefinition[]> {
     // Codex model/list is global to the app server in this flow; cwd/force are intentionally ignored.
@@ -7689,14 +7731,30 @@ export class CodexAppServerAgentClient implements AgentClient {
       );
       client.notify("initialized", {});
 
-      const rawResponse = await runProviderRefreshActivity(context, "model/list", () =>
-        client!.request("model/list", {}),
-      );
+      const [rawResponse, configuredDefaults, collaborationResponse] = await Promise.all([
+        runProviderRefreshActivity(context, "model/list", () => client!.request("model/list", {})),
+        runProviderRefreshActivity(context, "config/read", () =>
+          readCodexConfiguredDefaults(client!, this.logger),
+        ),
+        runProviderRefreshActivity(context, "collaborationMode/list", () =>
+          client!.request("collaborationMode/list", {}),
+        ).catch((error) => {
+          // A feature probe must not prevent the model catalog from loading.
+          this.logger.debug({ err: error }, "Codex draft collaboration modes unavailable");
+          return null;
+        }),
+      ]);
       const parsedResponse = CodexModelListResponseSchema.safeParse(rawResponse);
       const models = parsedResponse.success ? (parsedResponse.data.data ?? []) : [];
-      const configuredDefaults = await runProviderRefreshActivity(context, "config/read", () =>
-        readCodexConfiguredDefaults(client!, this.logger),
-      );
+      const data = toObjectRecord(collaborationResponse)?.data;
+      const planModeAvailable =
+        collaborationResponse === null
+          ? null
+          : (Array.isArray(data) ? data : []).some((entry) => {
+              const name = toObjectRecord(entry)?.name;
+              return typeof name === "string" && /plan|read/i.test(name);
+            });
+      this.draftCapabilities = { models, planModeAvailable, fetchedAt: Date.now() };
       const configuredDefaultModelId = configuredDefaults.model;
       const configuredDefaultThinkingOptionId = configuredDefaults.thinkingOptionId;
       const hasConfiguredDefaultModel =
