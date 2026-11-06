@@ -5471,9 +5471,12 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
     const browserEnv = Object.fromEntries(
       Object.entries(this.harnessEnvironment).filter(([key]) =>
-        ["AGENT_BROWSER_NAMESPACE", "AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_SESSION"].includes(
-          key,
-        ),
+        [
+          "AGENT_BROWSER_NAMESPACE",
+          "AGENT_BROWSER_SOCKET_DIR",
+          "AGENT_BROWSER_SESSION",
+          "AGENT_BROWSER_IDLE_TIMEOUT_MS",
+        ].includes(key),
       ),
     );
     if (Object.keys(browserEnv).length > 0) {
@@ -5488,7 +5491,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       for (const [name, serverConfig] of Object.entries(this.config.mcpServers)) {
         mcpServers[name] = toCodexMcpConfig(serverConfig);
       }
-      innerConfig.mcp_servers = mcpServers;
+      innerConfig.mcp_servers = { ...toObjectRecord(innerConfig.mcp_servers), ...mcpServers };
     }
     if (this.config.writePolicy === "read_only") {
       return {

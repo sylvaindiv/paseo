@@ -3320,7 +3320,9 @@ export class Session {
     beginAgentDeleteIfSupported(this.agentStorage, agentId);
 
     try {
-      await closeAgentCommand({ agentManager: this.agentManager }, agentId);
+      await closeAgentCommand({ agentManager: this.agentManager }, agentId, {
+        offloadTimeline: false,
+      });
     } catch (error) {
       this.sessionLogger.warn(
         { err: error, agentId },
@@ -6165,6 +6167,14 @@ export class Session {
   }
 
   private async teardownArchivedWorkspace(workspaceId: string): Promise<void> {
+    await agentBrowserDashboardsForHome(this.paseoHome)
+      .stop(workspaceId)
+      .catch((error) => {
+        this.sessionLogger.warn(
+          { error, workspaceId },
+          "Failed to stop archived browser dashboard",
+        );
+      });
     this.workspaceGitObserver.removeForWorkspaceId(workspaceId);
     this.scriptRuntimeStore?.removeForWorkspace(workspaceId);
     releaseWorkspaceServicePortPlan(workspaceId);

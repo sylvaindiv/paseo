@@ -1160,6 +1160,8 @@ test("reconnect restores open demand and reopening a closed chat fetches again",
   reopened.succeed();
   (await world.nextFetch("agent-a")).respond({ hasNewer: false });
   expect(reopened.agentIds).toEqual(["agent-a", "agent-b"]);
+  expect(world.cacheRequests).toEqual(["agent-a", "agent-b", "agent-a"]);
+  world.sync.dispose();
 });
 
 test("disposing a view releases its pending observation before bootstrap completes", async () => {

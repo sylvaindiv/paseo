@@ -4,10 +4,8 @@ import Animated, {
   makeMutable,
   type SharedValue,
   useAnimatedStyle,
-  useAnimatedProps,
   useReducedMotion,
   useSharedValue,
-  createAnimatedComponent,
 } from "react-native-reanimated";
 import { scheduleOnUI } from "react-native-worklets";
 import { StyleSheet } from "react-native-unistyles";
@@ -22,41 +20,17 @@ import Svg, {
 } from "react-native-svg";
 import { withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
+import { useAppVisible } from "@/hooks/use-app-visible";
+import { useRetainedPanelActive } from "@/components/retained-panel";
 
 const INDICATOR_SIZE = 14;
 const GRID_DOT_SIZE = 3.5;
 const GRID_GAP = 1.25;
 const GRID_PERIOD = 1500;
-const GOOEY_PERIOD = 750;
 const ThemedSvg = withUnistyles(Svg);
-const AnimatedSvgCircle = createAnimatedComponent(Circle);
 const animationTime = makeMutable(Date.now());
 const activeIndicatorCount = makeMutable(0);
 const clockRunning = makeMutable(false);
-
-function gooeyEase(progress: number): number {
-  "worklet";
-  let parameter = progress;
-  for (let iteration = 0; iteration < 6; iteration += 1) {
-    const inverse = 1 - parameter;
-    const x =
-      3 * inverse * inverse * parameter * 0.56 +
-      3 * inverse * parameter * parameter * 0.17 +
-      parameter * parameter * parameter;
-    const derivative =
-      3 * inverse * inverse * 0.56 +
-      6 * inverse * parameter * (0.17 - 0.56) +
-      3 * parameter * parameter * 0.83;
-    if (derivative < 0.0001) break;
-    parameter = Math.max(0, Math.min(1, parameter - (x - progress) / derivative));
-  }
-  const inverse = 1 - parameter;
-  return (
-    3 * inverse * inverse * parameter * 0.52 +
-    3 * inverse * parameter * parameter * 0.98 +
-    parameter * parameter * parameter
-  );
-}
 
 function advanceClock(): void {
   "worklet";
@@ -108,7 +82,10 @@ export function ConversationStatusIndicator({
   testID?: string;
 }) {
   const reduceMotion = useReducedMotion();
-  const time = useAnimationTime(!reduceMotion);
+  const visible = useAppVisible();
+  const active = useRetainedPanelActive();
+  const animate = kind === "activity" && !reduceMotion && visible && active;
+  const time = useAnimationTime(animate);
   const colorStyle = getColorStyle(kind);
   const filterId = `conversation-gooey-${useId().replace(/:/g, "")}`;
 
@@ -122,12 +99,12 @@ export function ConversationStatusIndicator({
               index={index}
               colorStyle={colorStyle}
               time={time}
-              reduceMotion={reduceMotion}
+              reduceMotion={!animate}
             />
           ))}
         </View>
       ) : (
-        <GooeyBubbles kind={kind} time={time} reduceMotion={reduceMotion} filterId={filterId} />
+        <StaticBubbles kind={kind} filterId={filterId} />
       )}
     </View>
   );
@@ -164,31 +141,13 @@ function GridCell({
   );
 }
 
-function GooeyBubbles({
+function StaticBubbles({
   kind,
-  time,
-  reduceMotion,
   filterId,
 }: {
   kind: ConversationStatusIndicatorKind;
-  time: SharedValue<number>;
-  reduceMotion: boolean;
   filterId: string;
 }) {
-  const leadingProps = useAnimatedProps(() => {
-    const phase = reduceMotion
-      ? 0
-      : (((time.value % GOOEY_PERIOD) + GOOEY_PERIOD) % GOOEY_PERIOD) / GOOEY_PERIOD;
-    const progress = reduceMotion ? 0 : gooeyEase(phase);
-    return { cx: 4 + progress * 5, cy: 12, r: 3 + progress * 5 };
-  }, [reduceMotion]);
-  const trailingProps = useAnimatedProps(() => {
-    const phase = reduceMotion
-      ? 0
-      : (((time.value % GOOEY_PERIOD) + GOOEY_PERIOD) % GOOEY_PERIOD) / GOOEY_PERIOD;
-    const progress = reduceMotion ? 0 : gooeyEase(phase);
-    return { cx: 15 + progress * 5, cy: 12, r: 8 - progress * 5 };
-  }, [reduceMotion]);
   return (
     <ThemedSvg
       width={INDICATOR_SIZE}
@@ -201,8 +160,8 @@ function GooeyBubbles({
         <DefsFilter id={filterId} />
       </Defs>
       <G filter={`url(#${filterId})`}>
-        <AnimatedSvgCircle cx={4} cy={12} r={3} animatedProps={leadingProps} />
-        <AnimatedSvgCircle cx={15} cy={12} r={8} animatedProps={trailingProps} />
+        <Circle cx={4} cy={12} r={3} />
+        <Circle cx={15} cy={12} r={8} />
       </G>
     </ThemedSvg>
   );

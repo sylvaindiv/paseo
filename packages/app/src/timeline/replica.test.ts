@@ -665,3 +665,129 @@ describe("SQLite baseline restoration", () => {
     }
   });
 });
+
+describe("closed transcript retention", () => {
+  it("releases a closed transcript and reloads its cached tail with older history reachable", async () => {
+    useSessionStore.getState().initializeSession(SERVER_ID, null);
+    const commits = new Map<string, CachedTimeline>();
+    const owner = createOwner({
+      readTimeline: async (_serverId, agentId) => commits.get(agentId),
+      commitTimeline: (_serverId, agentId, timeline) => {
+        commits.set(agentId, timeline);
+      },
+    });
+    owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+    applySynced(AGENT_ID, 8);
+    owner.replaceVisibleAgentIds("test", []);
+    expect(
+      selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID).status,
+    ).toBe("synced");
+    owner.replaceOpenTabAgentIds([]);
+    const closedSession = useSessionStore.getState().sessions[SERVER_ID];
+    expect(selectAgentTimelineState(closedSession, AGENT_ID)).toEqual({ status: "cold" });
+    expect(closedSession?.agentTimelineCursor.has(AGENT_ID)).toBe(false);
+    expect(commits.get(AGENT_ID)).toMatchObject({ range: { endSeq: 8 }, hasOlder: true });
+    owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+    await expect
+      .poll(() =>
+        selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID),
+      )
+      .toEqual({
+        status: "painted",
+        items: commits.get(AGENT_ID)!.items,
+      });
+    owner.dispose();
+  });
+
+  it("keeps pending submissions on close and releases after authoritative settlement", () => {
+    useSessionStore.getState().initializeSession(SERVER_ID, null);
+    const owner = createOwner({
+      readTimeline: async () => undefined,
+      commitTimeline: () => undefined,
+    });
+    owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+    applySynced(AGENT_ID, 8);
+    useSessionStore.getState().beginAgentMessageSubmission(SERVER_ID, AGENT_ID, {
+      kind: "user_message",
+      id: "pending",
+      clientMessageId: "pending",
+      text: "Send me",
+      timestamp: new Date(0),
+    });
+    owner.replaceVisibleAgentIds("test", []);
+    owner.replaceOpenTabAgentIds([]);
+    expect(
+      useSessionStore.getState().sessions[SERVER_ID]?.messageSubmissions.get(AGENT_ID),
+    ).toHaveLength(1);
+    expect(
+      selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID).status,
+    ).toBe("synced");
+    useSessionStore.getState().rejectAgentMessageSubmission(SERVER_ID, AGENT_ID, "pending");
+    expect(
+      selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID),
+    ).toEqual({ status: "cold" });
+    owner.dispose();
+  });
+
+  it("does not let a late disk read repopulate a closed transcript", async () => {
+    useSessionStore.getState().initializeSession(SERVER_ID, null);
+    let resolveRead!: (value: CachedTimeline) => void;
+    const read = new Promise<CachedTimeline>((resolve) => {
+      resolveRead = resolve;
+    });
+    const replica = createTimelineReplica({
+      serverId: SERVER_ID,
+      storage: { readTimeline: () => read, commitTimeline: () => undefined },
+      prepareAgent: async () => undefined,
+    });
+    const preparation = replica.prepare(AGENT_ID);
+    replica.release(AGENT_ID);
+    resolveRead(cachedTimeline());
+    await preparation;
+    expect(
+      selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID),
+    ).toEqual({ status: "cold" });
+    expect(replica.readRange(AGENT_ID)).toBeUndefined();
+  });
+
+  it("preserves unacknowledged local presentations when the tab closes", () => {
+    useSessionStore.getState().initializeSession(SERVER_ID, null);
+    const owner = createOwner({
+      readTimeline: async () => undefined,
+      commitTimeline: () => undefined,
+    });
+    owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+    applySynced(AGENT_ID, 8);
+    const local: StreamItem = {
+      kind: "user_message",
+      id: "local",
+      text: "Local",
+      timestamp: new Date(0),
+      clientMessageId: "local",
+    };
+    useSessionStore.getState().setAgentStreamState(SERVER_ID, AGENT_ID, { head: [local] });
+    owner.replaceVisibleAgentIds("test", []);
+    owner.replaceOpenTabAgentIds([]);
+    expect(useSessionStore.getState().sessions[SERVER_ID]?.agentStreamHead.get(AGENT_ID)).toEqual([
+      local,
+    ]);
+    owner.dispose();
+  });
+});
+
+it("keeps visible history readable when the connection owner is replaced", () => {
+  useSessionStore.getState().initializeSession(SERVER_ID, null);
+  const owner = createOwner({
+    readTimeline: async () => undefined,
+    commitTimeline: () => undefined,
+  });
+  owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+  applySynced(AGENT_ID, 8);
+  owner.dispose();
+  expect(
+    selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID),
+  ).toMatchObject({
+    status: "synced",
+    range: { endSeq: 8 },
+  });
+});

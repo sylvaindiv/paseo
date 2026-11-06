@@ -50,12 +50,20 @@ async function ready(url: string): Promise<boolean> {
 
 export class AgentBrowserDashboards {
   private readonly pending = new Map<string, Promise<string>>();
+  private readonly owned = new Map<
+    string,
+    { pid: number; port: number; stop: () => Promise<unknown> }
+  >();
+  private readonly stopping = new Map<string, Promise<void>>();
+  private disposed = false;
   private readonly paseoHome: string;
   constructor(paseoHome: string) {
     this.paseoHome = paseoHome;
   }
 
   async open(workspaceId: string): Promise<string> {
+    await this.stopping.get(workspaceId);
+    if (this.disposed) throw new AgentBrowserError("start_failed");
     const existing = this.pending.get(workspaceId);
     if (existing) {
       const url = await existing;
@@ -71,6 +79,41 @@ export class AgentBrowserDashboards {
       if (this.pending.get(workspaceId) === opening) this.pending.delete(workspaceId);
       throw error;
     }
+  }
+
+  stop(workspaceId: string): Promise<void> {
+    const existing = this.stopping.get(workspaceId);
+    if (existing) return existing;
+    const stopping = (async () => {
+      await this.pending.get(workspaceId)?.catch(() => undefined);
+      this.pending.delete(workspaceId);
+      await this.stopOwned(workspaceId);
+    })().finally(() => this.stopping.delete(workspaceId));
+    this.stopping.set(workspaceId, stopping);
+    return stopping;
+  }
+
+  private async stopOwned(workspaceId: string): Promise<void> {
+    const owned = this.owned.get(workspaceId);
+    if (!owned) return;
+    const current = await readDashboard(this.directory(workspaceId));
+    // A replacement or a dashboard adopted from another process is not ours to stop.
+    if (current?.pid === owned.pid && current.port === owned.port) await owned.stop();
+    this.owned.delete(workspaceId);
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    const results = await Promise.allSettled(
+      [...new Set([...this.pending.keys(), ...this.owned.keys()])].map((id) => this.stop(id)),
+    );
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }
+
+  private directory(workspaceId: string): string {
+    const env = agentBrowserEnv(workspaceId, { kind: "agent", id: "dashboard" }, this.paseoHome);
+    return join(env.AGENT_BROWSER_SOCKET_DIR!, "namespaces", env.AGENT_BROWSER_NAMESPACE!, "run");
   }
 
   private async start(workspaceId: string): Promise<string> {
@@ -100,38 +143,44 @@ export class AgentBrowserDashboards {
     ) {
       throw new AgentBrowserError("version_incompatible");
     }
-    const directory = join(
-      env.AGENT_BROWSER_SOCKET_DIR!,
-      "namespaces",
-      env.AGENT_BROWSER_NAMESPACE!,
-      "run",
-    );
-    let port: number | undefined;
-    try {
-      const pid = Number(await readFile(join(directory, "dashboard.pid"), "utf8"));
-      if (Number.isInteger(pid) && pid > 0) {
-        process.kill(pid, 0);
-        const config = JSON.parse(await readFile(join(directory, "dashboard.config"), "utf8"));
-        if (Number.isInteger(config.port) && config.port > 0 && config.port <= 65535)
-          port = config.port;
-      }
-    } catch {
-      // A stopped dashboard's sidecars are cleaned up by agent-browser itself.
-    }
-    port ??= await availablePort();
+    const directory = this.directory(workspaceId);
+    const previous = await readDashboard(directory);
+    const port = previous?.port ?? (await availablePort());
     try {
       await run(["dashboard", "start", "--port", String(port), "--json"]);
+      const started = await readDashboard(directory);
+      if (!previous && started?.port === port) {
+        this.owned.set(workspaceId, {
+          ...started,
+          stop: () => run(["dashboard", "stop", "--json"]),
+        });
+      }
       const url = `http://127.0.0.1:${port}`;
       const deadline = Date.now() + 8_000;
       while (Date.now() < deadline) {
         if (await ready(url)) return url;
         await delay(150);
       }
+      throw new AgentBrowserError("start_failed");
     } catch {
+      await this.stopOwned(workspaceId).catch(() => undefined);
       throw new AgentBrowserError("start_failed");
     }
-    throw new AgentBrowserError("start_failed");
   }
+}
+
+async function readDashboard(directory: string): Promise<{ pid: number; port: number } | null> {
+  try {
+    const pid = Number(await readFile(join(directory, "dashboard.pid"), "utf8"));
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    process.kill(pid, 0);
+    const config = JSON.parse(await readFile(join(directory, "dashboard.config"), "utf8"));
+    if (Number.isInteger(config.port) && config.port > 0 && config.port <= 65535)
+      return { pid, port: config.port };
+  } catch {
+    // Stale sidecars are cleaned up by agent-browser itself.
+  }
+  return null;
 }
 
 const services = new Map<string, AgentBrowserDashboards>();
@@ -143,4 +192,12 @@ export function agentBrowserDashboardsForHome(home: string): AgentBrowserDashboa
     services.set(key, service);
   }
   return service;
+}
+
+export async function disposeAgentBrowserDashboardsForHome(home: string): Promise<void> {
+  const key = resolvePath(home);
+  const service = services.get(key);
+  if (!service) return;
+  await service.dispose();
+  if (services.get(key) === service) services.delete(key);
 }

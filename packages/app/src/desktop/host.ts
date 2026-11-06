@@ -148,6 +148,7 @@ export interface DesktopAttachedBrowserRegistration {
 }
 
 export interface DesktopBrowserBridge {
+  setPresented?: (input: { browserId: string; presented: boolean }) => Promise<void>;
   setShortcutPolicy?: (input: BrowserKeyboardPolicy) => Promise<void>;
   readonly profilePartition?: string;
   registerAttachedBrowser?: (input: DesktopAttachedBrowserRegistration) => Promise<void>;

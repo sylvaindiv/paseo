@@ -7,6 +7,7 @@ import type {
 import type { TabContents, BrowserRegistry, TabImage } from "./service.js";
 import type { IsolatedKeyboardInputEvent } from "./trusted-input.js";
 import { CdpSessionQueue } from "./cdp-session-queue.js";
+import { BrowserPageLifecycle } from "./page-lifecycle.js";
 import {
   dialogAcceptValue,
   handledDialogEvent,
@@ -30,6 +31,7 @@ const consoleMessagesByContentsId = new Map<number, BrowserAutomationConsoleLogE
 const cdpQueuesByContentsId = new Map<number, CdpSessionQueue>();
 const dialogMonitorsByContentsId = new Map<number, DialogMonitor>();
 const observedContentsIds = new Set<number>();
+const pageLifecyclesByContentsId = new Map<number, BrowserPageLifecycle>();
 
 interface IpcHandlerRegistry {
   handle(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown): void;
@@ -99,6 +101,8 @@ interface BrowserAutomationWebContents extends ConsoleMessageEmitter {
   canGoBack(): boolean;
   canGoForward(): boolean;
   isLoading(): boolean;
+  isCurrentlyAudible?(): boolean;
+  isDevToolsOpened?(): boolean;
   isDestroyed(): boolean;
   getBackgroundThrottling(): boolean;
   setBackgroundThrottling(allowed: boolean): void;
@@ -116,6 +120,7 @@ export function adaptWebContents(contents: BrowserAutomationWebContents): TabCon
   observeConsoleMessages(contents, contentsId);
   const cdpQueue = getCdpQueue(contentsId);
   const dialogMonitor = getDialogMonitor(contents, contentsId, cdpQueue);
+  const lifecycle = getPageLifecycle(contents);
   return {
     id: contentsId,
     getURL: () => contents.getURL(),
@@ -133,7 +138,7 @@ export function adaptWebContents(contents: BrowserAutomationWebContents): TabCon
     sendInputEvent: (event) => contents.sendInputEvent(event),
     insertText: (text) => contents.insertText(text),
     getConsoleMessages: () => consoleMessagesByContentsId.get(contentsId) ?? [],
-    captureDialogs: (task) => dialogMonitor.capture(task),
+    captureDialogs: (task) => lifecycle.withAutomation(() => dialogMonitor.capture(task)),
     sendDebugCommand: (command: string, params?: Record<string, unknown>) =>
       cdpQueue.run(async () => {
         if (!contents.debugger.isAttached()) {
@@ -245,6 +250,17 @@ function getCdpQueue(contentsId: number): CdpSessionQueue {
   return queue;
 }
 
+export function getPageLifecycle(contents: BrowserAutomationWebContents): BrowserPageLifecycle {
+  const contentsId = contents.id;
+  observeConsoleMessages(contents, contentsId);
+  let lifecycle = pageLifecyclesByContentsId.get(contentsId);
+  if (!lifecycle) {
+    lifecycle = new BrowserPageLifecycle(contents, getCdpQueue(contentsId));
+    pageLifecyclesByContentsId.set(contentsId, lifecycle);
+  }
+  return lifecycle;
+}
+
 function observeConsoleMessages(contents: BrowserAutomationWebContents, contentsId: number): void {
   if (observedContentsIds.has(contentsId)) {
     return;
@@ -261,6 +277,8 @@ function observeConsoleMessages(contents: BrowserAutomationWebContents, contents
     consoleMessagesByContentsId.delete(contentsId);
     cdpQueuesByContentsId.delete(contentsId);
     dialogMonitorsByContentsId.delete(contentsId);
+    pageLifecyclesByContentsId.get(contentsId)?.dispose();
+    pageLifecyclesByContentsId.delete(contentsId);
   });
 }
 
@@ -493,6 +511,22 @@ function createRegistry(hostWebContentsId: number): BrowserRegistry {
 
 export function registerBrowserAutomationIpc(options?: { ipc?: IpcHandlerRegistry }): void {
   const ipc = options?.ipc ?? ipcMain;
+
+  ipc.handle("paseo:browser:set-presented", async (event, rawInput: unknown) => {
+    const senderId = (event as { sender?: HostWebContents }).sender?.id;
+    const input = rawInput as { browserId?: unknown; presented?: unknown } | null;
+    if (
+      !senderId ||
+      !input ||
+      typeof input.browserId !== "string" ||
+      typeof input.presented !== "boolean"
+    ) {
+      throw new Error("Invalid browser presentation");
+    }
+    const contents = getPaseoBrowserWebContentsForHostWindow(input.browserId, senderId);
+    if (!contents) throw new Error("Browser guest is not registered in this window");
+    await getPageLifecycle(contents).setPresented(input.presented);
+  });
 
   ipc.handle("paseo:browser:execute-automation-command", async (event, rawRequest: unknown) => {
     const hostContents = (event as { sender?: HostWebContents }).sender;

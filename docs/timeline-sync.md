@@ -7,8 +7,13 @@ Agent chat delivery has two paths:
 
 The daemon retains projected items in memory. Each source event advances the stream sequence,
 then replaces the previous tool state or merges into the current text item. Intermediate payloads
-are never retained for history or catch-up. Provider history is the durable transcript authority
-and rebuilds the projection when an agent resumes.
+are never retained for history or catch-up. Provider history rebuilds the projection when no
+retained Paseo transcript exists. Closing a runtime writes its complete projection, epoch and
+sequence positions to `cache/closed-timelines` before releasing RAM. Registration restores that
+snapshot before deciding whether provider history needs replay. A failed write keeps the transcript
+in memory; an unreadable retained snapshot fails resume rather than dropping Paseo-only events or
+plan anchors. Snapshot ownership lasts for that daemon process, so stale files from a previous
+process cannot replace newer provider history.
 
 The invariants are:
 
@@ -92,6 +97,12 @@ first page leaves a chat this client just created looking hydrated but still cat
 shows Updating messages for a conversation that cannot be out of date. Closing the tab ends the
 obligation too, so a reopened chat starts from authoritative state instead of a stale optimistic
 one; disconnect and backgrounding keep it.
+
+Closing a tab also releases its transcript from client RAM after all visible demand ends. The
+replica cache supplies a recent tail on reopening, and older pages remain available from the host.
+Active turns, permissions, queued or pending submissions, local-only rows and attachments keep
+their presentation in memory until it can be reconstructed safely. Replacing a connection owner
+keeps visible history readable; a late disk read cannot repopulate a released transcript.
 
 Foregrounding probes a nominally connected session immediately. A healthy response preserves the
 socket; a failed three-second probe starts reconnecting without waiting for the background heartbeat

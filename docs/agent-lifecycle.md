@@ -37,7 +37,9 @@ canceling a turn can produce both. Use the completed-turn marker and that turn's
 
 An unarchived agent may be `closed` without being deleted or archived. Closing releases its provider
 processes and subscriptions while retaining its Paseo identity, persistence handle, timeline,
-workspace, labels, title, usage, attention, timestamps, and parent relationship. Opening or prompting
+workspace, labels, title, usage, attention, timestamps, and parent relationship. Closed transcripts
+leave RAM only after a complete snapshot succeeds; [timeline sync](timeline-sync.md) owns that
+storage and restoration contract. Opening or prompting
 the agent runs through `ensureAgentLoaded()`, which resumes the durable provider session under the
 same Paseo agent ID. Provider history is not appended again when the canonical timeline is already
 primed.

@@ -114,3 +114,104 @@ test("active reads survive completed-payload eviction and failed reads can retry
     }),
   ).toEqual({ diff: "retry" });
 });
+
+test("the byte budget evicts least recently read payloads without interrupting active reads", async () => {
+  const cache = new CheckoutDiffCache(() => 0, { maxBytes: 3_000 });
+  const deferred = Promise.withResolvers<{ diff: string }>();
+  const pendingInput = {
+    cwd: "pending",
+    compare: { mode: "base" as const },
+    load: () => deferred.promise,
+  };
+  const pending = cache.read(pendingInput);
+  const calls: string[] = [];
+  const read = (cwd: string) =>
+    cache.read({
+      cwd,
+      compare: { mode: "base" },
+      load: async () => {
+        calls.push(cwd);
+        return { diff: cwd.repeat(600) };
+      },
+    });
+  const first = await read("a");
+  await read("b");
+  expect(await read("a")).toBe(first);
+  const third = await read("c");
+  expect(await read("a")).toBe(first);
+  expect(await read("c")).toBe(third);
+  expect(cache.read(pendingInput)).toBe(pending);
+  await read("b");
+  expect(calls).toEqual(["a", "b", "c", "b"]);
+  deferred.resolve({ diff: "finished" });
+  expect(await pending).toEqual({ diff: "finished" });
+});
+
+test("oversized structured tokens are returned intact without evicting useful cached results", async () => {
+  const cache = new CheckoutDiffCache(() => 0, { maxBytes: 3_000 });
+  const smallInput = {
+    cwd: "small",
+    compare: { mode: "base" as const },
+    load: async () => ({ diff: "small" }),
+  };
+  const small = await cache.read(smallInput);
+  const large = {
+    diff: "",
+    structured: [
+      {
+        path: "large.ts",
+        isNew: true,
+        isDeleted: false,
+        additions: 1,
+        deletions: 0,
+        hunks: [
+          {
+            oldStart: 0,
+            oldCount: 0,
+            newStart: 1,
+            newCount: 1,
+            lines: [
+              {
+                type: "add" as const,
+                content: "x",
+                tokens: [{ text: "x".repeat(2_000), style: null }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  let calls = 0;
+  const read = () =>
+    cache.read({
+      cwd: "large",
+      compare: { mode: "base", includeStructured: true },
+      load: async () => {
+        calls++;
+        return large;
+      },
+    });
+  expect(await read()).toBe(large);
+  expect(await read()).toBe(large);
+  expect(calls).toBe(2);
+  expect(await cache.read(smallInput)).toBe(small);
+});
+
+test("a refresh that exceeds the byte budget removes the previous cached snapshot", async () => {
+  let now = 0;
+  let calls = 0;
+  const cache = new CheckoutDiffCache(() => now, { maxBytes: 3_000 });
+  const oversized = { diff: "x".repeat(2_000) };
+  const read = () =>
+    cache.read({
+      cwd: "repo",
+      compare: { mode: "base" },
+      load: async () => (++calls === 1 ? { diff: "initial" } : oversized),
+    });
+  expect(await read()).toEqual({ diff: "initial" });
+  now = 20_000;
+  expect(await read()).toBe(oversized);
+  expect(await read()).toBe(oversized);
+  expect(calls).toBe(3);
+});

@@ -179,6 +179,8 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
       ipcRenderer.invoke("paseo:menu:set-capturing-shortcut", capturing),
   },
   browser: {
+    setPresented: (input: { browserId: string; presented: boolean }) =>
+      ipcRenderer.invoke("paseo:browser:set-presented", input),
     setShortcutPolicy: (input: BrowserKeyboardPolicy) =>
       ipcRenderer.invoke("paseo:browser:set-shortcut-policy", input),
     profilePartition: PASEO_BROWSER_PROFILE_PARTITION,

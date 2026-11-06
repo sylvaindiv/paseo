@@ -27,10 +27,14 @@ const attachedBrowsers: Array<{
   workspaceId: string;
   webContentsId: number;
 }> = [];
+const presentationChanges: Array<{ browserId: string; presented: boolean }> = [];
 const profileHost: BrowserWebviewProfileHost = {
   profilePartition: "persist:paseo-browser",
   registerAttachedBrowser: async (input) => {
     attachedBrowsers.push(input);
+  },
+  setPresented: async (input) => {
+    presentationChanges.push(input);
   },
 };
 
@@ -99,6 +103,37 @@ function expectResidentWebviewParking(webview: HTMLElement): void {
 describe("resident browser webviews", () => {
   beforeEach(() => {
     attachedBrowsers.length = 0;
+    presentationChanges.length = 0;
+  });
+
+  it("reports parking only after registration and resumes the same page when presented", async () => {
+    const browserId = "browser-idle";
+    const webview = ensureTestBrowser({
+      browserId,
+      workspaceId: "workspace-idle",
+      url: "https://example.com/form",
+    })!;
+    Object.defineProperty(webview, "getWebContentsId", { value: () => 91 });
+    expect(presentationChanges).toEqual([]);
+    webview.dispatchEvent(new Event("dom-ready"));
+    await Promise.resolve();
+    expect(presentationChanges).toEqual([{ browserId, presented: false }]);
+    const anchor = document.createElement("div");
+    Object.defineProperty(anchor, "getBoundingClientRect", {
+      value: () => ({ left: 0, top: 0, width: 640, height: 480 }),
+    });
+    const parent = webview.parentElement;
+    presentBrowserWebview(browserId, webview, anchor, anchor, { mode: "responsive" });
+    presentBrowserWebview(browserId, webview, anchor, anchor, { mode: "responsive" });
+    releaseResidentBrowserWebview(browserId, webview);
+    releaseResidentBrowserWebview(browserId, webview);
+    expect(presentationChanges).toEqual([
+      { browserId, presented: false },
+      { browserId, presented: true },
+      { browserId, presented: false },
+    ]);
+    expect(webview.parentElement).toBe(parent);
+    expect(getResidentBrowserWebview(browserId)).toBe(webview);
   });
 
   afterEach(() => {

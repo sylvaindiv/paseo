@@ -17,5 +17,6 @@ export function agentBrowserEnv(
     // A fixed base avoids inheriting a shell's socket location. Keep Unix socket paths short.
     AGENT_BROWSER_SOCKET_DIR: join(homedir(), ".agent-browser"),
     AGENT_BROWSER_SESSION: `${owner.kind === "agent" ? "a" : "t"}-${digest(owner.id).slice(0, 12)}`,
+    AGENT_BROWSER_IDLE_TIMEOUT_MS: "300000",
   };
 }

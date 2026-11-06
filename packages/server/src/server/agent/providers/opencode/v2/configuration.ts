@@ -78,6 +78,7 @@ const V2_SESSION_ENV_KEYS = new Set([
   "AGENT_BROWSER_NAMESPACE",
   "AGENT_BROWSER_SOCKET_DIR",
   "AGENT_BROWSER_SESSION",
+  "AGENT_BROWSER_IDLE_TIMEOUT_MS",
 ]);
 
 export function requiresDedicatedV2Server(

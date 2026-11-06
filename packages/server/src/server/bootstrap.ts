@@ -1,4 +1,5 @@
 import { DesktopToolsBroker } from "./desktop-tools/broker.js";
+import { disposeAgentBrowserDashboardsForHome } from "./agent-browser.js";
 import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
@@ -1909,6 +1910,9 @@ export async function createPaseoDaemon(
     await agentProviderRuntime.shutdown();
     await pluginRuntime.stopAllPlugins();
     terminalManager.killAll();
+    await disposeAgentBrowserDashboardsForHome(config.paseoHome).catch((error) =>
+      logger.warn({ err: error }, "Failed to stop owned agent-browser dashboards"),
+    );
     await speechService.stop();
     await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
 
 describe("InMemoryAgentTimelineStore", () => {
@@ -210,4 +213,124 @@ it("includes transitive tool updates in a contiguous projected tail", () => {
   const tail = store.fetch("a", { limit: 1 });
   expect(tail.rows.map((row) => row.seqStart)).toEqual([1, 2, 3, 5]);
   expect(tail).toMatchObject({ startSeq: 1, endSeq: 6, hasOlder: false });
+});
+
+it("pages a long transcript without changing older history or projected counts", () => {
+  const store = new InMemoryAgentTimelineStore();
+  store.initialize("a", { epoch: "stable" });
+  for (let seq = 1; seq <= 2_000; seq++) {
+    store.append("a", { type: "user_message", text: `Prompt ${seq}`, messageId: `${seq}` });
+  }
+  const tail = store.fetch("a", { limit: 40 });
+  expect(store.getItemCount("a")).toBe(2_000);
+  expect(tail.rows).toHaveLength(40);
+  expect(tail).toMatchObject({ startSeq: 1961, endSeq: 2000, hasOlder: true });
+  const before = store.fetch("a", {
+    direction: "before",
+    cursor: { epoch: "stable", seq: tail.startSeq! },
+    limit: 40,
+  });
+  expect(before.rows.map((row) => row.seq)).toEqual(
+    Array.from({ length: 40 }, (_, index) => 1921 + index),
+  );
+  tail.rows[0].seq = 0;
+  expect(store.fetch("a", { limit: 40 }).rows[0].seq).toBe(1961);
+  expect(store.getLastItem("a")).toMatchObject({ text: "Prompt 2000" });
+  expect(store.fetch("a", { limit: 0 }).rows).toHaveLength(2_000);
+});
+
+it("offloads complete history and restores the same epoch, approvals and anchors", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "paseo-timeline-"));
+  try {
+    const store = new InMemoryAgentTimelineStore(directory);
+    store.initialize("a", { epoch: "stable" });
+    store.append("a", { type: "user_message", text: "Build", clientMessageId: "client" });
+    store.enrichSubmittedUserMessage("a", "client", "provider");
+    store.append(
+      "a",
+      {
+        type: "tool_call",
+        callId: "approval",
+        name: "ExitPlanMode",
+        metadata: { approval: { decision: "approved", permissionId: "permission" } },
+        providerSpecific: { preserved: true },
+        status: "completed",
+        error: null,
+        detail: { type: "plain_text", label: "Plan", text: "Preserve the proposal" },
+      },
+      { turnId: "turn-1" },
+    );
+    store.append("a", { type: "error", message: "Paseo-only error" });
+    store.append("a", { type: "assistant_message", text: "Done", messageId: "done" });
+    const before = store.fetch("a", { limit: 0 });
+    expect(await store.offload("a")).toBe(true);
+    expect(store.has("a")).toBe(true);
+    expect(store.isResident("a")).toBe(false);
+    await store.restore("a");
+    expect(store.isResident("a")).toBe(true);
+    expect(store.fetch("a", { limit: 0 })).toEqual(before);
+    expect(store.append("a", { type: "user_message", text: "Continue" }).seq).toBe(5);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("keeps history in memory when its snapshot cannot be written or becomes stale", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "paseo-timeline-"));
+  try {
+    const invalidDirectory = join(directory, "file");
+    await writeFile(invalidDirectory, "occupied");
+    const failing = new InMemoryAgentTimelineStore(invalidDirectory);
+    failing.initialize("a", { items: [{ type: "error", message: "Keep me" }] });
+    await expect(failing.offload("a")).rejects.toThrow();
+    expect(failing.getItems("a")).toEqual([{ type: "error", message: "Keep me" }]);
+
+    const store = new InMemoryAgentTimelineStore(directory);
+    store.initialize("a", { epoch: "stable" });
+    store.append("a", { type: "user_message", text: "First" });
+    const offload = store.offload("a");
+    store.append("a", { type: "user_message", text: "Second" });
+    expect(await offload).toBe(false);
+    expect(store.getItemCount("a")).toBe(2);
+    expect(store.isResident("a")).toBe(true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("waits for an old snapshot deletion before offloading a reopened conversation again", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "paseo-timeline-"));
+  let releaseDelete!: () => void;
+  let startedDelete!: () => void;
+  const deleting = new Promise<void>((resolve) => {
+    startedDelete = resolve;
+  });
+  const deletionAllowed = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  const store = new InMemoryAgentTimelineStore(directory, async (path) => {
+    startedDelete();
+    await deletionAllowed;
+    await rm(path, { force: true });
+  });
+  try {
+    store.initialize("a", { epoch: "stable", items: [{ type: "user_message", text: "First" }] });
+    await store.offload("a");
+    await store.restore("a");
+    await deleting;
+    store.append("a", { type: "user_message", text: "Second" });
+    const nextOffload = store.offload("a");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(store.isResident("a")).toBe(true);
+    releaseDelete();
+    expect(await nextOffload).toBe(true);
+    await store.restore("a");
+    expect(store.getItems("a")).toEqual([
+      { type: "user_message", text: "First" },
+      { type: "user_message", text: "Second" },
+    ]);
+  } finally {
+    releaseDelete();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

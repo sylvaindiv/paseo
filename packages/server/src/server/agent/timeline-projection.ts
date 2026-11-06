@@ -327,6 +327,37 @@ export class TimelineProjection {
     return this.rows.map((row) => ({ ...row }));
   }
 
+  get count(): number {
+    return this.rows.length;
+  }
+
+  get minSeq(): number {
+    return this.rows[0]?.seqStart ?? 0;
+  }
+
+  getItems(): AgentTimelineItem[] {
+    return this.rows.map((row) => row.item);
+  }
+
+  findRow(predicate: (row: ProjectedTimelineRow) => boolean): ProjectedTimelineRow | null {
+    const row = this.rows.find(predicate);
+    return row ? { ...row } : null;
+  }
+
+  getLastAssistantMessage(): string | null {
+    const row = this.rows.findLast((candidate) => candidate.item.type === "assistant_message");
+    return row?.item.type === "assistant_message" ? row.item.text : null;
+  }
+
+  selectPage(input: {
+    bounds: { minSeq: number; maxSeq: number };
+    direction: TimelineLimitDirection;
+    cursorSeq?: number;
+    limit: number;
+  }): ProjectedTimelinePageSelection {
+    return selectProjectedEntriesPage({ ...input, entries: this.rows });
+  }
+
   enrichSubmittedUserMessage(
     clientMessageId: string,
     providerMessageId: string,
@@ -483,14 +514,16 @@ function selectProjectedEntriesAfter(input: {
   maxSeq: number;
   limit: number;
 }): { entries: TimelineProjectionEntry[]; endSeq: number | null } {
-  const eligible = input.entries
-    .map((entry, index) => ({
-      entry,
-      index,
-      firstSourceSeq: firstSourceSeqInRange(entry, input.startSeq, input.maxSeq),
-    }))
-    .filter((candidate): candidate is ProjectedEntryCandidate => candidate.firstSourceSeq !== null)
-    .sort((left, right) => left.firstSourceSeq - right.firstSourceSeq || left.index - right.index);
+  const eligible: ProjectedEntryCandidate[] = [];
+  for (let index = 0; index < input.entries.length; index++) {
+    const entry = input.entries[index];
+    if (entry.seqEnd < input.startSeq) continue;
+    const firstSourceSeq = firstSourceSeqInRange(entry, input.startSeq, input.maxSeq);
+    if (firstSourceSeq !== null) eligible.push({ entry, index, firstSourceSeq });
+  }
+  eligible.sort(
+    (left, right) => left.firstSourceSeq - right.firstSourceSeq || left.index - right.index,
+  );
   const selected = input.limit === 0 ? eligible : eligible.slice(0, input.limit);
   const selectedEntries = selected
     .sort((left, right) => left.index - right.index)
@@ -523,21 +556,25 @@ function selectProjectedEntriesBefore(input: {
   // Older history follows projected display order. Lifecycle updates can move an
   // entry's seqEnd without moving its display anchor, so seqStart keeps the full
   // projected item on exactly one backward page.
-  const eligible = input.entries.filter((entry) => entry.seqStart <= input.endSeq);
-  const selected =
-    input.limit === 0 || input.limit >= eligible.length
-      ? eligible
-      : eligible.slice(eligible.length - input.limit);
+  let end = 0;
+  let upper = input.entries.length;
+  while (end < upper) {
+    const middle = Math.floor((end + upper) / 2);
+    if (input.entries[middle].seqStart <= input.endSeq) end = middle + 1;
+    else upper = middle;
+  }
+  const start = input.limit === 0 ? 0 : Math.max(0, end - input.limit);
+  const selected = input.entries.slice(start, end);
 
   return {
     entries: selected,
     startSeq: selected[0]?.seqStart ?? null,
-    hasOlder: selected.length < eligible.length,
+    hasOlder: start > 0,
   };
 }
 
 function selectProjectedEntriesTail(
-  projectedAll: TimelineProjectionEntry[],
+  projectedAll: readonly TimelineProjectionEntry[],
   limit: number,
   bounds: { minSeq: number; maxSeq: number },
 ): ProjectedTimelinePageSelection {
@@ -564,9 +601,23 @@ export function selectProjectedTimelinePage(input: {
   cursorSeq?: number;
   limit?: number;
 }): ProjectedTimelinePageSelection {
+  return selectProjectedEntriesPage({
+    ...input,
+    bounds: input.bounds ?? getTimelineBounds(input.rows),
+    entries: projectTimelineRows({ rows: input.rows, mode: "projected" }),
+  });
+}
+
+function selectProjectedEntriesPage(input: {
+  entries: readonly TimelineProjectionEntry[];
+  bounds: { minSeq: number; maxSeq: number } | null;
+  direction: TimelineLimitDirection;
+  cursorSeq?: number;
+  limit?: number;
+}): ProjectedTimelinePageSelection {
   const limit = input.limit === undefined ? 0 : Math.max(0, Math.floor(input.limit));
-  const bounds = input.bounds ?? getTimelineBounds(input.rows);
-  const projectedAll = projectTimelineRows({ rows: input.rows, mode: "projected" });
+  const bounds = input.bounds;
+  const projectedAll = input.entries;
   if (!bounds) {
     return {
       entries: [],

@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { executeAutomationCommand, type BrowserRegistry, type TabImage } from "./service.js";
-import { adaptWebContents, HostSnapshotEngineRegistry } from "./ipc.js";
+import { adaptWebContents, getPageLifecycle, HostSnapshotEngineRegistry } from "./ipc.js";
+import { PARKED_BROWSER_IDLE_MS } from "./page-lifecycle.js";
 import type { IsolatedKeyboardInputEvent } from "./trusted-input.js";
 
 vi.mock("electron", () => ({
@@ -121,6 +122,10 @@ type ConsoleMessageListener = (
 ) => void;
 
 class FakeWebContents {
+  public audible = false;
+  public isCurrentlyAudible(): boolean {
+    return this.audible;
+  }
   public backgroundThrottling = true;
   public throttlingChanges: boolean[] = [];
   public failThrottleRestore = false;
@@ -229,6 +234,126 @@ class FakeWebContents {
     }
   }
 }
+
+describe("parked browser lifecycle", () => {
+  test("resumes a frozen guest before the automation adapter evaluates page scripts", async () => {
+    vi.useFakeTimers();
+    const contents = new FakeWebContents(3004);
+    const lifecycle = getPageLifecycle(contents);
+    try {
+      await lifecycle.setPresented(false);
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS);
+      const tab = adaptWebContents(contents);
+      await expect(
+        tab.captureDialogs?.(async () => {
+          await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS * 2);
+          return "done";
+        }),
+      ).resolves.toEqual({ result: "done", dialogs: [] });
+      expect(
+        contents.debugger.commands.filter((entry) => entry.command === "Page.setWebLifecycleState"),
+      ).toEqual([
+        { command: "Page.setWebLifecycleState", params: { state: "frozen" } },
+        { command: "Page.setWebLifecycleState", params: { state: "active" } },
+      ]);
+      expect(contents.debugger.commands.slice(0, 3)).toEqual([
+        { command: "Page.setWebLifecycleState", params: { state: "frozen" } },
+        { command: "Page.setWebLifecycleState", params: { state: "active" } },
+        { command: "Page.enable", params: {} },
+      ]);
+    } finally {
+      contents.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  test("freezes idle pages without navigating and resumes before automation and presentation", async () => {
+    vi.useFakeTimers();
+    const contents = new FakeWebContents(3001);
+    const lifecycle = getPageLifecycle(contents);
+    try {
+      await lifecycle.setPresented(false);
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS);
+      expect(contents.debugger.commands).toEqual([
+        { command: "Page.setWebLifecycleState", params: { state: "frozen" } },
+      ]);
+      await lifecycle.withAutomation(async () => {
+        expect(contents.debugger.commands.at(-1)).toEqual({
+          command: "Page.setWebLifecycleState",
+          params: { state: "active" },
+        });
+      });
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS);
+      await lifecycle.setPresented(true);
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS * 2);
+      expect(contents.debugger.commands.map((entry) => entry.params.state)).toEqual([
+        "frozen",
+        "active",
+        "frozen",
+        "active",
+      ]);
+      expect(contents.loadedUrls).toEqual([]);
+    } finally {
+      contents.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  test("keeps concurrent automation alive and releases failed commands", async () => {
+    vi.useFakeTimers();
+    const contents = new FakeWebContents(3002);
+    const lifecycle = getPageLifecycle(contents);
+    let finishFirst!: () => void;
+    let finishSecond!: () => void;
+    const firstTask = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const secondTask = new Promise<void>((resolve) => {
+      finishSecond = resolve;
+    });
+    try {
+      await lifecycle.setPresented(false);
+      const first = lifecycle.withAutomation(() => firstTask);
+      const second = lifecycle.withAutomation(async () => {
+        await secondTask;
+        throw new Error("command failed");
+      });
+      const secondResult = second.catch((error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS * 2);
+      finishFirst();
+      await first;
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS * 2);
+      expect(contents.debugger.commands).toEqual([]);
+      finishSecond();
+      expect(await secondResult).toBe("command failed");
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS);
+      expect(contents.debugger.commands).toEqual([
+        { command: "Page.setWebLifecycleState", params: { state: "frozen" } },
+      ]);
+    } finally {
+      contents.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  test("keeps audible pages active and cancels idle work on destruction", async () => {
+    vi.useFakeTimers();
+    const contents = new FakeWebContents(3003);
+    const lifecycle = getPageLifecycle(contents);
+    try {
+      contents.audible = true;
+      await lifecycle.setPresented(false);
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS * 2);
+      expect(contents.debugger.commands).toEqual([]);
+      contents.destroy();
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_IDLE_MS * 2);
+      expect(contents.debugger.commands).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("browser automation IPC adapter", () => {
   test("isolates snapshot refs by host window and releases them on destruction", () => {

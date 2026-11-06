@@ -17,7 +17,7 @@ export interface LifecycleAgentManager {
   clearAgentAttention(agentId: string): Promise<void>;
   archiveAgent(agentId: string): Promise<{ archivedAt: string }>;
   archiveSnapshot(agentId: string, archivedAt: string): Promise<StoredAgentRecord>;
-  closeAgent(agentId: string): Promise<void>;
+  closeAgent(agentId: string, options?: { offloadTimeline?: boolean }): Promise<void>;
   setLabels(agentId: string, labels: Record<string, string>): Promise<void>;
   detachAgent(agentId: string): Promise<{
     record: StoredAgentRecord;
@@ -147,8 +147,9 @@ export async function archiveAgentCommand(
 export async function closeAgentCommand(
   dependencies: Pick<AgentLifecycleCommandDependencies, "agentManager">,
   agentId: string,
+  options?: { offloadTimeline?: boolean },
 ): Promise<void> {
-  await dependencies.agentManager.closeAgent(agentId);
+  await dependencies.agentManager.closeAgent(agentId, options);
 }
 
 export interface UpdateAgentResult {

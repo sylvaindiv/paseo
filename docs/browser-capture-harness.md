@@ -113,6 +113,12 @@ Presentation resolves responsive guests to the pane's exact pixel dimensions aft
 has visible bounds. Do not apply percentage guest sizing against the parked surface: Electron
 exposes the 1x1 parking geometry as a real guest resize before expanding it again.
 
+Parked guests freeze after one minute without automation. Presentation and automation resume
+the same document; forms and history stay in memory. Commands hold a lease through completion,
+including failure, and lifecycle transitions share the per-guest CDP queue. Loading pages,
+audible media and open DevTools postpone freezing. Do not unload a retained guest to reclaim
+memory: its unsent form state belongs to the user.
+
 The permanent browser host and `overlay-root` are explicit sibling paint planes. The browser
 plane stays below the overlay plane regardless of body insertion order; menus keep their relative
 layering inside `overlay-root`. Activating a presented browser also focuses its registered guest

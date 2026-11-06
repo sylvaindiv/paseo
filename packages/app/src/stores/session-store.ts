@@ -340,6 +340,39 @@ export function selectAgentTimelineState(
   return items.length > 0 ? { status: "painted", items } : { status: "cold" };
 }
 
+/** Only the timeline owner may release a chat after all visibility demand ends. */
+export function canReleaseAgentTimeline(
+  session: SessionState | undefined,
+  agentId: string,
+): boolean {
+  if (!session || session.focusedAgentId === agentId) return false;
+  const agent = session.agents.get(agentId) ?? session.agentDetails.get(agentId);
+  if (
+    agent?.turn.phase === "open" ||
+    agent?.status === "initializing" ||
+    agent?.pendingPermissions.length
+  )
+    return false;
+  if (
+    session.messageSubmissions.get(agentId)?.length ||
+    session.queuedMessages.get(agentId)?.length
+  )
+    return false;
+  if (session.agentTimelineOlderFetchInFlight.get(agentId)) return false;
+  for (const permission of session.pendingPermissions.values()) {
+    if (permission.agentId === agentId) return false;
+  }
+  const tail = session.agentStreamTail.get(agentId);
+  const head = session.agentStreamHead.get(agentId);
+  // The host does not echo attachments, and older hosts may not acknowledge local
+  // submissions. Keep these presentations until their durable representation exists.
+  const needsLocalPresentation = (item: StreamItem) =>
+    !item.timelineCursor ||
+    (item.kind === "user_message" &&
+      ((item.images?.length ?? 0) > 0 || (item.attachments?.length ?? 0) > 0));
+  return !(tail?.some(needsLocalPresentation) || head?.some(needsLocalPresentation));
+}
+
 export function selectAgentTurnPresentation(
   session: SessionState | undefined,
   agentId: string,
@@ -465,6 +498,7 @@ interface SessionStoreActions {
   setFocusedTerminalId: (serverId: string, terminalId: string | null) => void;
 
   // Stream state (head/tail model)
+  releaseAgentTimeline: (serverId: string, agentId: string) => void;
   setAgentStreamTail: (
     serverId: string,
     state:
@@ -978,6 +1012,53 @@ export const useSessionStore = create<SessionStore>()(
             sessions: {
               ...prev.sessions,
               [serverId]: { ...session, agentStreamHead: nextState },
+            },
+          };
+        });
+      },
+
+      releaseAgentTimeline: (serverId, agentId) => {
+        set((prev) => {
+          const session = prev.sessions[serverId];
+          if (!session || !canReleaseAgentTimeline(session, agentId)) return prev;
+          const keys = [
+            "agentStreamTail",
+            "agentStreamHead",
+            "agentTasks",
+            "agentTimelineCursor",
+            "agentTimelineHasOlder",
+            "agentTimelineHasNewer",
+            "agentTimelineOlderFetchInFlight",
+            "agentHistorySyncGeneration",
+            "agentAuthoritativeHistoryApplied",
+          ] as const;
+          if (!keys.some((key) => session[key].has(agentId))) return prev;
+          const withoutAgent = <T>(values: Map<string, T>): Map<string, T> => {
+            if (!values.has(agentId)) return values;
+            const next = new Map(values);
+            next.delete(agentId);
+            return next;
+          };
+          return {
+            ...prev,
+            sessions: {
+              ...prev.sessions,
+              [serverId]: {
+                ...session,
+                agentStreamTail: withoutAgent(session.agentStreamTail),
+                agentStreamHead: withoutAgent(session.agentStreamHead),
+                agentTasks: withoutAgent(session.agentTasks),
+                agentTimelineCursor: withoutAgent(session.agentTimelineCursor),
+                agentTimelineHasOlder: withoutAgent(session.agentTimelineHasOlder),
+                agentTimelineHasNewer: withoutAgent(session.agentTimelineHasNewer),
+                agentTimelineOlderFetchInFlight: withoutAgent(
+                  session.agentTimelineOlderFetchInFlight,
+                ),
+                agentHistorySyncGeneration: withoutAgent(session.agentHistorySyncGeneration),
+                agentAuthoritativeHistoryApplied: withoutAgent(
+                  session.agentAuthoritativeHistoryApplied,
+                ),
+              },
             },
           };
         });

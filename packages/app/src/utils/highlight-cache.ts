@@ -20,47 +20,71 @@ export interface KeyedLine {
 // monospace text. Generous enough to cover the vast majority of real blocks.
 export const MAX_HIGHLIGHT_CHARS = 100_000;
 
-class LRUCache<K, V> {
-  private readonly map = new Map<K, V>();
-  constructor(private readonly max: number) {}
+interface CachedTokens {
+  lines: HighlightToken[][];
+  bytes: number;
+}
 
-  get(key: K): V | undefined {
-    const value = this.map.get(key);
-    if (value === undefined) return undefined;
-    this.map.delete(key);
-    this.map.set(key, value);
-    return value;
+function estimateRetainedBytes(key: string, lines: HighlightToken[][], limit: number): number {
+  // Include UTF-16 strings, tokens, line arrays and the cache entry. This is a
+  // conservative budget, not a heap measurement; shared strings can be counted twice.
+  let bytes = 64 + key.length * 2;
+  if (bytes > limit) return bytes;
+  for (const line of lines) {
+    bytes += 64;
+    if (bytes > limit) return bytes;
+    for (const token of line) {
+      bytes += 64 + token.text.length * 2 + (token.style?.length ?? 0) * 2;
+      if (bytes > limit) return bytes;
+    }
+  }
+  return bytes;
+}
+
+export class HighlightCache {
+  private readonly map = new Map<string, CachedTokens>();
+  private bytes = 0;
+  private readonly maxBytes: number;
+
+  constructor({ maxBytes = 8 * 1024 * 1024 } = {}) {
+    this.maxBytes = maxBytes;
   }
 
-  set(key: K, value: V): void {
-    if (this.map.has(key)) this.map.delete(key);
-    else if (this.map.size >= this.max) {
-      const oldest = this.map.keys().next().value;
-      if (oldest !== undefined) this.map.delete(oldest);
+  tokenizeToLines(code: string, ext: string | null): HighlightToken[][] | null {
+    if (!ext || code.length > MAX_HIGHLIGHT_CHARS) return null;
+    const key = `${ext}:${code}`;
+    const cached = this.map.get(key);
+    if (cached) {
+      this.map.delete(key);
+      this.map.set(key, cached);
+      return cached.lines;
     }
-    this.map.set(key, value);
+    let lines: HighlightToken[][];
+    try {
+      lines = highlightCode(code, `x.${ext}`);
+    } catch {
+      return null;
+    }
+    const bytes = estimateRetainedBytes(key, lines, this.maxBytes);
+    if (bytes > this.maxBytes) return lines;
+    while (this.map.size >= 200 || this.bytes + bytes > this.maxBytes) {
+      const oldest = this.map.entries().next().value;
+      if (!oldest) break;
+      this.map.delete(oldest[0]);
+      this.bytes -= oldest[1].bytes;
+    }
+    this.map.set(key, { lines, bytes });
+    this.bytes += bytes;
+    return lines;
   }
 }
 
-const tokenizationCache = new LRUCache<string, HighlightToken[][]>(200);
+const tokenizationCache = new HighlightCache();
 
-// Tokenize `code` to per-line tokens, cached. Returns null when the language is
-// unsupported, the input is over the size cap, or parsing throws — callers then
-// render plain text.
+// Tokenize `code` to per-line tokens, cached. Returns null when the input is over
+// the size cap or parsing throws — callers then render plain text.
 export function tokenizeToLines(code: string, ext: string | null): HighlightToken[][] | null {
-  if (!ext) return null;
-  if (code.length > MAX_HIGHLIGHT_CHARS) return null;
-  const cacheKey = `${ext}:${code}`;
-  const cached = tokenizationCache.get(cacheKey);
-  if (cached) return cached;
-  let lines: HighlightToken[][];
-  try {
-    lines = highlightCode(code, `x.${ext}`);
-  } catch {
-    return null;
-  }
-  tokenizationCache.set(cacheKey, lines);
-  return lines;
+  return tokenizationCache.tokenizeToLines(code, ext);
 }
 
 function toKeyedLine(tokens: HighlightToken[], lineIndex: number): KeyedLine {

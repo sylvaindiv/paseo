@@ -49,6 +49,9 @@ export const CodexProviderOptionsSchema = z
       .strict()
       .optional(),
     web_search: z.enum(["disabled", "cached", "indexed", "live"]).optional(),
+    mcp_servers: z
+      .record(z.string().min(1), z.object({ enabled: z.boolean() }).strict())
+      .optional(),
     features: z
       .object({
         network_proxy: z.union([z.boolean(), NetworkPolicySchema]).optional(),

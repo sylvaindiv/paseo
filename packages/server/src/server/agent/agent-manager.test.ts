@@ -1,7 +1,7 @@
 import { agentBrowserEnv } from "../agent-browser-env.js";
 import { expect, test, vi } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -12260,3 +12260,99 @@ test.each([false, true])(
     }
   },
 );
+
+test("closed timeline snapshots restore the complete canonical conversation without provider replay", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agent-manager-cold-history-"));
+  const storage = new AgentStorage(join(home, "agents"), logger);
+  const manager = new AgentManager({
+    paseoHome: home,
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  let agentId: string | undefined;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: home }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    await manager.appendTimelineItem(agent.id, {
+      type: "user_message",
+      text: "Start",
+      clientMessageId: "client",
+    });
+    await manager.appendTimelineItem(agent.id, { type: "error", message: "Paseo-only failure" });
+    await manager.appendTimelineItem(agent.id, {
+      type: "tool_call",
+      callId: "plan",
+      name: "ExitPlanMode",
+      status: "completed",
+      error: null,
+      detail: { type: "plan", text: "Keep this approved proposal" },
+    });
+    const before = manager.fetchTimeline(agent.id, { limit: 0 });
+    await manager.closeAgent(agent.id);
+    expect(manager.getAgent(agent.id)).toBeNull();
+    const reopened = await ensureAgentLoaded(agent.id, {
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+    });
+    expect(reopened.id).toBe(agent.id);
+    expect(manager.fetchTimeline(agent.id, { limit: 0 })).toEqual(before);
+    await manager.appendTimelineItem(agent.id, { type: "assistant_message", text: "Continue" });
+    expect(manager.fetchTimeline(agent.id, { limit: 0 }).window.nextSeq).toBe(
+      before.window.nextSeq + 1,
+    );
+  } finally {
+    if (agentId && manager.getAgent(agentId)) await manager.closeAgent(agentId);
+    await manager.flush();
+    await storage.flush();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  {
+    name: "archive",
+    close: async (manager: AgentManager, id: string) => {
+      await manager.archiveAgent(id);
+    },
+  },
+  {
+    name: "delete",
+    close: async (manager: AgentManager, id: string) => {
+      await manager.closeAgent(id, { offloadTimeline: false });
+      await manager.deleteAgentState(id);
+    },
+  },
+  {
+    name: "shutdown",
+    close: async (manager: AgentManager, id: string) => {
+      manager.prepareForShutdown();
+      await manager.closeAgent(id);
+    },
+  },
+])("closed timeline snapshots skip unnecessary disk writes during $name", async ({ close }) => {
+  const home = mkdtempSync(join(tmpdir(), "agent-manager-discard-history-"));
+  const storage = new AgentStorage(join(home, "agents"), logger);
+  const manager = new AgentManager({
+    paseoHome: home,
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: home }, undefined, {
+      workspaceId: undefined,
+    });
+    await manager.appendTimelineItem(agent.id, { type: "assistant_message", text: "History" });
+    await close(manager, agent.id);
+    expect(manager.getAgent(agent.id)).toBeNull();
+    expect(existsSync(join(home, "cache", "closed-timelines"))).toBe(false);
+  } finally {
+    await manager.flush();
+    await storage.flush();
+    rmSync(home, { recursive: true, force: true });
+  }
+});

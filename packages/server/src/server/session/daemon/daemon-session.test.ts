@@ -1,3 +1,4 @@
+import { summarizeProcessTree } from "../../process-tree-diagnostics.js";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -372,6 +373,8 @@ describe("DaemonSession", () => {
     }
     expect(message.payload.requestId).toBe("d-1");
     expect(message.payload.diagnostic).toContain("Daemon log tail");
+    expect(message.payload.diagnostic).toContain("Daemon and child processes");
+    expect(message.payload.diagnostic).toContain("Summed RSS (includes shared memory)");
     expect(message.payload.diagnostic).toContain("first line");
     expect(message.payload.diagnostic).not.toContain("relay.secret.test:443");
     expect(message.payload.diagnostic).not.toContain("super-secret");
@@ -525,5 +528,22 @@ describe("DaemonSession", () => {
       "Checkout diff: targets=6, subscriptions=7, watchers=8, fallbackRefreshTargets=9",
     );
     expect(message.payload.diagnostic).toContain("Agent lifecycle: idle=8, running=2");
+  });
+});
+
+describe("process tree diagnostics", () => {
+  test("accounts for descendants once and excludes unrelated processes", () => {
+    const table = [
+      { pid: 10, ppid: 1, rss: 100, name: "daemon" },
+      { pid: 11, ppid: 10, rss: 200, name: "agent" },
+      { pid: 12, ppid: 11, rss: 400, name: "tool" },
+      { pid: 13, ppid: 1, rss: 800, name: "unrelated" },
+    ];
+    expect(summarizeProcessTree(table, 10)).toEqual({
+      processCount: 3,
+      rss: 700,
+      largest: [table[2], table[1], table[0]],
+    });
+    expect(summarizeProcessTree(table, 99)).toEqual({ processCount: 0, rss: 0, largest: [] });
   });
 });

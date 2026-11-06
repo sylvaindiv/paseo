@@ -32,6 +32,7 @@ describe("OpenCode v2 helper isolation", () => {
             AGENT_BROWSER_NAMESPACE: "workspace",
             AGENT_BROWSER_SOCKET_DIR: "/tmp/browser",
             AGENT_BROWSER_SESSION: "agent-session",
+            AGENT_BROWSER_IDLE_TIMEOUT_MS: "300000",
           },
         },
       ),

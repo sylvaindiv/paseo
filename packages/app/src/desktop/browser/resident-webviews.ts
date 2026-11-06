@@ -16,6 +16,15 @@ const RESIDENT_VIEWPORT_HEIGHT = 800;
 const residentWebviewsByBrowserId = new Map<string, HTMLElement>();
 const residentSurfacesByBrowserId = new Map<string, HTMLElement>();
 const residentWebviewSizesByBrowserId = new Map<string, { width: number; height: number }>();
+const presentationByWebview = new WeakMap<
+  HTMLElement,
+  {
+    browserId: string;
+    browser: BrowserWebviewProfileHost;
+    presented: boolean;
+    registered: boolean;
+  }
+>();
 
 interface BrowserWebviewElement extends HTMLElement {
   src: string;
@@ -31,6 +40,7 @@ interface BrowserWebviewIdentity {
 export interface BrowserWebviewProfileHost {
   profilePartition: string;
   registerAttachedBrowser(input: DesktopAttachedBrowserRegistration): Promise<void>;
+  setPresented?: DesktopBrowserBridge["setPresented"];
 }
 
 function isAttachedBrowserBridge(
@@ -69,6 +79,15 @@ function registerBrowserWhenReady(
         workspaceId: identity.workspaceId,
         webContentsId,
       })
+      .then(() => {
+        const state = presentationByWebview.get(webview);
+        if (!state) return;
+        state.registered = true;
+        return state.browser.setPresented?.({
+          browserId: state.browserId,
+          presented: state.presented,
+        });
+      })
       .catch((error) => {
         console.error("[browser-webview] attached registration failed", error);
       });
@@ -91,8 +110,20 @@ function handleResidentStartLoading(event: Event): void {
 }
 
 function removeResidentListeners(webview: HTMLElement): void {
+  presentationByWebview.delete(webview);
   webview.removeEventListener("render-process-gone", handleResidentRenderProcessGone);
   webview.removeEventListener("did-start-loading", handleResidentStartLoading);
+}
+
+function setBrowserPresented(webview: HTMLElement, presented: boolean): void {
+  const state = presentationByWebview.get(webview);
+  if (!state || state.presented === presented) return;
+  state.presented = presented;
+  if (state.registered) {
+    void state.browser
+      .setPresented?.({ browserId: state.browserId, presented })
+      .catch((error) => console.error("[browser-webview] presentation update failed", error));
+  }
 }
 
 function trimNonEmpty(value: string | null | undefined): string | null {
@@ -295,8 +326,10 @@ export function presentBrowserWebview(
     // A revealed retained pane can be measured before its layout is restored.
     applyParkedBrowserSurfaceStyle(surface);
     applyInactiveBrowserWebviewViewport(normalizedBrowserId, webview, viewport);
+    setBrowserPresented(webview, false);
     return;
   }
+  setBrowserPresented(webview, true);
   surface.setAttribute("aria-hidden", "false");
   surface.style.position = "fixed";
   surface.style.left = `${surfaceLeft}px`;
@@ -330,6 +363,12 @@ export function prepareBrowserWebview(
   },
 ): void {
   const browser = getBrowserBridge(input.profileHost);
+  presentationByWebview.set(webview, {
+    browserId: input.browserId,
+    browser,
+    presented: false,
+    registered: false,
+  });
   webview.setAttribute(BROWSER_ID_ATTRIBUTE, input.browserId);
   webview.setAttribute("partition", browser.profilePartition);
   webview.setAttribute("allowpopups", "true");
@@ -433,6 +472,7 @@ export function releaseResidentBrowserWebview(browserId: string, webview: HTMLEl
   }
 
   residentWebviewsByBrowserId.set(normalizedBrowserId, webview);
+  setBrowserPresented(webview, false);
   applyResidentWebviewStyle(webview, normalizedBrowserId);
   const surface = getBrowserSurface(normalizedBrowserId, ownerDocument);
   applyParkedBrowserSurfaceStyle(surface);

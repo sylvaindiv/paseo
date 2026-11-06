@@ -1227,6 +1227,34 @@ describe("Codex app-server provider", () => {
     expect(turnStart).not.toHaveProperty("config.mcp_servers.hub.tools.reply");
   });
 
+  test("preserves per-profile MCP selection alongside the injected Paseo server", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({
+        providerOptions: { mcp_servers: { browser: { enabled: false } } },
+        mcpServers: { paseo: { type: "http", url: "http://127.0.0.1/paseo" } },
+      }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    try {
+      await session.startTurn("work without browser tools");
+      const start = appServer.requests().find((request) => request.method === "thread/start");
+      expect(start?.params).toMatchObject({
+        config: {
+          mcp_servers: {
+            browser: { enabled: false },
+            paseo: { url: "http://127.0.0.1/paseo" },
+          },
+        },
+      });
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
+  });
+
   test("passes ephemeral: true to thread/start when constructed as ephemeral", async () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const fakeClient: CodexClientLike = {
@@ -3076,6 +3104,7 @@ describe("Codex app-server provider", () => {
       AGENT_BROWSER_NAMESPACE: "workspace-one",
       AGENT_BROWSER_SESSION: "agent-one",
       AGENT_BROWSER_SOCKET_DIR: "/tmp/browser",
+      AGENT_BROWSER_IDLE_TIMEOUT_MS: "300000",
     };
     const session = new CodexAppServerAgentSession(
       createConfig(),

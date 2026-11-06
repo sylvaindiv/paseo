@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import type { AgentTimelineRow } from "./agent-manager.js";
 import {
+  TimelineProjection,
   projectTimelineRows,
   selectProjectedTimelinePage,
   selectTimelineWindowByProjectedLimit,
@@ -777,4 +778,60 @@ describe("selectProjectedTimelinePage", () => {
     expect(page.entries.some((entry) => entry.item.type === "tool_call")).toBe(true);
     expect(page.endSeq).toBe(501);
   });
+});
+
+test("pages retained projections with the same coverage as full projection", () => {
+  const tool = (callId: string, status: "running" | "completed") => ({
+    type: "tool_call" as const,
+    callId,
+    name: "shell",
+    status,
+    error: null,
+    detail: { type: "plain_text" as const, label: "Work" },
+  });
+  const rows: AgentTimelineRow[] = [
+    { type: "user_message", text: "Start" } as const,
+    tool("first", "running"),
+    tool("second", "running"),
+    { type: "assistant_message", text: "A" } as const,
+    { type: "assistant_message", text: "B" } as const,
+    tool("first", "completed"),
+    { type: "assistant_message", text: "C" } as const,
+    tool("second", "completed"),
+  ].map((item, index) => ({ seq: index + 1, timestamp: "2026-01-01T00:00:00.000Z", item }));
+  const projection = new TimelineProjection();
+  for (const row of rows) projection.append(row);
+  for (const direction of ["tail", "before", "after"] as const) {
+    for (const cursorSeq of [1, 4, 7, 9]) {
+      const request = {
+        direction,
+        cursorSeq,
+        limit: 2,
+        bounds: { minSeq: 1, maxSeq: rows.length },
+      };
+      const actual = projection.selectPage(request);
+      expect({
+        ...actual,
+        entries: actual.entries.map(({ item, seqStart, seqEnd, sourceSeqRanges }) => ({
+          item,
+          seqStart,
+          seqEnd,
+          sourceSeqRanges,
+        })),
+      }).toEqual(
+        (() => {
+          const expected = selectProjectedTimelinePage({ ...request, rows });
+          return {
+            ...expected,
+            entries: expected.entries.map(({ item, seqStart, seqEnd, sourceSeqRanges }) => ({
+              item,
+              seqStart,
+              seqEnd,
+              sourceSeqRanges,
+            })),
+          };
+        })(),
+      );
+    }
+  }
 });

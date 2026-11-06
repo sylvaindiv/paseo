@@ -91,7 +91,14 @@ await client.close();
 | `sandbox_mode`            | `read-only`, `workspace-write`, `danger-full-access`                              |
 | `sandbox_workspace_write` | `writable_roots`, `network_access`, `exclude_slash_tmp`, `exclude_tmpdir_env_var` |
 | `web_search`              | `disabled`, `cached`, `indexed`, `live`                                           |
+| `mcp_servers`             | Server names mapped to `{ enabled: boolean }`                                     |
 | `features`                | `multi_agent_v2`, `network_proxy` (boolean or a proxy/domain policy object)       |
+
+To avoid starting an inherited tool server for a profile, set
+`options.mcp_servers.<name>.enabled` to `false`. Omitted servers keep their native
+configuration. Servers explicitly injected through `mcpServers`, including Paseo,
+remain available. This takes effect on the next session launch or resume; it does
+not interrupt existing agents.
 
 `approval_policy: "never"` only removes the prompts. What the agent is allowed to touch is `sandbox_mode`. Setting `never` without a sandbox mode gives an unattended agent full access.
 

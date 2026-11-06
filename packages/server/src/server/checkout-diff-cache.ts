@@ -1,4 +1,5 @@
 import { LRUCache } from "lru-cache";
+import type { ParsedDiffFile } from "@getpaseo/protocol/messages";
 import type { CheckoutDiffCompare, CheckoutDiffResult } from "../utils/checkout-git.js";
 
 interface ActiveRead {
@@ -20,14 +21,51 @@ interface CheckoutDiffReadInput {
   load: () => Promise<CheckoutDiffResult>;
 }
 
+const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
+
+function estimateRetainedBytes(key: string, value: CheckoutDiffResult, limit: number): number {
+  // Conservative UTF-16 text and object/array overhead, without copying the payload.
+  // Stop walking as soon as the result cannot fit, including highly tokenized diffs.
+  let bytes = 128 + key.length * 2 + value.diff.length * 2;
+  if (bytes > limit) return bytes;
+  for (const file of value.structured ?? []) {
+    bytes += estimateFileRetainedBytes(file, limit - bytes);
+    if (bytes > limit) return bytes;
+  }
+  return bytes;
+}
+
+function estimateFileRetainedBytes(file: ParsedDiffFile, limit: number): number {
+  let bytes = 128 + file.path.length * 2 + (file.oldPath?.length ?? 0) * 2;
+  if (bytes > limit) return bytes;
+  for (const hunk of file.hunks) {
+    bytes += 64;
+    if (bytes > limit) return bytes;
+    for (const line of hunk.lines) {
+      bytes += 64 + line.content.length * 2;
+      if (bytes > limit) return bytes;
+      for (const token of line.tokens ?? []) {
+        bytes += 64 + token.text.length * 2 + (token.style?.length ?? 0) * 2;
+        if (bytes > limit) return bytes;
+      }
+    }
+  }
+  return bytes;
+}
+
 /** Completed payloads are bounded; active work survives invalidation and eviction. */
 export class CheckoutDiffCache {
-  private readonly values = new LRUCache<string, CachedDiff>({
-    max: 64,
-  });
+  private readonly values: LRUCache<string, CachedDiff>;
+  private readonly maxBytes: number;
   private readonly active = new Map<string, ActiveRead>();
 
-  constructor(private readonly now: () => number) {}
+  constructor(
+    private readonly now: () => number,
+    { maxBytes = DEFAULT_MAX_BYTES } = {},
+  ) {
+    this.maxBytes = maxBytes;
+    this.values = new LRUCache({ max: 64, maxSize: maxBytes });
+  }
 
   read(input: CheckoutDiffReadInput): Promise<CheckoutDiffResult> {
     const { cwd, compare, force, reason, load } = input;
@@ -70,8 +108,14 @@ export class CheckoutDiffCache {
         .then(load)
         .then((value) => {
           // Never repopulate the cache with a snapshot invalidated during its build.
-          if (!read.invalidated)
-            this.values.set(key, { value, loadedAt: this.now(), lastReadStarted: now });
+          if (!read.invalidated) {
+            const size = estimateRetainedBytes(key, value, this.maxBytes);
+            if (size <= this.maxBytes) {
+              this.values.set(key, { value, loadedAt: this.now(), lastReadStarted: now }, { size });
+            } else {
+              this.values.delete(key);
+            }
+          }
           return value;
         })
         .finally(() => this.active.delete(key)),

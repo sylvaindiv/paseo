@@ -134,6 +134,12 @@ const STORED_AGENT_CAPABILITIES: AgentCapabilityFlags = {
   supportsRewindBoth: false,
 };
 
+function createAgentTimelineStore(paseoHome: string | undefined): InMemoryAgentTimelineStore {
+  return new InMemoryAgentTimelineStore(
+    paseoHome ? resolve(paseoHome, "cache", "closed-timelines") : undefined,
+  );
+}
+
 type TimeoutResult = "completed" | "timed_out";
 
 function submittedPromptText(prompt: AgentPromptInput): string {
@@ -774,7 +780,7 @@ export class AgentManager {
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
   private readonly agents = new Map<string, LiveManagedAgent>();
-  private readonly timelineStore = new InMemoryAgentTimelineStore();
+  private readonly timelineStore: InMemoryAgentTimelineStore;
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
   private readonly sessionEventTails = new Map<string, Promise<void>>();
@@ -819,6 +825,7 @@ export class AgentManager {
 
   constructor(options: AgentManagerOptions) {
     this.paseoHome = options.paseoHome;
+    this.timelineStore = createAgentTimelineStore(options.paseoHome);
     this.onFirstUserPrompt = options.onFirstUserPrompt;
     this.resolveLaunchProfile = options.resolveLaunchProfile;
     this.pluginLifecycle = options.pluginLifecycle;
@@ -993,7 +1000,7 @@ export class AgentManager {
         continue;
       }
 
-      const len = this.timelineStore.getItems(agent.id).length;
+      const len = this.timelineStore.getItemCount(agent.id);
       totalItems += len;
       if (len > maxItemsPerAgent) {
         maxItemsPerAgent = len;
@@ -1844,7 +1851,7 @@ export class AgentManager {
     }
   }
 
-  closeAgent(agentId: string): Promise<void> {
+  closeAgent(agentId: string, options?: { offloadTimeline?: boolean }): Promise<void> {
     const existing = this.inFlightAgentCloses.get(agentId);
     if (existing) {
       return existing;
@@ -1852,7 +1859,7 @@ export class AgentManager {
 
     const close = this.runLifecycleMutation(agentId, async () => {
       // A preceding reload or archive may already have closed the durable agent.
-      if (this.agents.has(agentId)) await this.closeAgentRuntime(agentId);
+      if (this.agents.has(agentId)) await this.closeAgentRuntime(agentId, options);
     });
     this.inFlightAgentCloses.set(agentId, close);
     const clearClose = () => {
@@ -1864,7 +1871,10 @@ export class AgentManager {
     return close;
   }
 
-  private async closeAgentRuntime(agentId: string): Promise<void> {
+  private async closeAgentRuntime(
+    agentId: string,
+    options?: { offloadTimeline?: boolean },
+  ): Promise<void> {
     const agent = this.requireAgent(agentId);
     this.logger.trace(
       {
@@ -1890,6 +1900,22 @@ export class AgentManager {
       await this.persistSnapshot(closedAgent);
     } catch (error) {
       persistError = error;
+    }
+    // The provider transcript cannot reconstruct Paseo-only rows or their anchors.
+    // Release history only after a complete local snapshot succeeds.
+    if (
+      persistError === undefined &&
+      this.acceptingAgentRegistrations &&
+      options?.offloadTimeline !== false
+    ) {
+      try {
+        await this.timelineStore.offload(agentId);
+      } catch (err) {
+        this.logger.warn(
+          { err, agentId },
+          "Keeping closed timeline in memory after snapshot failure",
+        );
+      }
     }
     this.emitClosedAgent(closedAgent, { persist: false });
     this.logger.trace(
@@ -1943,7 +1969,7 @@ export class AgentManager {
 
     const { archivedAt } = await this.markRecordArchived(stored, requestedArchivedAt);
     agent.updatedAt = new Date(archivedAt);
-    await this.closeAgentRuntime(agentId);
+    await this.closeAgentRuntime(agentId, { offloadTimeline: false });
     await this.syncNativeArchiveState(stored.provider, stored.persistence, "archive");
     this.discardRetainedAgentState(agentId);
 
@@ -4190,6 +4216,7 @@ export class AgentManager {
       | undefined;
   }): Promise<{ durableTimelineHasRows: boolean }> {
     const { agentId, now, options } = params;
+    await this.timelineStore.restore(agentId);
     const timelineAlreadyPrimed = this.timelineStore.has(agentId);
     const explicitTimelineSeed = buildExplicitTimelineSeedForRegister(now, options);
     const shouldSeedFromDurable =

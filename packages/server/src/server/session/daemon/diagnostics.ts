@@ -9,6 +9,7 @@ import type { WebSocketRuntimeDiagnosticSnapshot } from "../../websocket/runtime
 import type { PersistedProjectRecord, PersistedWorkspaceRecord } from "../../workspace-registry.js";
 import { execCommand } from "../../../utils/spawn.js";
 import type { DaemonRuntimeConfig } from "./daemon-session.js";
+import { collectProcessTreeDiagnostics } from "../../process-tree-diagnostics.js";
 
 interface DiagnosticEntry {
   label: string;
@@ -81,6 +82,23 @@ export async function collectDaemonDiagnostics(options: DaemonDiagnosticsOptions
     );
   sections.push(
     await safeSection("Daemon process", () => collectProcessEntries(options), options.logger),
+  );
+  sections.push(
+    await safeSection(
+      "Daemon and child processes",
+      async () => {
+        const tree = await collectProcessTreeDiagnostics();
+        return [
+          { label: "Process count", value: String(tree.processCount) },
+          { label: "Summed RSS (includes shared memory)", value: formatBytes(tree.rss) },
+          ...tree.largest.map((entry) => ({
+            label: `${entry.name} (${entry.pid})`,
+            value: formatBytes(entry.rss),
+          })),
+        ];
+      },
+      options.logger,
+    ),
   );
   sections.push(
     await safeSection("Runtime config", () => collectRuntimeConfigEntries(options), options.logger),

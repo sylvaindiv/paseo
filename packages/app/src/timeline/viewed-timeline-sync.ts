@@ -6,6 +6,7 @@ import {
 import type { CachedTimeline } from "@/runtime/replica-cache";
 import {
   selectAgentTimelineState,
+  canReleaseAgentTimeline,
   useSessionStore,
   type AgentTimelineCursorState,
   type AgentTimelineState,
@@ -38,6 +39,7 @@ async function prepareCachedTimeline(input: {
   agentId: string;
   storage: TimelineReplicaStorage;
   prepareAgent: (agentId: string) => Promise<void>;
+  isCurrent: () => boolean;
 }): Promise<CachedTimeline | undefined> {
   const before = useSessionStore.getState().sessions[input.serverId];
   const beforeTimeline = selectAgentTimelineState(before, input.agentId);
@@ -46,7 +48,7 @@ async function prepareCachedTimeline(input: {
     input.storage.readTimeline(input.serverId, input.agentId),
     input.prepareAgent(input.agentId),
   ]);
-  if (!stored) return undefined;
+  if (!stored || !input.isCurrent()) return undefined;
   const session = useSessionStore.getState().sessions[input.serverId];
   const currentTimeline = selectAgentTimelineState(session, input.agentId);
   const currentHead = session?.agentStreamHead.get(input.agentId);
@@ -94,11 +96,13 @@ export interface TimelineReplica {
   readCursor(agentId: string): { epoch: string; endSeq: number } | undefined;
   readRange(agentId: string): AgentTimelineCursorState | undefined;
   timelineUpdated(agentId: string): void;
+  release(agentId: string): void;
 }
 
 class TimelineReplicaOwner implements TimelineReplica {
   private readonly cachedRanges = new Map<string, AgentTimelineCursorState>();
   private readonly preparations = new Map<string, Promise<void>>();
+  private readonly preparationTokens = new Map<string, object>();
 
   constructor(
     private readonly serverId: string,
@@ -109,7 +113,9 @@ class TimelineReplicaOwner implements TimelineReplica {
   async prepare(agentId: string): Promise<void> {
     const existing = this.preparations.get(agentId);
     if (existing) return existing;
-    const preparation = this.load(agentId).finally(() => {
+    const token = {};
+    this.preparationTokens.set(agentId, token);
+    const preparation = this.load(agentId, token).finally(() => {
       if (this.preparations.get(agentId) === preparation) {
         this.preparations.delete(agentId);
       }
@@ -118,12 +124,19 @@ class TimelineReplicaOwner implements TimelineReplica {
     return preparation;
   }
 
-  private async load(agentId: string): Promise<void> {
+  release(agentId: string): void {
+    this.preparationTokens.delete(agentId);
+    this.preparations.delete(agentId);
+    this.cachedRanges.delete(agentId);
+  }
+
+  private async load(agentId: string, token: object): Promise<void> {
     const stored = await prepareCachedTimeline({
       serverId: this.serverId,
       agentId,
       storage: this.storage,
       prepareAgent: this.prepareAgent,
+      isCurrent: () => this.preparationTokens.get(agentId) === token,
     });
     if (!stored) return;
     if (stored.range) {
@@ -365,6 +378,30 @@ export function createViewedTimelineOwner(input: {
   ports: ViewedTimelineOwnerPorts;
 }): ViewedTimelineOwner {
   const forcedTailReplacements = new Set<string>();
+  let demanded = new Set<string>();
+  const released = new Set<string>();
+  const pendingReleases = new Set<string>();
+  const pruneReleasedTimelines = () => {
+    for (const agentId of pendingReleases) {
+      const session = useSessionStore.getState().sessions[input.serverId];
+      if (!canReleaseAgentTimeline(session, agentId)) continue;
+      pendingReleases.delete(agentId);
+      input.replica.timelineUpdated(agentId);
+      input.replica.release(agentId);
+      useSessionStore.getState().releaseAgentTimeline(input.serverId, agentId);
+    }
+  };
+  const onTimelineUpdated = (agentId: string) => {
+    input.replica.timelineUpdated(agentId);
+    if (released.has(agentId)) {
+      pendingReleases.add(agentId);
+      pruneReleasedTimelines();
+    }
+  };
+  const unsubscribeRetention = useSessionStore.subscribe(
+    (state) => state.sessions[input.serverId],
+    pruneReleasedTimelines,
+  );
   const sync = createViewedTimelineSync({
     ...input.ports,
     fetchLatestTail: async (agentId) => {
@@ -377,7 +414,22 @@ export function createViewedTimelineOwner(input: {
     },
     prepare: (agentId) => input.replica.prepare(agentId),
     readCursor: (agentId) => input.replica.readCursor(agentId) ?? input.ports.readCursor(agentId),
-    replaceDemandedAgentIds: input.replaceDemandedAgentIds,
+    replaceDemandedAgentIds: (agentIds) => {
+      const next = new Set(agentIds);
+      for (const agentId of demanded) {
+        if (next.has(agentId)) continue;
+        released.add(agentId);
+        pendingReleases.add(agentId);
+        input.replica.release(agentId);
+      }
+      for (const agentId of next) {
+        released.delete(agentId);
+        pendingReleases.delete(agentId);
+      }
+      demanded = next;
+      input.replaceDemandedAgentIds(agentIds);
+      pruneReleasedTimelines();
+    },
     onCatchUpEnded: (agentId) =>
       useCreateFlowStore.getState().clearByAgent({ serverId: input.serverId, agentId }),
   });
@@ -386,7 +438,7 @@ export function createViewedTimelineOwner(input: {
     setAgentStreamState: (...args) => useSessionStore.getState().setAgentStreamState(...args),
     setAgentTimelineCursor: (...args) => useSessionStore.getState().setAgentTimelineCursor(...args),
     recoverTimelineGap: (agentId, cursor) => sync.recoverGap(agentId, cursor),
-    onCommitted: (agentId) => input.replica.timelineUpdated(agentId),
+    onCommitted: onTimelineUpdated,
   });
   return {
     ...sync,
@@ -399,7 +451,7 @@ export function createViewedTimelineOwner(input: {
         recoverGap: (agentId, cursor) => sync.recoverGap(agentId, cursor),
         drainQueuedAgentMessage: input.drainQueuedAgentMessage,
       });
-      if (accepted) input.replica.timelineUpdated(payload.agentId);
+      if (accepted) onTimelineUpdated(payload.agentId);
     },
     enqueueStreamEvent(agentId, event) {
       streamQueue.enqueue(agentId, event);
@@ -408,7 +460,11 @@ export function createViewedTimelineOwner(input: {
       streamQueue.flushAgent(agentId);
     },
     dispose() {
+      unsubscribeRetention();
       streamQueue.dispose({ flush: true });
+      // Replacing a connection owner is not a tab-close gesture. Keep visible
+      // history readable while the next owner reconnects.
+      demanded.clear();
       sync.dispose();
     },
   };
@@ -625,6 +681,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
       .prepare(agentId)
       .catch((error) => ports.reportError(error))
       .finally(() => {
+        if (cacheLoads.get(agentId) !== load) return;
         cacheLoads.delete(agentId);
         loadedCache.add(agentId);
         const pending = pendingCatchUps.get(agentId);
@@ -794,6 +851,8 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     for (const agentId of desired) {
       if (!nextDesired.includes(agentId)) {
         cancelCatchUp(agentId);
+        loadedCache.delete(agentId);
+        cacheLoads.delete(agentId);
         visibilityCatchUpPending.delete(agentId);
         visibilityCatchUpErrors.delete(agentId);
         manualRetries.delete(agentId);

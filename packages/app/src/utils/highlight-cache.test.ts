@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extensionFromPath,
+  HighlightCache,
   highlightToKeyedLines,
   MAX_HIGHLIGHT_CHARS,
   tokenizeToLines,
@@ -49,6 +50,37 @@ describe("tokenizeToLines", () => {
     const first = tokenizeToLines("const cached = true;", "ts");
     const second = tokenizeToLines("const cached = true;", "ts");
     expect(first).toBe(second);
+  });
+
+  it("evicts the least recently used result when the retained byte budget fills", () => {
+    const cache = new HighlightCache({ maxBytes: 2_300 });
+    const first = cache.tokenizeToLines("a".repeat(200), "cachetxt");
+    const second = cache.tokenizeToLines("b".repeat(200), "cachetxt");
+    expect(cache.tokenizeToLines("a".repeat(200), "cachetxt")).toBe(first);
+    const third = cache.tokenizeToLines("c".repeat(200), "cachetxt");
+    expect(cache.tokenizeToLines("a".repeat(200), "cachetxt")).toBe(first);
+    expect(cache.tokenizeToLines("c".repeat(200), "cachetxt")).toBe(third);
+    expect(cache.tokenizeToLines("b".repeat(200), "cachetxt")).not.toBe(second);
+  });
+
+  it("returns oversized tokenized results intact without retaining them or evicting other entries", () => {
+    const cache = new HighlightCache({ maxBytes: 2_300 });
+    const small = cache.tokenizeToLines("small", "cachetxt");
+    // Short text can still retain many arrays and tokens.
+    const code = Array.from({ length: 50 }, () => "x").join("\n");
+    const first = cache.tokenizeToLines(code, "cachetxt");
+    expect(first).toEqual(Array.from({ length: 50 }, () => [{ text: "x", style: null }]));
+    expect(cache.tokenizeToLines(code, "cachetxt")).not.toBe(first);
+    expect(cache.tokenizeToLines("small", "cachetxt")).toBe(small);
+  });
+
+  it("still limits the number of small entries", () => {
+    const cache = new HighlightCache();
+    const first = cache.tokenizeToLines("first", "cachetxt");
+    for (let index = 0; index < 200; index++) {
+      cache.tokenizeToLines(String(index), "cachetxt");
+    }
+    expect(cache.tokenizeToLines("first", "cachetxt")).not.toBe(first);
   });
 });
 
