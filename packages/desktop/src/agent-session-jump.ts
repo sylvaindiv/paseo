@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { AgentStorage, createRootLogger, resolvePaseoHome } from "@getpaseo/server";
 import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 
 const SESSION_JUMP_PROTOCOL = "paseo-local:";
@@ -41,6 +40,7 @@ export async function resolveAgentSessionJump(
   const session = url.searchParams.get("session")?.trim();
   if (!session) return null;
   const cwd = url.searchParams.get("cwd");
+  const { AgentStorage, createRootLogger, resolvePaseoHome } = await import("@getpaseo/server");
   const paseoHome = options.paseoHome ?? resolvePaseoHome();
   let serverId: string;
   try {
