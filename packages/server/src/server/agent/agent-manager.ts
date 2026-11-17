@@ -5997,9 +5997,11 @@ export class AgentManager {
       agentId,
       env: {
         ...env,
-        ...(opening?.workspaceId
-          ? agentBrowserEnv(opening.workspaceId, { kind: "agent", id: agentId }, this.paseoHome)
-          : {}),
+        ...agentBrowserEnv(
+          opening?.workspaceId ?? cwd,
+          { kind: "agent", id: agentId },
+          this.paseoHome,
+        ),
         PASEO_AGENT_ID: agentId,
         PASEO_AGENT_CWD: cwd,
       },

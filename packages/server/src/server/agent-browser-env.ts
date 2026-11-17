@@ -13,6 +13,9 @@ export function agentBrowserEnv(
   paseoHome = resolvePaseoHome(),
 ): Record<string, string> {
   return {
+    PASEO_BROWSER_INSTALLATION: digest(resolve(paseoHome)),
+    PASEO_BROWSER_OWNER: `${owner.kind}:${owner.id}`,
+    PASEO_BROWSER_WORKSPACE: workspaceId,
     AGENT_BROWSER_NAMESPACE: `p-${digest(JSON.stringify([resolve(paseoHome), workspaceId]))}`,
     // A fixed base avoids inheriting a shell's socket location. Keep Unix socket paths short.
     AGENT_BROWSER_SOCKET_DIR: join(homedir(), ".agent-browser"),

@@ -1,3 +1,4 @@
+import { startBrowserResourceService } from "./browser-resource-service.js";
 import { DesktopToolsBroker } from "./desktop-tools/broker.js";
 import { disposeAgentBrowserDashboardsForHome } from "./agent-browser.js";
 import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
@@ -1671,6 +1672,7 @@ export async function createPaseoDaemon(
 
   logger.info({ elapsed: elapsed() }, "Bootstrap complete, ready to start listening");
 
+  let stopBrowserResourceGuard: (() => Promise<void>) | null = null;
   const start = async () => {
     let mainStarted = false;
     try {
@@ -1866,6 +1868,17 @@ export async function createPaseoDaemon(
       // model loading doesn't block the server from accepting connections.
       speechService.start();
       scriptHealthMonitor.start();
+      try {
+        stopBrowserResourceGuard = await startBrowserResourceService({
+          paseoHome: config.paseoHome,
+          agentManager,
+          terminalManager,
+          persistedRecords,
+          logger,
+        });
+      } catch (err) {
+        logger.error({ err }, "Browser resource guard unavailable");
+      }
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
@@ -1882,6 +1895,9 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    await stopBrowserResourceGuard?.().catch((err) =>
+      logger.warn({ err }, "Browser resource guard shutdown failed"),
+    );
     localCredential = null;
     await deleteLocalCredential(config.paseoHome);
     // Stop tracking plugin provider registrations before anything tears plugins

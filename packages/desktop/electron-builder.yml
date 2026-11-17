@@ -26,6 +26,8 @@ files:
   - "!node_modules/@getpaseo/*/conversations/**"
   - "!node_modules/@getpaseo/*/test-results/**"
 asarUnpack:
+  - node_modules/@getpaseo/server/dist/server/server/browser-resource-entry.cjs
+  - node_modules/@getpaseo/server/dist/server/server/paseo-browser-resource
   - dist/daemon/node-entrypoint-runner.js
   - node_modules/@getpaseo/server/dist/server/terminal/shell-integration/**/*
 extraResources:
@@ -48,6 +50,7 @@ mac:
   category: public.app-category.developer-tools
   icon: assets/icon.icns
   binaries:
+    - Contents/Resources/app.asar.unpacked/node_modules/@getpaseo/server/dist/server/server/paseo-browser-resource
     - Contents/Resources/desktop-capture/paseo-desktop-capture
   hardenedRuntime: true
   notarize: true

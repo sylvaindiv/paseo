@@ -30,6 +30,11 @@ describe("agent-browser workspace association", () => {
   it("is stable, separates installations and workspaces, and gives each owner a default session", () => {
     const owner = { kind: "agent" as const, id: "one" };
     const first = agentBrowserEnv("workspace-a", owner, "/installation-a");
+    expect(first.PASEO_BROWSER_OWNER).toBe("agent:one");
+    expect(first.PASEO_BROWSER_WORKSPACE).toBe("workspace-a");
+    expect(first.PASEO_BROWSER_INSTALLATION).not.toBe(
+      agentBrowserEnv("workspace-a", owner, "/installation-b").PASEO_BROWSER_INSTALLATION,
+    );
     expect(first.AGENT_BROWSER_IDLE_TIMEOUT_MS).toBe("300000");
     expect(agentBrowserEnv("workspace-a", owner, "/installation-a")).toEqual(first);
     expect(

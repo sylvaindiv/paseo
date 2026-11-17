@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -44,3 +44,34 @@ test("traced daemon closure ships the OpenCode bridge plugin for every OpenCode 
     await rm(outRoot, { recursive: true, force: true });
   }
 });
+
+test(
+  "traced macOS daemon can launch its detached browser guard entrypoint",
+  {
+    skip: process.platform !== "darwin",
+  },
+  async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "trace-browser-guard-dist-"));
+    try {
+      await installTracedDaemon(outRoot);
+      const worker = path.join(outRoot, "guard-probe.mjs");
+      await writeFile(
+        worker,
+        `export async function runBrowserResourceWorker(directory, binary) { console.log(JSON.stringify([directory, binary])); }`,
+      );
+      const entry = path.join(
+        outRoot,
+        "packages/server/dist/server/server/browser-resource-entry.cjs",
+      );
+      const { stdout } = await promisify(execFile)(process.execPath, [
+        entry,
+        worker,
+        "state",
+        "helper",
+      ]);
+      assert.deepEqual(JSON.parse(stdout), ["state", "helper"]);
+    } finally {
+      await rm(outRoot, { recursive: true, force: true });
+    }
+  },
+);

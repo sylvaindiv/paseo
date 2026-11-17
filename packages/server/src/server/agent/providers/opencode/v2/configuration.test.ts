@@ -29,6 +29,9 @@ describe("OpenCode v2 helper isolation", () => {
           env: {
             PASEO_AGENT_ID: "agent",
             PASEO_AGENT_CWD: "/tmp/project",
+            PASEO_BROWSER_INSTALLATION: "0123456789abcdef",
+            PASEO_BROWSER_OWNER: "agent:agent",
+            PASEO_BROWSER_WORKSPACE: "workspace",
             AGENT_BROWSER_NAMESPACE: "workspace",
             AGENT_BROWSER_SOCKET_DIR: "/tmp/browser",
             AGENT_BROWSER_SESSION: "agent-session",

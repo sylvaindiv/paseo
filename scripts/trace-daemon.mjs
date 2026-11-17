@@ -93,6 +93,10 @@ const entries = [
 // Files read at runtime via fs APIs rather than `require`. nft only
 // traces the module graph; data files have to be listed explicitly.
 const additionalInputs = [
+  // Physical entrypoint used when starting the detached macOS browser guard.
+  ...(process.platform === "darwin"
+    ? ["packages/server/dist/server/server/browser-resource-entry.cjs"]
+    : []),
   // Agent orchestration skill catalog loaded through filesystem paths
   "packages/server/dist/server/skills/**",
   "packages/server/dist/server/builtin-plugins/**",

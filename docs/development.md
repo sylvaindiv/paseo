@@ -29,6 +29,33 @@ the titlebar row. Production builds leave the variable unset and show no label.
 
 `npm run dev` is only a shorthand for `npm run dev:server`. Keep `127.0.0.1:6767` for the packaged app and production-style `~/.paseo` state.
 
+## External automation browsers on macOS
+
+The daemon starts one detached browser resource guard per macOS user. A kernel
+lock shares the memory budget across Paseo installations; private state in
+`~/.paseo-browser-resource` preserves attribution when a browser detaches or the
+daemon exits. Keep the owner's environment on tool subprocesses. Chrome can clear
+its environment, so the guard also follows verified launch ancestry and retains
+kernel start times to reject reused PIDs.
+
+Only external Chrome automation roots with a debugging flag, a separate profile
+and verified Paseo ownership qualify. Connecting to an existing browser does not
+transfer ownership. Electron webviews and ordinary personal Chrome windows are
+excluded. Unknown ownership is logged without stopping the browser.
+
+The guard samples physical footprint every two seconds: 2 GiB per session and
+4 GiB shared. It stops the largest sessions until usage falls below 3 GiB after
+a shared overrun. Owner closure triggers cleanup; idle owners expire after five
+minutes. Memory limits also apply during an action. After one second, shutdown
+escalates to SIGKILL with another kernel identity check. Intervention mailboxes
+retain 100 events; logs rotate at 1 MiB. No URLs or page contents are recorded.
+
+`npm run build:server` builds the universal native helper on a Mac with Xcode
+Command Line Tools. Desktop packaging rebuilds it for the target architecture,
+unpacks it from asar and signs it explicitly. A missing helper produces
+`Browser resource guard unavailable`; do not assume protection is active after
+that error. Linux and Windows retain their existing browser behavior.
+
 ## Nix desktop package
 
 The flake exposes `packages.<system>.desktop` on Linux and macOS:

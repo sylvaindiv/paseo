@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { createTestLogger } from "../../../test-utils/test-logger.js";
+import { agentBrowserEnv } from "../../agent-browser-env.js";
+import { OpenCodeBridge } from "./opencode/bridge.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/client";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { OpenCodeEventSource } from "./opencode/event-consumer.js";
@@ -4116,6 +4118,35 @@ describe("OpenCode adapter startTurn error handling", () => {
 });
 
 describe("OpenCodeAgentClient env", () => {
+  test("shares the server for browser ownership and agent identity environment", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const cwd = tmpCwd();
+    const bridge = new OpenCodeBridge({ paseoHome: cwd, logger: createTestLogger() });
+    const client = new OpenCodeAgentClient(createTestLogger(), undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      bridge,
+    });
+    try {
+      const session = await client.createSession(
+        { provider: "opencode", cwd },
+        {
+          agentId: "agent",
+          env: {
+            PASEO_AGENT_ID: "agent",
+            PASEO_AGENT_CWD: cwd,
+            ...agentBrowserEnv("workspace", { kind: "agent", id: "agent" }),
+          },
+        },
+      );
+      await session.close();
+      expect(runtime.acquisitions).toEqual([{ kind: "current", releaseCount: 1 }]);
+    } finally {
+      await bridge.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("passes launch-context env to env-specific server acquisition", async () => {
     const runtime = new TestOpenCodeHarness();
     const openCodeClient = new TestOpenCodeClient();

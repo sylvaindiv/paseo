@@ -126,6 +126,23 @@ exports.default = async function afterPack(context) {
       "desktop-capture",
     );
     require("./build-capture-helper.cjs").buildCaptureHelper(resources, arch);
+    const browserHelperDirectory = path.join(
+      context.appOutDir,
+      `${EXECUTABLE_NAME}.app`,
+      "Contents",
+      "Resources",
+      "app.asar.unpacked",
+      "node_modules",
+      "@getpaseo",
+      "server",
+      "dist",
+      "server",
+      "server",
+    );
+    require("../../server/scripts/build-browser-resource-helper.cjs").buildBrowserResourceHelper(
+      browserHelperDirectory,
+      arch,
+    );
   }
 
   if (platform === "linux") {
