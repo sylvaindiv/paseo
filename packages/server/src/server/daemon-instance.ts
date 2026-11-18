@@ -1,3 +1,4 @@
+import { nativeProcessSnapshot, signalNativeProcess } from "./native-process.js";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -33,6 +34,23 @@ export {
   isSamePidLock as isSameDaemonInstance,
   type PidLockInfo as DaemonInstance,
 } from "./pid-lock.js";
+
+export { readDaemonRecovery, requestDaemonRecovery } from "./daemon-recovery-client.js";
+export async function managedDaemonCommand(
+  home: string,
+  command: import("./daemon-recovery-client.js").RecoveryCommand,
+) {
+  return (await import("./daemon-recovery.js")).managedDaemonCommand(home, command);
+}
+
+export async function prepareCoordinatedDaemonLaunch(input: {
+  home: string;
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+}) {
+  return (await import("./daemon-recovery.js")).prepareCoordinatedDaemonLaunch(input);
+}
 
 export class DaemonInstanceError extends Error {
   constructor(
@@ -92,6 +110,35 @@ function notReady(home: string, instance: PidLockInfo): DaemonInstanceError {
   );
 }
 
+async function forceStopCapturedInstance(home: string, instance: PidLockInfo): Promise<void> {
+  const current = await getPidLockInfo(home);
+  if (!current || !isSamePidLock(instance, current))
+    throw new DaemonInstanceError("DAEMON_REPLACED", "Daemon identity changed before termination");
+  if (process.platform !== "darwin") return killTree(instance.pid, "SIGKILL");
+  if (!instance.nativeStartedAt)
+    throw new DaemonInstanceError(
+      "IDENTITY_UNVERIFIED",
+      "Native daemon identity is unavailable; refusing forced termination",
+    );
+  const snapshot = await nativeProcessSnapshot();
+  const root = snapshot.find(
+    (p) => p.pid === instance.pid && p.startedAt === instance.nativeStartedAt,
+  );
+  if (!root)
+    throw new DaemonInstanceError("IDENTITY_CHANGED", "Daemon process identity no longer matches");
+  const owned = new Set([root.pid]);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const p of snapshot)
+      if (owned.has(p.parent) && !owned.has(p.pid)) {
+        owned.add(p.pid);
+        changed = true;
+      }
+  }
+  const targets = snapshot.filter((entry) => owned.has(entry.pid));
+  for (let i = targets.length - 1; i >= 0; i--) await signalNativeProcess(targets[i], "SIGKILL");
+}
+
 async function requestInstanceStop(
   home: string,
   instance: PidLockInfo,
@@ -126,7 +173,7 @@ async function requestInstanceStop(
           "DAEMON_REPLACED",
           `Supervisor changed for ${home}; refusing forced cleanup.`,
         );
-      await killTree(instance.pid, "SIGKILL");
+      await forceStopCapturedInstance(home, instance);
       forced = true;
     }
   } else if (!options.force) {
@@ -135,7 +182,7 @@ async function requestInstanceStop(
       `PID ${instance.pid} for ${home} has no graceful shutdown channel. Use --force explicitly to terminate it.`,
     );
   } else {
-    await killTree(instance.pid, "SIGKILL");
+    await forceStopCapturedInstance(home, instance);
     forced = true;
   }
   return { forced, usedLifecycleRpc };
@@ -194,7 +241,7 @@ export async function stopDaemonInstance(
   };
   let stopped = await waitForExit(forced ? killTimeoutMs : Math.max(0, deadline - Date.now()));
   if (!stopped && options.force && !forced) {
-    await killTree(instance.pid, "SIGKILL");
+    await forceStopCapturedInstance(home, instance);
     forced = true;
     stopped = await waitForExit(killTimeoutMs);
   }
@@ -205,6 +252,19 @@ export async function stopDaemonInstance(
     );
   await releasePidLock(home, { ownerPid: instance.pid, startedAt: instance.startedAt });
   return { action: "stopped", pid: instance.pid, forced, usedLifecycleRpc };
+}
+
+function shouldCoordinateLaunch(input: {
+  mode: string;
+  desktopManaged?: boolean;
+  foreground?: boolean;
+}): boolean {
+  return (
+    process.platform === "darwin" &&
+    input.mode === "managed" &&
+    input.desktopManaged === true &&
+    !input.foreground
+  );
 }
 
 export async function startDaemonInstance(input: {
@@ -221,6 +281,10 @@ export async function startDaemonInstance(input: {
   onReady?: (instance: PidLockInfo & { listen: string }) => void;
 }): Promise<{ instance: PidLockInfo; spawned: boolean; exitCode?: number }> {
   input.signal?.throwIfAborted();
+  if (shouldCoordinateLaunch(input)) {
+    const { startCoordinatedDaemon } = await import("./daemon-recovery.js");
+    return startCoordinatedDaemon(input);
+  }
   const existing = await readDaemonInstance(input.home);
   if (existing) return { instance: existing, spawned: false };
   const {

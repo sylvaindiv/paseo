@@ -200,3 +200,35 @@ describe("WebSocketRuntimeMetricsWindow", () => {
     expect(secondSnapshot.latency).toEqual([]);
   });
 });
+
+it("rotates local resource samples within ten MiB and bounds concurrent sampling", async () => {
+  const { ResourceRetentionLog } = await import("../resource-retention.js");
+  const { mkdtemp, writeFile, stat, readFile, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const root = await mkdtemp(join(tmpdir(), "retention-log-"));
+  try {
+    const file = join(root, "samples.ndjson");
+    await writeFile(file, "x".repeat(5 * 1024 * 1024));
+    await writeFile(`${file}.1`, "y".repeat(5 * 1024 * 1024));
+    const log = new ResourceRetentionLog(file);
+    let reads = 0;
+    await Promise.all([
+      log.sample(async () => {
+        reads++;
+        return { resident: 0 };
+      }),
+      log.sample(async () => {
+        reads++;
+        return { resident: 1 };
+      }),
+    ]);
+    expect(reads).toBe(1);
+    expect((await stat(file)).size + (await stat(`${file}.1`)).size).toBeLessThanOrEqual(
+      10 * 1024 * 1024,
+    );
+    expect(JSON.parse(await readFile(file, "utf8")).resources).toEqual({ resident: 0 });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

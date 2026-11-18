@@ -28,7 +28,14 @@ const attachedBrowsers: Array<{
   webContentsId: number;
 }> = [];
 const presentationChanges: Array<{ browserId: string; presented: boolean }> = [];
+let discardPage: ((payload: { browserId: string; url: string }) => void) | undefined;
 const profileHost: BrowserWebviewProfileHost = {
+  onDiscarded: (listener) => {
+    discardPage = listener;
+    return () => {
+      discardPage = undefined;
+    };
+  },
   profilePartition: "persist:paseo-browser",
   registerAttachedBrowser: async (input) => {
     attachedBrowsers.push(input);
@@ -596,4 +603,28 @@ describe("resident browser webviews", () => {
     expect(webview?.isConnected).toBe(false);
     expect(takeResidentBrowserWebview("browser-closed")).toBeNull();
   });
+});
+
+it("discards hidden guests without forgetting their URL and recreates only on explicit demand", () => {
+  const browserId = useBrowserStore.getState().createBrowser({ initialUrl: "https://example.com" });
+  const guest = ensureTestBrowser({
+    browserId,
+    workspaceId: "workspace",
+    url: "https://example.com",
+  });
+  expect(guest?.isConnected).toBe(true);
+  discardPage?.({ browserId, url: "https://example.com/last-page" });
+  expect(guest?.isConnected).toBe(false);
+  expect(getResidentBrowserWebview(browserId)).toBeNull();
+  expect(useBrowserStore.getState().browsersById[browserId]).toMatchObject({
+    suspended: true,
+    url: "https://example.com/last-page",
+  });
+  const resumed = ensureTestBrowser({
+    browserId,
+    workspaceId: "workspace",
+    url: useBrowserStore.getState().browsersById[browserId]!.url,
+  });
+  expect(resumed).not.toBe(guest);
+  expect(resumed?.getAttribute("partition")).toBe("persist:paseo-browser");
 });

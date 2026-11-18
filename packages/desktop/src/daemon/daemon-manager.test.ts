@@ -155,6 +155,31 @@ describe("daemon-manager commands", () => {
     expect(status.error).toBeTruthy();
   });
 
+  it("reports an inaccessible live daemon as errored and preserves its identity", async () => {
+    mkdirSync(mocks.paseoHome);
+    const startedAt = new Date().toISOString();
+    writeFileSync(
+      path.join(mocks.paseoHome, "paseo.pid"),
+      JSON.stringify({
+        pid: process.pid,
+        startedAt,
+        hostname: hostname(),
+        uid: process.getuid?.() ?? 0,
+        listen: "127.0.0.1:6799",
+      }),
+    );
+    mocks.runExternalCliJsonCommand.mockResolvedValue({
+      localDaemon: "running",
+      connectedDaemon: "unreachable",
+      pid: process.pid,
+      startedAt,
+      listen: "127.0.0.1:6799",
+    });
+    const status = await createDaemonCommandHandlers().desktop_daemon_status();
+    expect(status).toMatchObject({ status: "errored", pid: process.pid, startedAt });
+    expect(status.error).toBe("Connexion impossible.");
+  });
+
   it("returns a local credential only for its live managed daemon listen", async () => {
     mkdirSync(mocks.paseoHome);
     const token = "a".repeat(43);

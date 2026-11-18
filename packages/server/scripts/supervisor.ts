@@ -34,10 +34,6 @@ type WorkerLifecycleMessage =
       reason?: string;
     };
 
-interface SupervisorHeartbeatMessage {
-  type: "paseo:supervisor-heartbeat";
-}
-
 interface SupervisorGracefulShutdownMessage {
   type: "paseo:graceful-shutdown";
   requestId: string;
@@ -65,6 +61,7 @@ interface SupervisorOptions {
 
 export interface SupervisorController {
   requestShutdown(reason: string): void;
+  health(): { healthy: boolean; listen: string | null };
 }
 
 function describeExit(code: number | null, signal: NodeJS.Signals | null): string {
@@ -192,6 +189,22 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   const resolveWorkerSpawnSpec = options.resolveWorkerSpawnSpec;
 
   let child: ChildProcess | null = null;
+  let awaitingStopIntent = false;
+  const stopIntentAcks = new Map<string, () => void>();
+  process.on("message", (message: unknown) => {
+    if (
+      message &&
+      typeof message === "object" &&
+      "type" in message &&
+      message.type === "paseo:coordinator-intent-saved" &&
+      "requestId" in message &&
+      typeof message.requestId === "string"
+    )
+      stopIntentAcks.get(message.requestId)?.();
+  });
+  let lastWorkerAck = 0;
+  let workerListen: string | null = null;
+  const heartbeatRequests = new Set<string>();
   let restarting = false;
   let shuttingDown = false;
   let exiting = false;
@@ -320,7 +333,11 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     let reachedReady = false;
     // Serialize endpoint writes with exit/clear before allowing another worker to spawn.
     const heartbeat = setInterval(() => {
-      const message: SupervisorHeartbeatMessage = { type: "paseo:supervisor-heartbeat" };
+      const requestId = randomUUID();
+      heartbeatRequests.add(requestId);
+      if (heartbeatRequests.size > 4)
+        heartbeatRequests.delete(heartbeatRequests.values().next().value!);
+      const message = { type: "paseo:supervisor-heartbeat", requestId };
       if (currentChild.connected) {
         currentChild.send?.(message, (error) => {
           if (error) {
@@ -350,6 +367,19 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     });
 
     child.on("message", (msg: unknown) => {
+      if (
+        msg &&
+        typeof msg === "object" &&
+        "type" in msg &&
+        msg.type === "paseo:worker-heartbeat" &&
+        "requestId" in msg &&
+        typeof msg.requestId === "string" &&
+        child === currentChild &&
+        heartbeatRequests.delete(msg.requestId)
+      ) {
+        lastWorkerAck = Date.now();
+        return;
+      }
       const lifecycleMessage = parseLifecycleMessage(msg);
       if (!lifecycleMessage || child !== currentChild) {
         return;
@@ -372,6 +402,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
 
       if (lifecycleMessage.type === "paseo:ready") {
         reachedReady = true;
+        workerListen = lifecycleMessage.listen;
         writeLifecycleLog("Worker ready", { listen: lifecycleMessage.listen });
         publication = publication
           .then(() =>
@@ -412,6 +443,9 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       clearForceKillTimer();
       clearPendingShutdown();
       child = null;
+      workerListen = null;
+      lastWorkerAck = 0;
+      heartbeatRequests.clear();
       publication = publication
         .then(() => options.onWorkerExit?.())
         .catch((error) => {
@@ -438,6 +472,18 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
           restartOnCrash &&
           ((code !== 0 && code !== null) || (signal !== null && signal !== "SIGTERM"));
 
+        if ((restarting || crashed) && workerEnv.PASEO_DAEMON_GENERATION) {
+          process.send?.(
+            {
+              type: "paseo:coordinator-restart-intent",
+              reason: crashed ? "worker_crashed" : "worker_requested_restart",
+            },
+            () => {},
+          );
+          log("Managed replacement delegated to recovery coordinator");
+          exitSupervisor(75);
+          return;
+        }
         if (restarting || crashed) {
           restarting = false;
           log(
@@ -523,7 +569,25 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       });
       return;
     }
-    requestWorkerShutdown(reason, false);
+    if (!workerEnv.PASEO_DAEMON_GENERATION) {
+      requestWorkerShutdown(reason, false);
+      return;
+    }
+    if (awaitingStopIntent || !process.connected) return;
+    awaitingStopIntent = true;
+    const requestId = randomUUID();
+    const timer = setTimeout(() => {
+      stopIntentAcks.delete(requestId);
+      awaitingStopIntent = false;
+      writeLifecycleLog("Coordinator did not persist stop intent; preserving worker");
+    }, 2_000);
+    stopIntentAcks.set(requestId, () => {
+      clearTimeout(timer);
+      stopIntentAcks.delete(requestId);
+      awaitingStopIntent = false;
+      requestWorkerShutdown(reason, false);
+    });
+    process.send?.({ type: "paseo:coordinator-stop-intent", requestId }, () => {});
   };
 
   const forwardSignal = (signal: NodeJS.Signals) => {
@@ -539,5 +603,11 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   writeLifecycleLog(options.startupMessage);
   spawnWorker();
 
-  return { requestShutdown };
+  return {
+    requestShutdown,
+    health: () => ({
+      healthy: lastWorkerAck > 0 && Date.now() - lastWorkerAck <= 2_000,
+      listen: workerListen,
+    }),
+  };
 }

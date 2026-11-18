@@ -388,6 +388,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     pushNotifications: options.pushNotifications ?? asPushNotifications(),
     paseoHome: options.paseoHome ?? "/tmp/paseo-home",
     agentManager: asAgentManager({
+      setTimelineReaders: vi.fn(),
       listAgents: vi.fn(() => []),
       listProviderSubagentActivity: vi.fn(() => []),
       subscribe: vi.fn(() => () => {}),
@@ -5871,4 +5872,32 @@ test("provider snapshots preserve versionless visibility while capabilities upda
     "plugin-provider",
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
+});
+
+test("timeline readers track every owned source and release on session cleanup", async () => {
+  const readers = vi.fn();
+  const session = createSessionForTest({ agentManager: { setTimelineReaders: readers } });
+  const left = {},
+    right = {};
+  session.updateClientCapabilities({ selective_agent_timeline: true }, left);
+  session.updateClientCapabilities({ selective_agent_timeline: true }, right);
+  for (const source of [left, right])
+    await session.handleMessage(
+      {
+        type: "agent.timeline.set_subscription.request",
+        agentIds: ["agent-a"],
+        requestId: "reader",
+      },
+      source,
+    );
+  expect(readers.mock.calls.at(-1)?.[1]).toContain("agent-a");
+  session.clearAgentTimelineSubscription(left);
+  await Promise.resolve();
+  expect(readers.mock.calls.at(-1)?.[1]).toContain("agent-a");
+  session.clearAgentTimelineSubscription(right);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(readers.mock.calls.at(-1)?.[1]).toEqual([]);
+  await session.cleanup();
+  expect(readers.mock.calls.at(-1)?.[1]).toEqual([]);
 });

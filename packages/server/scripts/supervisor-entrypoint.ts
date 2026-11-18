@@ -98,6 +98,11 @@ function resolvePackagedNodeEntrypointRunnerPath(currentScriptPath: string): str
 }
 
 async function main(): Promise<void> {
+  if (process.env.PASEO_DAEMON_COORDINATOR === "1") {
+    const { runDaemonCoordinator } = await import("../src/server/daemon-recovery.js");
+    await runDaemonCoordinator(resolvePaseoHome(process.env));
+    return;
+  }
   const config = parseConfig(process.argv.slice(2));
   const workerEntry = config.devMode ? resolveDevWorkerEntry() : resolveWorkerEntry();
   const workerExecArgv = resolveWorkerExecArgv(workerEntry, config.devMode);
@@ -177,6 +182,22 @@ async function main(): Promise<void> {
     onSupervisorExit: releaseLock,
   });
   requestSupervisorShutdown = supervisor.requestShutdown;
+  process.on("message", (message: unknown) => {
+    if (
+      !message ||
+      typeof message !== "object" ||
+      !("type" in message) ||
+      message.type !== "paseo:coordinator-probe" ||
+      !("requestId" in message) ||
+      typeof message.requestId !== "string"
+    )
+      return;
+    process.send?.({
+      type: "paseo:coordinator-health",
+      requestId: message.requestId,
+      ...supervisor.health(),
+    });
+  });
 }
 
 // The supervisor opens its log only after config and the PID lock succeed. A background

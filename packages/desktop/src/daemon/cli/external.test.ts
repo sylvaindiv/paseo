@@ -59,6 +59,26 @@ function mockExternalCliOutput(input: {
 }
 
 describe("external CLI", () => {
+  it("bounds a CLI that never exits and terminates that child", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: vi.fn(),
+      });
+      mocks.spawnProcess.mockReturnValueOnce(child);
+      const result = runExternalCliJsonCommand(["daemon", "status", "--json"]);
+      const rejected = expect(result).rejects.toMatchObject({ code: "CLI_TIMEOUT" });
+      await vi.advanceTimersByTimeAsync(90_000);
+      await rejected;
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      child.emit("close", null);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("runs text commands through an isolated CLI process", async () => {
     mockExternalCliOutput({ stdout: "daemon running\n" });
 

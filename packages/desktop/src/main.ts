@@ -101,7 +101,10 @@ import {
   stopDesktopManagedDaemonOnQuitIfNeeded,
 } from "./daemon/quit-lifecycle.js";
 import { runDesktopStartup } from "./desktop-startup.js";
-import { registerBrowserAutomationIpc } from "./features/browser-automation/ipc.js";
+import {
+  registerBrowserAutomationIpc,
+  observeBrowserPageActivity,
+} from "./features/browser-automation/ipc.js";
 import { BrowserKeyboard } from "./features/browser-keyboard/index.js";
 import { installAppUpdateOnQuit } from "./features/auto-updater.js";
 import {
@@ -836,6 +839,7 @@ async function createWindow(
   });
   mainWindow.webContents.on("did-attach-webview", (_event, contents) => {
     preparePaseoBrowserWebContents(contents);
+    observeBrowserPageActivity(contents);
     contents.once("destroyed", () => {
       pendingBrowserWindowOpenRequests.delete(contents.id);
     });

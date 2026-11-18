@@ -1,3 +1,4 @@
+import { readRetainedReadingPosition, retainReadingPosition } from "./reading-anchor";
 import { describe, expect, it } from "vitest";
 import { createReadingAnchor } from "./reading-anchor";
 
@@ -119,4 +120,15 @@ describe("reading anchor", () => {
       ),
     ).toBe(0);
   });
+});
+
+it("keeps only a reading address across view lifetimes and clears it on returning to bottom", () => {
+  const position = { epoch: "epoch", seq: 300, messageId: "older-message" };
+  retainReadingPosition("server-a", "agent", position);
+  for (let cycle = 0; cycle < 20; cycle++) {
+    expect(readRetainedReadingPosition("server-a", "agent")).toEqual(position);
+    expect(readRetainedReadingPosition("server-b", "agent")).toBeUndefined();
+  }
+  retainReadingPosition("server-a", "agent", null);
+  expect(readRetainedReadingPosition("server-a", "agent")).toBeUndefined();
 });

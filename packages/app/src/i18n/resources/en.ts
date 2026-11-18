@@ -1559,6 +1559,13 @@ export const en = {
       detail: "Stopping the local daemon.",
     },
     daemon: {
+      recovery: {
+        title: "Local connection",
+        pending: "Restoring connection",
+        failed: "Could not restore connection",
+        success: "Connection restored",
+        retry: "Restart",
+      },
       title: "Daemon",
       lifecycle: {
         owned: "Launched by this Desktop session",

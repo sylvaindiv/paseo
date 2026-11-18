@@ -1,3 +1,4 @@
+import { nativeProcessSnapshot } from "./native-process.js";
 import { readFileSync } from "node:fs";
 import { open, readFile, stat, unlink, utimes } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -17,6 +18,8 @@ export const pidLockInfoSchema = z.object({
   desktopManaged: z.boolean().optional(),
   heartbeat: z.literal(true).optional(),
   bootId: z.string().optional(),
+  nativeStartedAt: z.string().optional(),
+  generation: z.string().optional(),
 });
 
 export interface PidLockInfo extends z.infer<typeof pidLockInfoSchema> {}
@@ -239,6 +242,10 @@ export async function acquirePidLock(
 
   // Create new lock with exclusive flag
   const bootId = currentBootId();
+  const native =
+    process.platform === "darwin"
+      ? (await nativeProcessSnapshot().catch(() => [])).find((p) => p.pid === lockOwnerPid)
+      : undefined;
   const lockInfo: PidLockInfo = {
     pid: lockOwnerPid,
     startedAt: new Date().toISOString(),
@@ -247,6 +254,10 @@ export async function acquirePidLock(
     listen,
     heartbeat: true,
     ...(bootId ? { bootId } : {}),
+    ...(native ? { nativeStartedAt: native.startedAt } : {}),
+    ...(process.env.PASEO_DAEMON_GENERATION
+      ? { generation: process.env.PASEO_DAEMON_GENERATION }
+      : {}),
     ...(process.env.PASEO_DESKTOP_MANAGED === "1" ? { desktopManaged: true } : {}),
   };
 

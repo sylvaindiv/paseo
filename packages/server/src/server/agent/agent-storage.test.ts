@@ -5,6 +5,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { promises as fs } from "node:fs";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import { markInterruptedDaemonTurns } from "../daemon-recovery-interruption.js";
 import { AgentStorage } from "./agent-storage.js";
 import { buildConfigOverrides, buildSessionConfig } from "../persistence-hooks.js";
 import type { ManagedAgent } from "./agent-manager.js";
@@ -147,6 +148,21 @@ describe("AgentStorage", () => {
 
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("forced recovery marks persisted active turns without changing idle history", async () => {
+    await storage.applySnapshot(createManagedAgent({ id: "active", lifecycle: "running" }));
+    await storage.applySnapshot(createManagedAgent({ id: "idle", lifecycle: "idle" }));
+    const idle = await new AgentStorage(storagePath, logger).get("idle");
+    await markInterruptedDaemonTurns(tmpDir);
+    const restored = new AgentStorage(storagePath, logger);
+    expect(await restored.get("active")).toMatchObject({
+      lastStatus: "closed",
+      requiresAttention: true,
+      attentionReason: "error",
+      lastError: "Tour interrompu lors du rétablissement de la connexion.",
+    });
+    expect(await restored.get("idle")).toEqual(idle);
   });
 
   test("applySnapshot persists configs and snapshot metadata", async () => {

@@ -62,6 +62,34 @@ describe("daemon instance identity across a reboot", () => {
     },
   );
 
+  test.skipIf(process.platform !== "darwin")(
+    "a reused native creation identity never authorizes force",
+    async () => {
+      bystander = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+      });
+      await writeLock(paseoHome, {
+        ...lockFor(bystander.pid!, new Date()),
+        nativeStartedAt: "0:0",
+      });
+      const error = Object.assign(new Error("Unreachable"), { code: "DAEMON_UNREACHABLE" });
+      await expect(
+        stopDaemonInstance(paseoHome, {
+          force: true,
+          requestShutdown: async () => {
+            throw error;
+          },
+        }),
+      ).rejects.toMatchObject({ code: "IDENTITY_CHANGED" });
+      expect(bystander.exitCode).toBe(null);
+      expect(bystander.signalCode).toBe(null);
+      expect(await getPidLockInfo(paseoHome)).toMatchObject({
+        pid: bystander.pid,
+        nativeStartedAt: "0:0",
+      });
+    },
+  );
+
   test("a lock stamped before this boot has no running owner", async () => {
     await writeLock(paseoHome, lockFor(process.pid, new Date(bootedAt() - 60 * 60_000)));
 

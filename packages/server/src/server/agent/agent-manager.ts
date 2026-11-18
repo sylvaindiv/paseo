@@ -788,6 +788,156 @@ export class AgentManager {
   private readonly foregroundMutationTails = new Map<string, Promise<void>>();
   private readonly runs = new AgentRunState();
   private readonly subscribers = new Set<SubscriptionRecord>();
+  private readonly timelineReaders = new Map<object, Set<string> | "all">();
+  private readonly inactiveSince = new Map<string, { since: number; updatedAt: number }>();
+  private inactivitySweep: Promise<Record<string, number>> | null = null;
+  private releasedInactiveSessions = 0;
+
+  setTimelineReaders(owner: object, agentIds: Iterable<string> | "all"): void {
+    const next = agentIds === "all" ? "all" : new Set(agentIds);
+    if (next !== "all" && next.size === 0) this.timelineReaders.delete(owner);
+    else this.timelineReaders.set(owner, next);
+    for (const id of this.inactiveSince.keys()) {
+      if (next === "all" || next.has(id)) this.inactiveSince.delete(id);
+    }
+  }
+
+  private inactivityRetentionReason(agent: LiveManagedAgent): string | null {
+    if (!this.acceptingAgentRegistrations) return "shutdown";
+    if (
+      agent.lifecycle !== "idle" ||
+      agent.activeTurnId ||
+      agent.activeForegroundTurnId ||
+      this.runs.hasRun(agent.id) ||
+      agent.pendingReplacement
+    )
+      return "active";
+    if (!agent.persistence || !this.registry || agent.internal) return "not-persistent";
+    if (
+      agent.pendingPermissions.size ||
+      agent.inFlightPermissionResponses.size ||
+      (agent.attention.requiresAttention && agent.attention.attentionReason === "permission")
+    )
+      return "attention";
+    if ([...this.timelineReaders.values()].some((ids) => ids === "all" || ids.has(agent.id)))
+      return "reader";
+    if (this.providerSubagents.list(agent.id).some((child) => child.status === "running"))
+      return "subagent";
+    if (
+      [...this.agents.values()].some(
+        (child) =>
+          child.labels[PARENT_AGENT_ID_LABEL] === agent.id &&
+          (child.lifecycle !== "idle" ||
+            child.pendingPermissions.size ||
+            this.runs.hasRun(child.id)),
+      )
+    )
+      return "subagent";
+    if (!agent.session.canCloseForInactivity) return "provider-unverified";
+    return null;
+  }
+
+  hibernateInactiveAgents(now = Date.now()): Promise<Record<string, number>> {
+    if (this.inactivitySweep) return this.inactivitySweep;
+    const sweep = async () => {
+      const reasons: Record<string, number> = {};
+      const count = (reason: string) => {
+        reasons[reason] = (reasons[reason] ?? 0) + 1;
+      };
+      for (const id of this.inactiveSince.keys())
+        if (!this.agents.has(id)) this.inactiveSince.delete(id);
+      const agentIds = Array.from(this.agents.keys());
+      for (const id of agentIds) {
+        await this.runLifecycleMutation(id, async () => {
+          let agent = this.agents.get(id);
+          if (!agent) return;
+          let reason = this.inactivityRetentionReason(agent);
+          if (reason) {
+            this.inactiveSince.delete(id);
+            count(reason);
+            return;
+          }
+          const updatedAt = agent.updatedAt.getTime();
+          let candidate = this.inactiveSince.get(id);
+          if (!candidate || candidate.updatedAt !== updatedAt) {
+            candidate = { since: now, updatedAt };
+            this.inactiveSince.set(id, candidate);
+          }
+          if (now - candidate.since < 15 * 60_000) {
+            count("recent-use");
+            return;
+          }
+          try {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            let safe: boolean | undefined;
+            try {
+              safe = await Promise.race([
+                agent.session.canCloseForInactivity!(),
+                new Promise<false>((resolveDeadline) => {
+                  timer = setTimeout(() => resolveDeadline(false), 3_000);
+                  timer.unref();
+                }),
+              ]);
+            } finally {
+              clearTimeout(timer);
+            }
+            await this.drainSessionEvents(id);
+            agent = this.agents.get(id);
+            if (!agent) return;
+            reason = this.inactivityRetentionReason(agent);
+            if (
+              !safe ||
+              reason ||
+              agent.updatedAt.getTime() !== updatedAt ||
+              this.foregroundMutationTails.has(id)
+            ) {
+              this.inactiveSince.delete(id);
+              count(reason ?? "provider-unverified");
+              return;
+            }
+            // Save before releasing the provider as well as through normal durable closure.
+            await this.persistSnapshot(agent);
+            if (
+              this.inactivityRetentionReason(agent) ||
+              agent.updatedAt.getTime() !== updatedAt ||
+              this.foregroundMutationTails.has(id)
+            ) {
+              this.inactiveSince.delete(id);
+              count("changed");
+              return;
+            }
+            await this.closeAgentRuntime(id, {
+              canClose: () =>
+                this.agents.get(id) === agent &&
+                !this.inactivityRetentionReason(agent!) &&
+                agent!.updatedAt.getTime() === updatedAt &&
+                !this.foregroundMutationTails.has(id),
+            });
+            this.inactiveSince.delete(id);
+            this.releasedInactiveSessions++;
+            count("released");
+          } catch (err) {
+            count("failure");
+            this.inactiveSince.delete(id);
+            this.logger.warn(
+              { err, agentId: id },
+              "Keeping inactive agent after failed safety check or persistence",
+            );
+          }
+        });
+      }
+      return {
+        ...reasons,
+        releasedTotal: this.releasedInactiveSessions,
+        resident: this.agents.size,
+      };
+    };
+    this.inactivitySweep = sweep().finally(() => {
+      this.inactivitySweep = null;
+    });
+    return this.inactivitySweep;
+  }
+
   private readonly idFactory: () => string;
   private readonly registry?: AgentStorage;
   private readonly durableTimelineStore?: AgentTimelineStore;
@@ -1873,7 +2023,7 @@ export class AgentManager {
 
   private async closeAgentRuntime(
     agentId: string,
-    options?: { offloadTimeline?: boolean },
+    options?: { offloadTimeline?: boolean; canClose?: () => boolean },
   ): Promise<void> {
     const agent = this.requireAgent(agentId);
     this.logger.trace(
@@ -1889,6 +2039,8 @@ export class AgentManager {
       "agent.manager.close.start",
     );
     await this.drainSessionEvents(agentId);
+    if (options?.canClose && !options.canClose())
+      throw new Error("Agent became active before inactivity closure");
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
     await agent.session.close();

@@ -12,6 +12,34 @@ initializing → idle → running → idle (or error → closed)
 
 Each live agent in `AgentManager` carries a `lastStatus` of `initializing`, `idle`, `running`, or `error`. `closed` is the persisted, resumable state for an agent record that has no live provider runtime. State transitions persist to disk and stream to subscribed clients via WebSocket.
 
+## Daemon recovery
+
+The macOS bundled daemon has an independent coordinator. Its private home socket serializes
+start, stop and recovery. A live PID file alone grants no recovery ownership. The native observer
+records each generation before failure and rechecks process creation time and uid before signals.
+An ambiguous or corrupt record fails without signaling another process. The shared per-user
+browser observer remains outside the daemon generation.
+
+A voluntary stop persists its intent before waiting for an active recovery. Disabling built-in
+management cancels automatic recovery without forcing a stop. A responding daemon's refusal is
+preserved. Ordinary quit still respects busy agents and the keep-running preference.
+
+Recovery requires repeated local failures over twenty seconds. Sleep resets observations;
+relay errors and slow providers are not health evidence. The automatic budget survives process
+replacement and rearms after ten minutes of continuous observed health. Manual recovery permits
+a fresh attempt. Thresholds live in `daemon-recovery-policy.ts`.
+
+Forced recovery stops the recorded generation, including agent children, before replacement.
+Running persisted turns receive an error requiring attention; recovery never resubmits prompts
+or tools. Unpersisted output can be lost. Conversations, workspaces and server identity remain.
+The coordinator's rotated `daemon-recovery.log` survives supervisor failure and contains incident
+identities and termination evidence, without the launch environment. The saved launch environment
+is private and is used only with the matching bundled runtime.
+
+If the coordinator also fails, `daemon recover --home …` starts the saved coordinator and uses
+the same identity checks. A changed or missing bundled runtime fails explicitly. No global CLI
+fallback is allowed.
+
 ## Plans and launch history
 
 Submitting a workspace intention creates the workspace and sends that intention to its configured
@@ -48,8 +76,17 @@ Reload releases the old runtime before resuming its durable session: an idle pro
 still own an exclusive writer. A close failure retains that runtime for cleanup and blocks the
 replacement. Once closure succeeds, a failed resume leaves the durable agent closed and retryable.
 
-Idle agents remain resident indefinitely. Runtime closure happens only through an explicit lifecycle
-action such as archive, replacement, reload, workspace teardown, or daemon shutdown.
+Unobserved persistent agents may release their runtime after fifteen minutes of verified inactivity.
+The lifecycle lock owns the final eligibility check. Readers on any connected client, foreground
+or queued work, pending permissions and active descendants prevent closure. A provider must implement
+`AgentSession.canCloseForInactivity()` and affirm that no background work remains; missing support,
+timeouts and uncertainty retain the runtime. Core providers currently retain their runtimes because
+they cannot prove that condition. Status `idle` and silence are insufficient evidence.
+
+The inactivity sweep saves before closing. A failed save retains the runtime; normal closure also
+retains transcript RAM when its final snapshot cannot be saved. Resume keeps the same agent ID.
+Terminals and development servers have independent owners and are never stopped by this sweep.
+See [resource retention](resource-retention.md) for local measurements.
 
 A provider runtime can still die on its own — crash, OOM kill, host suspend. Work the agent parked
 inside that process dies with it: Claude Code's background Bash shells, `Monitor` watches, and

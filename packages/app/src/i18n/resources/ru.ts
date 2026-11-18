@@ -1572,6 +1572,7 @@ export const ru: TranslationResources = {
       detail: "Остановка локального демона.",
     },
     daemon: {
+      recovery: en.desktop.daemon.recovery,
       lifecycle: en.desktop.daemon.lifecycle,
       title: "Демон",
       status: {

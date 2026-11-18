@@ -1,7 +1,12 @@
+import { CdpSessionQueue } from "./cdp-session-queue.js";
 import { describe, expect, test, vi } from "vitest";
 import { executeAutomationCommand, type BrowserRegistry, type TabImage } from "./service.js";
 import { adaptWebContents, getPageLifecycle, HostSnapshotEngineRegistry } from "./ipc.js";
-import { PARKED_BROWSER_IDLE_MS } from "./page-lifecycle.js";
+import {
+  PARKED_BROWSER_IDLE_MS,
+  PARKED_BROWSER_DISCARD_MS,
+  BrowserPageLifecycle,
+} from "./page-lifecycle.js";
 import type { IsolatedKeyboardInputEvent } from "./trusted-input.js";
 
 vi.mock("electron", () => ({
@@ -965,3 +970,58 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+test("twenty parked page cycles release guests and preserve active work", async () => {
+  vi.useFakeTimers();
+  try {
+    let released = 0;
+    for (let cycle = 0; cycle < 20; cycle++) {
+      const contents = new FakeWebContents(9000 + cycle);
+      const page = new BrowserPageLifecycle(contents, new CdpSessionQueue());
+      page.setDiscardHandler(() => {
+        released++;
+      });
+      await page.setPresented(false);
+      contents.audible = true;
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_DISCARD_MS);
+      expect(released).toBe(cycle);
+      contents.audible = false;
+      const done = page.retainDownload();
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_DISCARD_MS);
+      expect(released).toBe(cycle);
+      done();
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_DISCARD_MS);
+      expect(released).toBe(cycle + 1);
+      page.dispose();
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("presentation and a command starting at expiration prevent page discard", async () => {
+  vi.useFakeTimers();
+  try {
+    const contents = new FakeWebContents(9100);
+    const page = new BrowserPageLifecycle(contents, new CdpSessionQueue());
+    const discard = vi.fn();
+    page.setDiscardHandler(discard);
+    await page.setPresented(false);
+    await vi.advanceTimersByTimeAsync(PARKED_BROWSER_DISCARD_MS - 1);
+    await page.setPresented(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(discard).not.toHaveBeenCalled();
+    await page.setPresented(false);
+    await page.withAutomation(async () => {
+      await vi.advanceTimersByTimeAsync(PARKED_BROWSER_DISCARD_MS);
+      expect(discard).not.toHaveBeenCalled();
+    });
+    await vi.advanceTimersByTimeAsync(PARKED_BROWSER_DISCARD_MS - 1);
+    expect(discard).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(discard).toHaveBeenCalledTimes(1);
+    page.dispose();
+  } finally {
+    vi.useRealTimers();
+  }
+});

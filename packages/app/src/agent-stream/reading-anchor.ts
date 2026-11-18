@@ -43,3 +43,23 @@ export function createReadingAnchor() {
     },
   };
 }
+
+interface RetainedReadingPosition {
+  epoch: string;
+  seq: number;
+  messageId: string;
+}
+// Only the address survives view eviction; timeline rows remain owned by the replica.
+const retainedReadingPositions = new Map<string, RetainedReadingPosition>();
+export function readRetainedReadingPosition(serverId: string, agentId: string) {
+  return retainedReadingPositions.get(JSON.stringify([serverId, agentId]));
+}
+export function retainReadingPosition(
+  serverId: string,
+  agentId: string,
+  position: RetainedReadingPosition | null,
+): void {
+  const key = JSON.stringify([serverId, agentId]);
+  if (position) retainedReadingPositions.set(key, position);
+  else retainedReadingPositions.delete(key);
+}

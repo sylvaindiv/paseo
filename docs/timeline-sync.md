@@ -98,8 +98,17 @@ shows Updating messages for a conversation that cannot be out of date. Closing t
 obligation too, so a reopened chat starts from authoritative state instead of a stale optimistic
 one; disconnect and backgrounding keep it.
 
-Closing a tab also releases its transcript from client RAM after all visible demand ends. The
+Closing a tab or leaving its conversation hidden for five minutes releases its subscription and
+its transcript from client RAM after all visible demand ends. Persisted tabs do not renew demand;
+server updates cannot reopen a released conversation. Desktop keeps at most three workspace
+views mounted and expires hidden views after five minutes. The
 replica cache supplies a recent tail on reopening, and older pages remain available from the host.
+A successful replica-cache flush is required before releasing transcript RAM. Failed writes retain
+it and retry after thirty seconds. Reopening or a new committed row during the save cancels that
+release. Late delivery cannot repopulate a released transcript.
+The reading position retains only a message address, epoch and sequence outside the view. Reopening
+loads the cached tail and authoritative state, then fetches a bounded window around that address
+when needed. Returning to the bottom clears it; an epoch change invalidates it.
 Active turns, permissions, queued or pending submissions, local-only rows and attachments keep
 their presentation in memory until it can be reconstructed safely. Replacing a connection owner
 keeps visible history readable; a late disk read cannot repopulate a released transcript.

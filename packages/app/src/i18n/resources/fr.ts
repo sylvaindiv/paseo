@@ -1572,6 +1572,13 @@ export const fr: TranslationResources = {
       detail: "Arrêt du daemon local.",
     },
     daemon: {
+      recovery: {
+        title: "Connexion locale",
+        pending: "Rétablissement en cours",
+        failed: "Rétablissement impossible",
+        success: "Connexion rétablie",
+        retry: "Relancer",
+      },
       lifecycle: {
         owned: "Lancé par cette session de l’application de bureau",
         attached: "Connecté à un daemon existant",

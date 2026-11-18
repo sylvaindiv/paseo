@@ -734,7 +734,7 @@ export function BrowserPane({
   }, []);
 
   useEffect(() => {
-    if (!isElectronRuntime()) {
+    if (!isElectronRuntime() || (browser?.suspended && !isPresented)) {
       return;
     }
 
@@ -753,11 +753,14 @@ export function BrowserPane({
     const residentWebview = takeResidentBrowserWebview(browserId) as ElectronWebview | null;
     const webview = residentWebview ?? (document.createElement("webview") as ElectronWebview);
     webviewRef.current = webview;
+    if (browser?.suspended) updateBrowser(browserId, { suspended: false });
     if (!residentWebview) {
       prepareBrowserWebview(webview, {
         browserId,
         workspaceId,
-        initialUrl: initialUnsafeNavigationMessage ? "about:blank" : initialUrlRef.current,
+        initialUrl: initialUnsafeNavigationMessage
+          ? "about:blank"
+          : (browserRef.current?.url ?? initialUrlRef.current),
       });
     }
     releaseResidentBrowserWebview(browserId, webview);
@@ -916,7 +919,7 @@ export function BrowserPane({
         useBrowserStore.getState().browsersById[browserIdRef.current],
       );
       if (browserStillExists) {
-        releaseResidentBrowserWebview(browserIdRef.current, webview);
+        if (webview.isConnected) releaseResidentBrowserWebview(browserIdRef.current, webview);
       } else {
         removeResidentBrowserWebview(browserIdRef.current);
       }
@@ -926,7 +929,7 @@ export function BrowserPane({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserId, onFocusPane]);
+  }, [browserId, onFocusPane, browser?.suspended, isPresented]);
 
   useEffect(() => {
     const webview = webviewRef.current;

@@ -175,7 +175,7 @@ import {
   resolveWorkspaceRouteState,
   type WorkspaceRouteState,
 } from "@/screens/workspace/workspace-route-state";
-import { renderWorkspaceRouteGate } from "@/screens/workspace/workspace-route-state-views";
+import { useWorkspaceRouteGate } from "@/screens/workspace/workspace-route-state-views";
 import { useWorkspaceRecovery } from "@/workspace-recovery/use-workspace-recovery";
 import type { WorkspaceRecoveryModel } from "@/workspace-recovery/model";
 import {
@@ -4069,7 +4069,7 @@ function WorkspaceScreenContent({
 
   const containerStyle = [styles.container, styles.containerWorkspaceBackground];
 
-  const workspaceScreenGate = renderWorkspaceRouteGate({
+  const workspaceScreenGate = useWorkspaceRouteGate({
     state: workspaceRouteState,
     actions: {
       onRetryHost: handleRetryHost,

@@ -82,9 +82,10 @@ static void snapshot(void) {
       (unsigned long long)info.pbi_start_tvusec,
       measured ? (unsigned long long)usage.ri_phys_footprint : 0,
       measured ? "true" : "false", executable && debug && profile && !external ? "true" : "false");
-    const char *keys[] = {"PASEO_BROWSER_INSTALLATION", "PASEO_BROWSER_OWNER", "AGENT_BROWSER_NAMESPACE", "AGENT_BROWSER_SESSION"};
-    const char *names[] = {"installation", "owner", "namespace", "session"};
-    for (int k = 0; k < 4; k++) { printf(",\"%s\":", names[k]); quoted(env_value(env, end, keys[k])); }
+    printf(",\"uid\":%u,\"executable\":", info.pbi_uid); quoted(path);
+    const char *keys[] = {"PASEO_BROWSER_INSTALLATION", "PASEO_BROWSER_OWNER", "AGENT_BROWSER_NAMESPACE", "AGENT_BROWSER_SESSION", "PASEO_DAEMON_GENERATION", "PASEO_DAEMON_SHARED_PROCESS"};
+    const char *names[] = {"installation", "owner", "namespace", "session", "generation", "shared"};
+    for (int k = 0; k < 6; k++) { printf(",\"%s\":", names[k]); quoted(env_value(env, end, keys[k])); }
     putchar('}');
   }
   puts("]"); fflush(stdout); free(args); free(pids);

@@ -114,10 +114,18 @@ has visible bounds. Do not apply percentage guest sizing against the parked surf
 exposes the 1x1 parking geometry as a real guest resize before expanding it again.
 
 Parked guests freeze after one minute without automation. Presentation and automation resume
-the same document; forms and history stay in memory. Commands hold a lease through completion,
-including failure, and lifecycle transitions share the per-guest CDP queue. Loading pages,
-audible media and open DevTools postpone freezing. Do not unload a retained guest to reclaim
-memory: its unsent form state belongs to the user.
+the same document before expiration. After fifteen minutes without use, a hidden guest is closed
+and removed. Its last URL and persistent browser profile survive; unsaved document state does not.
+Only presentation or an explicit agent command recreates it. Commands hold a lease through completion,
+including failure, and lifecycle transitions share the per-guest CDP queue. Loading pages, downloads,
+audible media and open DevTools prevent discard. Download completion and audio pause restart the
+inactivity period. Presentation is checked again inside the queue before releasing the guest.
+
+Run `PASEO_CAPTURE_HARNESS_GROUP=retention ./packages/desktop/capture-harness/run.sh` after
+building desktop test sources to exercise twenty real guest lifetimes and profile restoration.
+The harness advances the expiration check, records process memory and checks that each guest process
+exits; it does not wait fifteen minutes per cycle. See [resource retention](resource-retention.md)
+for continuous local samples.
 
 The permanent browser host and `overlay-root` are explicit sibling paint planes. The browser
 plane stays below the overlay plane regardless of body insertion order; menus keep their relative

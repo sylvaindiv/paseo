@@ -1,6 +1,6 @@
 import { BROWSER_AUTOMATION_COMMAND_NAMES } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import type { SessionInboundMessage, SessionOutboundMessage } from "@getpaseo/protocol/messages";
-import { getDesktopHost, type DesktopHostBridge } from "@/desktop/host";
+import { getDesktopHost, type DesktopHostBridge, type DesktopBrowserBridge } from "@/desktop/host";
 import {
   ensureResidentBrowserWebview as ensureResidentBrowserWebviewDefault,
   resizeResidentBrowserWebview,
@@ -183,6 +183,7 @@ async function handleBrowserAutomationRequest(params: {
   }
 
   try {
+    await resumeSuspendedPage(params, executeAutomationCommand);
     const payload = await executeAutomationCommand(request);
     client.sendBrowserAutomationExecuteResponse({
       type: "browser.automation.execute.response",
@@ -193,6 +194,47 @@ async function handleBrowserAutomationRequest(params: {
       type: "browser.automation.execute.response",
       payload: normalizeThrownBridgeError(request.requestId, error),
     });
+  }
+}
+
+async function resumeSuspendedPage(
+  params: Parameters<typeof handleBrowserAutomationRequest>[0],
+  executeAutomationCommand: NonNullable<DesktopBrowserBridge["executeAutomationCommand"]>,
+): Promise<void> {
+  const {
+    request,
+    serverId,
+    ensureResidentBrowserWebview,
+    registrationWaitTimeoutMs,
+    registrationPollIntervalMs,
+  } = params;
+  const args = request.command.args;
+  const targetId = "browserId" in args ? args.browserId : null;
+  const record = typeof targetId === "string" ? getBrowserRecord(targetId) : null;
+  if (record?.suspended && request.workspaceId && serverId) {
+    const workspaceKey = resolveRequestWorkspaceKey(serverId, request.workspaceId);
+    if (workspaceKey) {
+      ensureResidentBrowserWebview({
+        browserId: record.browserId,
+        workspaceId: request.workspaceId,
+        url: record.url,
+      });
+      const registered = await waitForBrowserRegistration({
+        request,
+        browserId: record.browserId,
+        workspaceId: request.workspaceId,
+        workspaceKey,
+        executeAutomationCommand,
+        ...(registrationWaitTimeoutMs !== undefined
+          ? { timeoutMs: registrationWaitTimeoutMs }
+          : {}),
+        ...(registrationPollIntervalMs !== undefined
+          ? { pollIntervalMs: registrationPollIntervalMs }
+          : {}),
+      });
+      if (!registered) throw new Error("Browser page did not resume in time");
+      useBrowserStore.getState().updateBrowser(record.browserId, { suspended: false });
+    }
   }
 }
 

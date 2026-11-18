@@ -14,6 +14,8 @@ import { openWebUrl as openExternalUrl, type WebUrlClick } from "@/utils/open-we
 import { isVersionMismatch } from "@/desktop/updates/desktop-updates";
 import {
   getCliDaemonStatus,
+  restartDesktopDaemon,
+  type DesktopDaemonStatus,
   shouldUseDesktopDaemon,
   confirmAndStopDesktopDaemon,
 } from "@/desktop/daemon/desktop-daemon";
@@ -318,6 +320,56 @@ function DaemonInfoCard(props: DaemonInfoCardProps) {
   );
 }
 
+function DaemonRecoveryCard({
+  status,
+  paused,
+  onStatus,
+}: {
+  status: DesktopDaemonStatus | null;
+  paused: boolean;
+  onStatus: (status: DesktopDaemonStatus) => void;
+}) {
+  const { t } = useTranslation();
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [recoveryResult, setRecoveryResult] = useState<"success" | "failed" | null>(null);
+  const handleRecover = useCallback(() => {
+    setIsRecovering(true);
+    setRecoveryResult(null);
+    void restartDesktopDaemon()
+      .then((nextStatus) => {
+        onStatus(nextStatus);
+        setRecoveryResult("success");
+        return undefined;
+      })
+      .catch(() => setRecoveryResult("failed"))
+      .finally(() => setIsRecovering(false));
+  }, [onStatus]);
+
+  if (!status?.recovery) return null;
+  let label: "pending" | "failed" | "success" | "title" = "title";
+  if (recoveryResult === "success") label = "success";
+  if (recoveryResult === "failed" || status.recovery.status === "failed") label = "failed";
+  if (isRecovering || ["recovering", "starting"].includes(status.recovery.status))
+    label = "pending";
+  return (
+    <View style={settingsStyles.card} testID="daemon-recovery-controls">
+      <View style={settingsStyles.row}>
+        <View style={settingsStyles.rowContent}>
+          <Text style={settingsStyles.rowTitle}>{t(`desktop.daemon.recovery.${label}`)}</Text>
+        </View>
+        <Button
+          variant="outline"
+          size="sm"
+          onPress={handleRecover}
+          disabled={isRecovering || paused}
+        >
+          {t("desktop.daemon.recovery.retry")}
+        </Button>
+      </View>
+    </View>
+  );
+}
+
 export function LocalDaemonSection() {
   const { t } = useTranslation();
   const { theme } = useUnistyles();
@@ -458,6 +510,12 @@ export function LocalDaemonSection() {
             handleOpenLogs={handleOpenLogs}
             handleRunCliStatus={handleRunCliStatus}
             isLoadingCliStatus={isLoadingCliStatus}
+          />
+
+          <DaemonRecoveryCard
+            status={daemonStatus}
+            paused={isDaemonManagementPaused}
+            onStatus={setStatus}
           />
 
           {daemonStatus?.pid ? (

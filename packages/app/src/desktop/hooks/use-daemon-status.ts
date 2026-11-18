@@ -26,6 +26,7 @@ export function useDaemonStatus() {
     queryKey: DAEMON_STATUS_QUERY_KEY,
     enabled,
     staleTime: 30_000,
+    refetchInterval: 5_000,
     refetchOnMount: "always",
     retry: false,
     queryFn: async () => {

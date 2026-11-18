@@ -179,6 +179,12 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
       ipcRenderer.invoke("paseo:menu:set-capturing-shortcut", capturing),
   },
   browser: {
+    onDiscarded: (listener: (payload: { browserId: string; url: string }) => void) => {
+      const handler = (_event: unknown, payload: { browserId: string; url: string }) =>
+        listener(payload);
+      ipcRenderer.on("paseo:browser:discarded", handler);
+      return () => ipcRenderer.removeListener("paseo:browser:discarded", handler);
+    },
     setPresented: (input: { browserId: string; presented: boolean }) =>
       ipcRenderer.invoke("paseo:browser:set-presented", input),
     setShortcutPolicy: (input: BrowserKeyboardPolicy) =>
@@ -208,3 +214,28 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
       ipcRenderer.invoke("paseo:browser:copy-element", payload),
   },
 });
+
+window.addEventListener(
+  "DOMContentLoaded",
+  () => {
+    let previousViews = new Set<string>();
+    let releasedViews = 0;
+    setInterval(() => {
+      const views = new Set(
+        Array.from(document.querySelectorAll('[data-testid^="workspace-deck-entry-"]')).map(
+          (view) => view.getAttribute("data-testid")!,
+        ),
+      );
+      releasedViews += [...previousViews].filter((id) => !views.has(id)).length;
+      previousViews = views;
+      void ipcRenderer
+        .invoke("paseo:resources:sample", {
+          views: views.size,
+          releasedViews,
+          pages: document.querySelectorAll("webview[data-paseo-browser-id]").length,
+        })
+        .catch(() => undefined);
+    }, 30_000);
+  },
+  { once: true },
+);

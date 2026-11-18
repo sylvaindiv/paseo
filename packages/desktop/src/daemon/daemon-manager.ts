@@ -8,6 +8,9 @@ import {
   DaemonInstanceError,
   stopDaemonInstance,
   readDaemonInstance,
+  readDaemonRecovery,
+  prepareCoordinatedDaemonLaunch,
+  managedDaemonCommand,
   isSameDaemonInstance,
   readLocalCredentialForTarget,
   type DaemonInstance,
@@ -55,6 +58,7 @@ import {
 import { tailFile } from "../diagnostics/tail-file.js";
 
 const DAEMON_LOG_FILENAME = "daemon.log";
+let startingHome: string | null = null;
 let ownedLaunch: { home: string; instance: DaemonInstance } | null = null;
 
 type DesktopDaemonState = "starting" | "running" | "stopped" | "errored";
@@ -84,6 +88,7 @@ export interface DesktopDaemonStatus {
   ownedByDesktop: boolean;
   startedAt: string | null;
   error: string | null;
+  recovery?: { status: string; error: string | null } | null;
 }
 
 interface DesktopDaemonLogs {
@@ -132,6 +137,7 @@ function logFilePath(): string {
 }
 
 export function isDesktopManagedDaemonRunningSync(): boolean {
+  if (startingHome) return true;
   if (!ownedLaunch) return false;
   try {
     const lock = JSON.parse(readFileSync(path.join(ownedLaunch.home, "paseo.pid"), "utf8"));
@@ -174,7 +180,8 @@ function statusFromDaemonProbe(
   const processAlive = local === "running" || local === "not_ready";
   let status: DesktopDaemonState = "stopped";
   if (local === "not_ready") status = "starting";
-  if (local === "running") status = "running";
+  const unreachable = local === "running" && payload.connectedDaemon === "unreachable";
+  if (local === "running") status = unreachable ? "errored" : "running";
   return {
     serverId: typeof payload.serverId === "string" ? payload.serverId : "",
     status,
@@ -192,7 +199,7 @@ function statusFromDaemonProbe(
       payload.pid === ownedLaunch.instance.pid &&
       payload.startedAt === ownedLaunch.instance.startedAt,
     ),
-    error: null,
+    error: unreachable ? "Connexion impossible." : null,
   };
 }
 
@@ -227,7 +234,10 @@ export async function resolveDesktopDaemonStatus(): Promise<DesktopDaemonStatus>
     // The app polls this while no local daemon runs. Answer that case in-process,
     // since launching the CLI once per poll keeps spawning processes while idle.
     if (!(await readDaemonInstance(home))) {
-      return statusFromDaemonProbe({ localDaemon: "stopped" }, home);
+      return {
+        ...statusFromDaemonProbe({ localDaemon: "stopped" }, home),
+        recovery: await readDaemonRecovery(home),
+      };
     }
 
     const payload = (await runExternalCliJsonCommand([
@@ -237,7 +247,7 @@ export async function resolveDesktopDaemonStatus(): Promise<DesktopDaemonStatus>
       home,
       "--json",
     ])) as Record<string, unknown>;
-    return statusFromDaemonProbe(payload, home);
+    return { ...statusFromDaemonProbe(payload, home), recovery: await readDaemonRecovery(home) };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logDesktopDaemonLifecycle("resolveStatus failed", { error: errorMessage });
@@ -253,6 +263,7 @@ export async function resolveDesktopDaemonStatus(): Promise<DesktopDaemonStatus>
       ownedByDesktop: false,
       startedAt: null,
       error: errorMessage,
+      recovery: await readDaemonRecovery(home).catch(() => null),
     };
   }
 }
@@ -295,7 +306,7 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
         daemonVersion: normalizeVersion(current.version),
       });
       await stopDesktopDaemon("version_mismatch");
-    } else {
+    } else if (!(await readDaemonRecovery(getPaseoHome()))) {
       return current;
     }
   }
@@ -307,20 +318,35 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
     args: [],
     baseEnv: process.env,
   });
+  startingHome = home;
   try {
-    await startDaemonInstance({
-      home,
-      timeoutMs: 30_000,
-      ...invocation,
-      env: { ...invocation.env, PASEO_CLI: getBundledCliShimPath() },
-      mode: "managed",
-      desktopManaged: true,
-      onAcquired: (instance) => {
-        ownedLaunch = { home, instance };
-      },
-    });
+    if (process.platform === "darwin") {
+      await prepareCoordinatedDaemonLaunch({
+        home,
+        ...invocation,
+        env: { ...invocation.env, PASEO_CLI: getBundledCliShimPath() },
+      });
+      await runExternalCliJsonCommand(["daemon", "start", "--home", home, "--json"]);
+      const instance = await readDaemonInstance(home);
+      if (!instance?.listen) throw new Error("Built-in daemon did not become ready");
+      ownedLaunch = { home, instance };
+    } else {
+      await startDaemonInstance({
+        home,
+        timeoutMs: 30_000,
+        ...invocation,
+        env: { ...invocation.env, PASEO_CLI: getBundledCliShimPath() },
+        mode: "managed",
+        desktopManaged: true,
+        onAcquired: (instance) => {
+          ownedLaunch = { home, instance };
+        },
+      });
+    }
   } catch (error) {
     if (!(error instanceof DaemonInstanceError && error.code === "DAEMON_NOT_READY")) throw error;
+  } finally {
+    startingHome = null;
   }
   return resolveDesktopDaemonStatus();
 }
@@ -331,6 +357,11 @@ export async function stopDesktopDaemon(
 ): Promise<DesktopDaemonStatus> {
   const home = getPaseoHome();
   const instance = await readDaemonInstance(home);
+  if (startingHome === home && (await readDaemonRecovery(home))) {
+    await runExternalCliJsonCommand(["daemon", "stop", "--home", home, "--json"]);
+    ownedLaunch = null;
+    return resolveDesktopDaemonStatus();
+  }
   const owned = Boolean(
     instance &&
     ownedLaunch &&
@@ -349,6 +380,11 @@ export async function stopDesktopDaemon(
     );
   if (!instance || (!owned && !explicit)) return resolveDesktopDaemonStatus();
   logDesktopDaemonLifecycle("stopping captured supervisor", { reason, pid: instance.pid, owned });
+  if (await readDaemonRecovery(home)) {
+    await runExternalCliJsonCommand(["daemon", "stop", "--home", home, "--json"]);
+    if (owned) ownedLaunch = null;
+    return resolveDesktopDaemonStatus();
+  }
   await stopDaemonInstance(home, {
     instance,
     timeoutMs: 15_000,
@@ -361,7 +397,10 @@ export async function stopDesktopDaemon(
 }
 
 async function restartDaemon(): Promise<DesktopDaemonStatus> {
-  await runExternalCliJsonCommand(["daemon", "restart", "--home", getPaseoHome(), "--json"]);
+  const home = getPaseoHome();
+  if (await readDaemonRecovery(home))
+    assertBuiltInDaemonManagementEnabled(await getDesktopSettingsStore().get());
+  await runExternalCliJsonCommand(["daemon", "restart", "--home", home, "--json"]);
   return resolveDesktopDaemonStatus();
 }
 
@@ -401,6 +440,12 @@ async function resolveRequestedReleaseChannel(
 export function createDaemonCommandHandlers(): Record<string, DesktopCommandHandler> {
   return {
     ...createDesktopSettingsCommandHandlers({ settingsStore: getDesktopSettingsStore() }),
+    patch_desktop_settings: async (args) => {
+      const result = await getDesktopSettingsStore().patch(args);
+      if (!result.daemon.manageBuiltInDaemon && (await readDaemonRecovery(getPaseoHome())))
+        await managedDaemonCommand(getPaseoHome(), "disable");
+      return result;
+    },
     desktop_get_runtime_info: () => ({
       appVersion: resolveDesktopAppVersion(),
       runningUnderARM64Translation: isRunningUnderARM64Translation(),

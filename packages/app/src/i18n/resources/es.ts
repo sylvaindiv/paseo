@@ -1589,6 +1589,7 @@ export const es: TranslationResources = {
       detail: "Deteniendo el demonio local.",
     },
     daemon: {
+      recovery: en.desktop.daemon.recovery,
       lifecycle: en.desktop.daemon.lifecycle,
       title: "Daemon",
       status: {

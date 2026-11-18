@@ -1579,6 +1579,7 @@ export const ptBR: TranslationResources = {
       detail: "Parando o daemon local.",
     },
     daemon: {
+      recovery: en.desktop.daemon.recovery,
       lifecycle: en.desktop.daemon.lifecycle,
       title: "Daemon",
       status: {

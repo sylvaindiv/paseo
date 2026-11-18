@@ -699,6 +699,9 @@ export interface AgentSession {
    * still uncertain.
    */
   interrupt(): Promise<void>;
+  /** Affirm that closing cannot interrupt foreground, queued, background or descendant work.
+   * Missing support or uncertainty retains the runtime. Never infer this from idle status. */
+  canCloseForInactivity?(): Promise<boolean>;
   /** Release live runtime resources without archiving or deleting the durable native session. */
   close(): Promise<void>;
   listCommands?(): Promise<AgentSlashCommand[]>;

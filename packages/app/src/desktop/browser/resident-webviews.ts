@@ -13,6 +13,21 @@ const BROWSER_SURFACE_ATTRIBUTE = "data-paseo-browser-surface";
 const RESIDENT_VIEWPORT_WIDTH = 1280;
 const RESIDENT_VIEWPORT_HEIGHT = 800;
 
+let discardListenerInstalled = false;
+let stopDiscardListener: (() => void) | undefined;
+function observeDiscardedPages(override?: BrowserWebviewProfileHost): void {
+  if (discardListenerInstalled) return;
+  const browser = override ?? getDesktopHost()?.browser;
+  if (!browser?.onDiscarded) return;
+  discardListenerInstalled = true;
+  stopDiscardListener = browser.onDiscarded(({ browserId, url }) => {
+    removeResidentBrowserWebview(browserId);
+    useBrowserStore
+      .getState()
+      .updateBrowser(browserId, { suspended: true, url, isLoading: false, lastError: null });
+  });
+}
+
 const residentWebviewsByBrowserId = new Map<string, HTMLElement>();
 const residentSurfacesByBrowserId = new Map<string, HTMLElement>();
 const residentWebviewSizesByBrowserId = new Map<string, { width: number; height: number }>();
@@ -41,6 +56,7 @@ export interface BrowserWebviewProfileHost {
   profilePartition: string;
   registerAttachedBrowser(input: DesktopAttachedBrowserRegistration): Promise<void>;
   setPresented?: DesktopBrowserBridge["setPresented"];
+  onDiscarded?: DesktopBrowserBridge["onDiscarded"];
 }
 
 function isAttachedBrowserBridge(
@@ -363,6 +379,7 @@ export function prepareBrowserWebview(
   },
 ): void {
   const browser = getBrowserBridge(input.profileHost);
+  observeDiscardedPages(browser);
   presentationByWebview.set(webview, {
     browserId: input.browserId,
     browser,
@@ -521,6 +538,9 @@ export function removeResidentBrowserWebview(browserId: string): void {
 }
 
 export function clearResidentBrowserWebviewsForTests(): void {
+  stopDiscardListener?.();
+  stopDiscardListener = undefined;
+  discardListenerInstalled = false;
   for (const webview of residentWebviewsByBrowserId.values()) {
     removeResidentListeners(webview);
     webview.remove();

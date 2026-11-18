@@ -2,7 +2,13 @@ import { Command, Option } from "commander";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { startDaemonInstance, resolvePaseoHome } from "@getpaseo/server/daemon-control";
+import {
+  startDaemonInstance,
+  resolvePaseoHome,
+  readDaemonRecovery,
+  managedDaemonCommand,
+  readDaemonInstance,
+} from "@getpaseo/server/daemon-control";
 const require = createRequire(import.meta.url);
 function resolveServerRunnerFromDir(currentDir: string): string | null {
   const packageJsonPath = path.join(currentDir, "package.json");
@@ -50,6 +56,12 @@ export async function launchLocalDaemon(options: {
   process.once("SIGINT", cancel);
   process.once("SIGTERM", cancel);
   try {
+    if (!options.foreground && (await readDaemonRecovery(options.home))) {
+      await managedDaemonCommand(options.home, "start");
+      const instance = await readDaemonInstance(options.home);
+      if (!instance) throw new Error("Managed daemon did not start");
+      return { instance, spawned: true };
+    }
     const entry = resolveDaemonRunnerEntry();
     return await startDaemonInstance({
       home: resolvePaseoHome({ PASEO_HOME: options.home }),

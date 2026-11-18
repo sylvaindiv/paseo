@@ -1,3 +1,4 @@
+import { useEffect, useState, useMemo } from "react";
 import { Text, View } from "react-native";
 import { ArrowLeftToLine, RotateCw, Settings } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -20,6 +21,32 @@ interface WorkspaceRouteStateActions {
   onDismissMissingWorkspace: () => void;
   onRecoverWorkspace: () => void;
   onRetryRecoveryInspection: () => void;
+}
+
+export function useWorkspaceRouteGate(input: {
+  state: WorkspaceRouteState;
+  actions: WorkspaceRouteStateActions;
+}): React.ReactNode {
+  const { state } = input;
+  const waiting = ["loading", "reconnecting", "unreachable"].includes(state.kind);
+  const hostName = state.kind === "ready" ? "" : state.hostName;
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    setExpired(false);
+    if (!waiting) return;
+    const timer = setTimeout(() => setExpired(true), 30_000);
+    return () => clearTimeout(timer);
+  }, [waiting, hostName]);
+  const gateState = useMemo<WorkspaceRouteState>(() => {
+    if (!expired || !waiting) return state;
+    return {
+      kind: "unreachable",
+      hostName,
+      connectionStatus: "error",
+      lastError: "lastError" in state ? state.lastError : null,
+    };
+  }, [expired, waiting, state, hostName]);
+  return renderWorkspaceRouteGate({ ...input, state: gateState });
 }
 
 export function renderWorkspaceRouteGate(input: {
@@ -76,8 +103,8 @@ export function renderWorkspaceRouteGate(input: {
           onDismiss={input.actions.onDismissMissingWorkspace}
         />
       );
-    case "ready":
     case "reconnecting":
+    case "ready":
       return null;
   }
 }

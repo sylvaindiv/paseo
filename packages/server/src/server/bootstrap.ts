@@ -1,3 +1,4 @@
+import { startResourceRetention } from "./resource-retention.js";
 import { startBrowserResourceService } from "./browser-resource-service.js";
 import { DesktopToolsBroker } from "./desktop-tools/broker.js";
 import { disposeAgentBrowserDashboardsForHome } from "./agent-browser.js";
@@ -996,6 +997,7 @@ export async function createPaseoDaemon(
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
     logger,
   });
+  let stopResourceRetention: (() => void) | undefined;
   const unsubscribeDesktopControl = agentManager.subscribe(
     (event) => {
       if (event.type === "agent_stream" && event.event.type === "turn_completed")
@@ -1868,6 +1870,11 @@ export async function createPaseoDaemon(
       // model loading doesn't block the server from accepting connections.
       speechService.start();
       scriptHealthMonitor.start();
+      stopResourceRetention = startResourceRetention({
+        file: path.join(config.paseoHome, "logs", "resource-retention.ndjson"),
+        sweep: () => agentManager.hibernateInactiveAgents(),
+        reportError: (err) => logger.warn({ err }, "Resource retention sample failed"),
+      });
       try {
         stopBrowserResourceGuard = await startBrowserResourceService({
           paseoHome: config.paseoHome,
@@ -1885,6 +1892,7 @@ export async function createPaseoDaemon(
       unsubscribePluginProviders();
       await pluginRuntime.stopAllPlugins().catch(() => undefined);
       await serviceProxy.stopStandalone().catch(() => undefined);
+      stopResourceRetention?.();
       await agentProviderRuntime.shutdown().catch(() => undefined);
       if (mainStarted) {
         httpServer.closeAllConnections();
@@ -1895,6 +1903,7 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    stopResourceRetention?.();
     await stopBrowserResourceGuard?.().catch((err) =>
       logger.warn({ err }, "Browser resource guard shutdown failed"),
     );

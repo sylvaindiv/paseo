@@ -207,7 +207,12 @@ export async function startBrowserResourceService(input: {
     const child = spawn(process.execPath, args, {
       detached: true,
       stdio: "ignore",
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        PASEO_DAEMON_GENERATION: undefined,
+        PASEO_DAEMON_SHARED_PROCESS: "1",
+      },
     });
     child.on("error", (err) =>
       input.logger.error({ err }, "Browser resource guard failed to start"),

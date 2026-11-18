@@ -12356,3 +12356,166 @@ test.each([
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("inactive runtime closure requires provider proof and no reader across clients", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agent-retention-"));
+  const storage = new AgentStorage(join(home, "agents"), logger);
+  const manager = new AgentManager({
+    paseoHome: home,
+    registry: storage,
+    clients: { codex: new TestAgentClient() },
+    logger,
+  });
+  const reader = {};
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: home }, undefined, {
+      workspaceId: undefined,
+    });
+    expect(await manager.hibernateInactiveAgents(0)).toMatchObject({ "provider-unverified": 1 });
+    const live = manager.getAgent(agent.id)!;
+    if (!live.session) throw new Error("Expected live session");
+    live.session.canCloseForInactivity = async () => true;
+    manager.setTimelineReaders(reader, [agent.id]);
+    expect(await manager.hibernateInactiveAgents(0)).toMatchObject({ reader: 1 });
+    manager.setTimelineReaders(reader, []);
+    expect(await manager.hibernateInactiveAgents(0)).toMatchObject({ "recent-use": 1 });
+    expect(await manager.hibernateInactiveAgents(15 * 60_000 - 1)).toMatchObject({
+      "recent-use": 1,
+    });
+    expect(await manager.hibernateInactiveAgents(15 * 60_000)).toMatchObject({
+      released: 1,
+      resident: 0,
+    });
+    const resumed = await ensureAgentLoaded(agent.id, {
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+    });
+    expect(resumed.id).toBe(agent.id);
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await storage.flush();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test.each(["reader", "message"] as const)(
+  "an arriving %s during provider verification prevents closure",
+  async (arrival) => {
+    const home = mkdtempSync(join(tmpdir(), "agent-retention-race-"));
+    const storage = new AgentStorage(join(home, "agents"), logger);
+    const manager = new AgentManager({
+      paseoHome: home,
+      registry: storage,
+      clients: { codex: new TestAgentClient() },
+      logger,
+    });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: home }, undefined, {
+        workspaceId: undefined,
+      });
+      const live = manager.getAgent(agent.id)!;
+      if (!live.session) throw new Error("Expected live session");
+      const verification = deferred<boolean>();
+      const started = deferred<boolean>();
+      live.session.canCloseForInactivity = () => {
+        started.resolve(true);
+        return verification.promise;
+      };
+      await manager.hibernateInactiveAgents(0);
+      const closing = manager.hibernateInactiveAgents(15 * 60_000);
+      await started.promise;
+      if (arrival === "reader") manager.setTimelineReaders({}, [agent.id]);
+      else await manager.appendTimelineItem(agent.id, { type: "user_message", text: "New work" });
+      verification.resolve(true);
+      expect(await closing).toMatchObject({ resident: 1 });
+      expect(manager.getAgent(agent.id)).not.toBeNull();
+    } finally {
+      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+      await storage.flush();
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
+
+test("twenty verified runtime sleep and resume cycles retain the same complete history", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agent-retention-cycles-"));
+  const storage = new AgentStorage(join(home, "agents"), logger);
+  const manager = new AgentManager({
+    paseoHome: home,
+    registry: storage,
+    clients: { codex: new TestAgentClient() },
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: home }, undefined, {
+      workspaceId: undefined,
+    });
+    await manager.appendTimelineItem(agent.id, { type: "assistant_message", text: "Keep me" });
+    const history = manager.fetchTimeline(agent.id, { limit: 0 });
+    for (let cycle = 0; cycle < 20; cycle++) {
+      const live = manager.getAgent(agent.id)!;
+      if (!live.session) throw new Error("Expected live session");
+      live.session.canCloseForInactivity = async () => true;
+      const now = cycle * 16 * 60_000;
+      await manager.hibernateInactiveAgents(now);
+      expect(await manager.hibernateInactiveAgents(now + 15 * 60_000)).toMatchObject({
+        resident: 0,
+        releasedTotal: cycle + 1,
+      });
+      await ensureAgentLoaded(agent.id, { agentManager: manager, agentStorage: storage, logger });
+      expect(manager.fetchTimeline(agent.id, { limit: 0 })).toEqual(history);
+      expect(manager.listAgents()).toHaveLength(1);
+    }
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await storage.flush();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("failed persistence or provider background work prevents inactivity closure", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agent-retention-persist-"));
+  let failSave = false;
+  class RetentionStorage extends AgentStorage {
+    override async applySnapshot(
+      ...args: Parameters<AgentStorage["applySnapshot"]>
+    ): Promise<void> {
+      if (failSave) throw new Error("Disk full");
+      return super.applySnapshot(...args);
+    }
+  }
+  const storage = new RetentionStorage(join(home, "agents"), logger);
+  const manager = new AgentManager({
+    paseoHome: home,
+    registry: storage,
+    clients: { codex: new TestAgentClient() },
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: home }, undefined, {
+      workspaceId: undefined,
+    });
+    const live = manager.getAgent(agent.id)!;
+    if (!live.session) throw new Error("Expected live session");
+    live.session.canCloseForInactivity = async () => false;
+    await manager.hibernateInactiveAgents(0);
+    expect(await manager.hibernateInactiveAgents(15 * 60_000)).toMatchObject({
+      "provider-unverified": 1,
+      resident: 1,
+    });
+    live.session.canCloseForInactivity = async () => true;
+    await manager.hibernateInactiveAgents(16 * 60_000);
+    failSave = true;
+    expect(await manager.hibernateInactiveAgents(31 * 60_000)).toMatchObject({
+      failure: 1,
+      resident: 1,
+    });
+    failSave = false;
+    expect(manager.getAgent(agent.id)).not.toBeNull();
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await storage.flush();
+    rmSync(home, { recursive: true, force: true });
+  }
+});

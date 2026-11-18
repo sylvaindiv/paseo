@@ -341,6 +341,35 @@ describe("mountBrowserAutomationHandler", () => {
     seedWorkspace("server-1", "wks_workspace_a");
   });
 
+  test("an explicit command resumes a discarded page at its saved URL", async () => {
+    const workspaceKey = seedWorkspace("server-1", "wks_workspace_a");
+    const opened = openWorkspaceBrowser({
+      workspaceKey,
+      url: "https://example.com/resume",
+      intent: "background",
+    });
+    if (!opened.ok) throw new Error("Expected a browser tab");
+    useBrowserStore.getState().updateBrowser(opened.browserId, { suspended: true });
+    const harness = new BrowserAutomationHandlerHarness();
+    harness.mount({ serverId: "server-1" });
+    harness.receive({
+      type: "browser.automation.execute.request",
+      requestId: "resume",
+      workspaceId: "wks_workspace_a",
+      command: { command: "snapshot", args: { browserId: opened.browserId } },
+    });
+    await vi.waitFor(() => expect(harness.client.sentResponses).toHaveLength(1));
+    expect(harness.resident.ensuredWebviews).toEqual([
+      {
+        browserId: opened.browserId,
+        workspaceId: "wks_workspace_a",
+        url: "https://example.com/resume",
+      },
+    ]);
+    expect(getBrowserRecord(opened.browserId)?.suspended).toBe(false);
+    harness.unmount();
+  });
+
   test("manual close restores the last URL and viewport with a new browser id", async () => {
     const workspaceKey = seedWorkspace("server-1", "wks_workspace_a");
     const opened = openWorkspaceBrowser({

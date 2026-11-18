@@ -21,6 +21,7 @@ type OptionalAgentSessionMethodName = {
 }[keyof AgentSession];
 
 const OPTIONAL_AGENT_SESSION_METHOD_NAMES = [
+  "canCloseForInactivity",
   "steerActiveTurn",
   "listCommands",
   "setModel",
@@ -139,6 +140,11 @@ class FakeSession implements AgentSession {
     this.recordedCalls.push("close");
   }
 
+  async canCloseForInactivity() {
+    this.recordedCalls.push("canCloseForInactivity");
+    return true;
+  }
+
   async listCommands() {
     this.recordedCalls.push("listCommands");
     return [];
@@ -190,6 +196,7 @@ describe("wrapSessionProvider", () => {
     const wrapped = wrapSessionProvider("custom-claude", session);
 
     await wrapped.steerActiveTurn?.("follow-up", { expectedTurnId: "turn-1" });
+    expect(await wrapped.canCloseForInactivity?.()).toBe(true);
     await wrapped.listCommands?.();
     await wrapped.setModel?.("sonnet");
     await wrapped.setThinkingOption?.("high");
@@ -205,6 +212,7 @@ describe("wrapSessionProvider", () => {
     ]);
     expect(session.recordedCalls).toEqual([
       "steerActiveTurn",
+      "canCloseForInactivity",
       "listCommands",
       "setModel",
       "setThinkingOption",

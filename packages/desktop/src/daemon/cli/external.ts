@@ -4,6 +4,13 @@ import type { NodeEntrypointInvocation } from "../node-entrypoint-launcher.js";
 import { createNodeEntrypointInvocation } from "../runtime-paths.js";
 import { resolveExternalCliEntrypoint } from "./entrypoints.js";
 
+function externalCliTimeout(args: string[]): number {
+  if (args[0] !== "daemon") return 90_000;
+  if (args[1] === "status") return 10_000;
+  if (["recover", "restart", "start"].includes(args[1])) return 180_000;
+  return 90_000;
+}
+
 function createExternalCliInvocation(args: string[]): NodeEntrypointInvocation {
   return createNodeEntrypointInvocation({
     entrypoint: resolveExternalCliEntrypoint(),
@@ -15,6 +22,7 @@ function createExternalCliInvocation(args: string[]): NodeEntrypointInvocation {
 
 function spawnExternalCli(
   invocation: NodeEntrypointInvocation,
+  timeoutMs: number,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve, reject) => {
     const child = spawnProcess(invocation.command, invocation.args, {
@@ -33,8 +41,17 @@ function spawnExternalCli(
       stderr += data.toString();
     });
 
-    child.on("error", reject);
+    // Bound the outer command too: a blocked CLI cannot enforce its own deadlines.
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(Object.assign(new Error("CLI command timed out."), { code: "CLI_TIMEOUT" }));
+    }, timeoutMs);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.on("close", (exitCode) => {
+      clearTimeout(timeout);
       resolve({ stdout, stderr, exitCode });
     });
   });
@@ -54,7 +71,7 @@ function externalCliFailureMessage(
 
 export async function runExternalCliTextCommand(args: string[]): Promise<string> {
   const invocation = createExternalCliInvocation(args);
-  const result = await spawnExternalCli(invocation);
+  const result = await spawnExternalCli(invocation, externalCliTimeout(args));
 
   if (result.exitCode !== 0) {
     const stderr = result.stderr.trim();
@@ -73,7 +90,7 @@ export async function runExternalCliTextCommand(args: string[]): Promise<string>
 
 export async function runExternalCliJsonCommand(args: string[]): Promise<unknown> {
   const invocation = createExternalCliInvocation(args);
-  const result = await spawnExternalCli(invocation);
+  const result = await spawnExternalCli(invocation, externalCliTimeout(args));
 
   if (result.exitCode !== 0) {
     const stderr = result.stderr.trim();

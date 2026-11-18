@@ -1,5 +1,10 @@
 import { Command } from "commander";
-import { stopDaemonInstance, type DaemonInstance } from "@getpaseo/server/daemon-control";
+import {
+  stopDaemonInstance,
+  readDaemonRecovery,
+  managedDaemonCommand,
+  type DaemonInstance,
+} from "@getpaseo/server/daemon-control";
 import { connectToDaemon } from "../../utils/client.js";
 import { withOutput, type CommandOptions } from "../../output/index.js";
 import { addJsonAndDaemonHostOptions } from "../../utils/command-options.js";
@@ -42,12 +47,21 @@ export async function runStopCommand(options: CommandOptions, _command: Command)
   } =
     target.kind === "instance"
       ? {
-          ...(await stopDaemonInstance(target.home, {
-            force: options.force === true,
-            timeoutMs,
-            killTimeoutMs: parseTimeoutMs(options.killTimeout, 3_000),
-            requestShutdown,
-          })),
+          ...(await ((await readDaemonRecovery(target.home))
+            ? managedDaemonCommand(
+                target.home,
+                options.force === true ? "stop_force" : "stop",
+              ).then((recovery) => {
+                if (!recovery.lastStop)
+                  throw new Error("Daemon stop was not confirmed by its coordinator");
+                return recovery.lastStop;
+              })
+            : stopDaemonInstance(target.home, {
+                force: options.force === true,
+                timeoutMs,
+                killTimeoutMs: parseTimeoutMs(options.killTimeout, 3_000),
+                requestShutdown,
+              }))),
           home: target.home,
         }
       : (await requestShutdown(),

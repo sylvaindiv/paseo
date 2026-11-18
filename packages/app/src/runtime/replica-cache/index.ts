@@ -1193,6 +1193,10 @@ export class ReplicaCache {
     this.queueOperation(() => this.rowStore.renameHost(oldServerId, newServerId));
   }
 
+  async flushForRetention(): Promise<boolean> {
+    return this.syncPending();
+  }
+
   async flush(): Promise<void> {
     await this.syncPending();
   }

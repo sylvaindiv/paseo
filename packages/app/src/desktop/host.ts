@@ -148,6 +148,7 @@ export interface DesktopAttachedBrowserRegistration {
 }
 
 export interface DesktopBrowserBridge {
+  onDiscarded?: (listener: (payload: { browserId: string; url: string }) => void) => () => void;
   setPresented?: (input: { browserId: string; presented: boolean }) => Promise<void>;
   setShortcutPolicy?: (input: BrowserKeyboardPolicy) => Promise<void>;
   readonly profilePartition?: string;

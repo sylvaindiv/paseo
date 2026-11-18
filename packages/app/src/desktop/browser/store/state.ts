@@ -17,6 +17,7 @@ export interface BrowserRecord {
   lastError: string | null;
   viewport: BrowserViewport;
   createdAt: number;
+  suspended?: boolean;
 }
 
 export type BrowserRecordPatch = Partial<Omit<BrowserRecord, "browserId" | "createdAt">>;
@@ -45,6 +46,7 @@ const BrowserRecordSchema = z.strictObject({
   lastError: z.string().nullable(),
   viewport: BrowserViewportSchema.optional().default(RESPONSIVE_BROWSER_VIEWPORT),
   createdAt: z.number(),
+  suspended: z.boolean().optional(),
 });
 
 export const BrowserIndexStateSchema: z.ZodType<BrowserIndexState> = z.strictObject({
@@ -148,6 +150,7 @@ export function applyBrowserPatch<S extends BrowserIndexState>(
   };
 
   if (
+    nextRecord.suspended === existing.suspended &&
     nextRecord.url === existing.url &&
     nextRecord.title === existing.title &&
     nextRecord.isLoading === existing.isLoading &&

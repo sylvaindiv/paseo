@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
 import {
   readDaemonInstance,
+  readDaemonRecovery,
   daemonLogPath,
   isSameDaemonInstance,
   DaemonInstanceError,
@@ -29,7 +30,11 @@ export async function runStatusCommand(options: CommandOptions, _command: Comman
     target.kind === "endpoint" || instance?.listen
       ? await probeDaemonStatus(target, instance, local)
       : { connectedDaemon: "not_probed" };
-  const data: Record<string, unknown> = { ...local, ...observed };
+  const data: Record<string, unknown> = {
+    ...local,
+    ...observed,
+    ...(target.kind === "instance" ? { recovery: await readDaemonRecovery(target.home) } : {}),
+  };
   return {
     type: "single" as const,
     data,

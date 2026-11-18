@@ -302,6 +302,8 @@ async function main() {
       const type = (message as { type?: unknown }).type;
       if (type === "paseo:supervisor-heartbeat") {
         lastSupervisorHeartbeatAt = Date.now();
+        if ("requestId" in message && typeof message.requestId === "string")
+          process.send?.({ type: "paseo:worker-heartbeat", requestId: message.requestId });
         return;
       }
       if (type === "paseo:graceful-shutdown") {
@@ -315,7 +317,11 @@ async function main() {
     });
     process.on("disconnect", () => exitAfterSupervisorLoss("ipc_disconnect_event"));
 
+    let lastGuardAt = Date.now();
     const timer = setInterval(() => {
+      const now = Date.now();
+      if (now - lastGuardAt > 15_000) lastSupervisorHeartbeatAt = now;
+      lastGuardAt = now;
       const ipcConnected = typeof process.connected === "boolean" ? process.connected : true;
       const heartbeatExpired = Date.now() - lastSupervisorHeartbeatAt > 3500;
       const supervisorChanged = process.ppid !== supervisorPid;
@@ -326,6 +332,10 @@ async function main() {
       }
       if (supervisorChanged) {
         exitAfterSupervisorLoss("supervisor_parent_pid_changed");
+        return;
+      }
+      if (process.env.PASEO_DAEMON_GENERATION && now - lastSupervisorHeartbeatAt > 25_000) {
+        exitAfterSupervisorLoss("supervisor_heartbeat_expired");
         return;
       }
       if (heartbeatExpired && !isPidAlive(supervisorPid)) {

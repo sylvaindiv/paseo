@@ -1,12 +1,14 @@
 import { Command } from "commander";
 import {
   readDaemonInstance,
+  readDaemonRecovery,
+  managedDaemonCommand,
   isSameDaemonInstance,
   DaemonInstanceError,
 } from "@getpaseo/server/daemon-control";
 import { setTimeout as delay } from "node:timers/promises";
 import { connectToDaemon } from "../../utils/client.js";
-import { withOutput, type CommandOptions } from "../../output/index.js";
+import { withOutput, type CommandOptions, type SingleResult } from "../../output/index.js";
 import { addJsonAndDaemonHostOptions } from "../../utils/command-options.js";
 import { describeDaemonTarget } from "../../utils/daemon-target.js";
 import { parseTimeoutMs, rejectRemovedLaunchFlags } from "./local-daemon.js";
@@ -23,7 +25,26 @@ export function daemonRestartCommand(): Command {
     .action(withOutput(runRestartCommand));
 }
 
-export async function runRestartCommand(options: CommandOptions, _command: Command) {
+export async function runRestartCommand(
+  options: CommandOptions,
+  _command: Command,
+): Promise<SingleResult<Record<string, unknown>>> {
+  const target = options.daemonTarget;
+  if (target.kind === "instance" && (await readDaemonRecovery(target.home))) {
+    const recovery = await managedDaemonCommand(target.home, "restart");
+    return {
+      type: "single" as const,
+      data: { action: "restarted", recovery },
+      schema: { idField: "action" as const, columns: [] },
+    };
+  }
+  return restartWorkerCommand(options, _command);
+}
+
+async function restartWorkerCommand(
+  options: CommandOptions,
+  _command: Command,
+): Promise<SingleResult<Record<string, unknown>>> {
   const target = options.daemonTarget;
   const deadline = Date.now() + parseTimeoutMs(options.timeout);
   const remaining = () => Math.max(1, deadline - Date.now());

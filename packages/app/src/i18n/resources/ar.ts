@@ -1551,6 +1551,7 @@ export const ar: TranslationResources = {
       detail: "إيقاف البرنامج الخفي المحلي.",
     },
     daemon: {
+      recovery: en.desktop.daemon.recovery,
       lifecycle: en.desktop.daemon.lifecycle,
       title: "Daemon",
       status: {

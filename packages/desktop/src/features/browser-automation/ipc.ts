@@ -1,4 +1,6 @@
-import { ipcMain, nativeImage } from "electron";
+import { ResourceRetentionLog } from "@getpaseo/server/resource-retention";
+import { join } from "node:path";
+import { ipcMain, nativeImage, app } from "electron";
 import { BrowserAutomationExecuteRequestSchema } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import type {
   BrowserAutomationConsoleLogEntry,
@@ -31,6 +33,8 @@ const consoleMessagesByContentsId = new Map<number, BrowserAutomationConsoleLogE
 const cdpQueuesByContentsId = new Map<number, CdpSessionQueue>();
 const dialogMonitorsByContentsId = new Map<number, DialogMonitor>();
 const observedContentsIds = new Set<number>();
+let releasedPages = 0;
+const downloadObserved = new Set<number>();
 const pageLifecyclesByContentsId = new Map<number, BrowserPageLifecycle>();
 
 interface IpcHandlerRegistry {
@@ -509,8 +513,54 @@ function createRegistry(hostWebContentsId: number): BrowserRegistry {
   };
 }
 
+export function observeBrowserPageActivity(contents: Electron.WebContents): void {
+  if (downloadObserved.has(contents.id)) return;
+  downloadObserved.add(contents.id);
+  const lifecycle = getPageLifecycle(contents);
+  const onDownload = (
+    _event: unknown,
+    item: Electron.DownloadItem,
+    source: Electron.WebContents,
+  ) => {
+    if (source !== contents) return;
+    const release = lifecycle.retainDownload();
+    item.once("done", release);
+  };
+  contents.session.on("will-download", onDownload);
+  const session = contents.session;
+  const contentsId = contents.id;
+  contents.on("media-paused", () => lifecycle.noteActivity());
+  contents.once("destroyed", () => {
+    downloadObserved.delete(contentsId);
+    session.removeListener("will-download", onDownload);
+  });
+}
+
 export function registerBrowserAutomationIpc(options?: { ipc?: IpcHandlerRegistry }): void {
   const ipc = options?.ipc ?? ipcMain;
+  let resourceLog: ResourceRetentionLog | undefined;
+  ipc.handle("paseo:resources:sample", async (_event, raw: unknown) => {
+    const counts = raw as { views?: unknown; pages?: unknown; releasedViews?: unknown } | null;
+    if (
+      !counts ||
+      !Number.isSafeInteger(counts.views) ||
+      !Number.isSafeInteger(counts.pages) ||
+      Number(counts.views) < 0 ||
+      Number(counts.pages) < 0
+    )
+      return;
+    resourceLog ??= new ResourceRetentionLog(
+      join(app.getPath("userData"), "resource-retention.ndjson"),
+    );
+    await resourceLog.sample(async () => ({
+      views: counts.views,
+      releasedViews: Number.isSafeInteger(counts.releasedViews) ? counts.releasedViews : 0,
+      pages: counts.pages,
+      releasedPages,
+      pageRetention: [...pageLifecyclesByContentsId.values()].map((page) => page.retentionReason),
+      processes: app.getAppMetrics().map(({ pid, type, memory }) => ({ pid, type, memory })),
+    }));
+  });
 
   ipc.handle("paseo:browser:set-presented", async (event, rawInput: unknown) => {
     const senderId = (event as { sender?: HostWebContents }).sender?.id;
@@ -525,7 +575,22 @@ export function registerBrowserAutomationIpc(options?: { ipc?: IpcHandlerRegistr
     }
     const contents = getPaseoBrowserWebContentsForHostWindow(input.browserId, senderId);
     if (!contents) throw new Error("Browser guest is not registered in this window");
-    await getPageLifecycle(contents).setPresented(input.presented);
+    const lifecycle = getPageLifecycle(contents);
+    const sender = (
+      event as {
+        sender: { send?: (channel: string, payload: unknown) => void; isDestroyed?: () => boolean };
+      }
+    ).sender;
+    observeBrowserPageActivity(contents);
+    if (sender.send)
+      lifecycle.setDiscardHandler(() => {
+        if (sender.isDestroyed?.()) return;
+        const url = contents.getURL();
+        contents.close({ waitForBeforeUnload: false });
+        releasedPages++;
+        sender.send?.("paseo:browser:discarded", { browserId: input.browserId, url });
+      });
+    await lifecycle.setPresented(input.presented);
   });
 
   ipc.handle("paseo:browser:execute-automation-command", async (event, rawRequest: unknown) => {

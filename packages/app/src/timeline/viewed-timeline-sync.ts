@@ -32,6 +32,7 @@ import { replaceWithCanonicalStream } from "@/types/stream";
 export interface TimelineReplicaStorage {
   readTimeline(serverId: string, agentId: string): Promise<CachedTimeline | undefined>;
   commitTimeline(serverId: string, agentId: string, timeline: CachedTimeline): void;
+  flushForRetention?(): Promise<boolean>;
 }
 
 async function prepareCachedTimeline(input: {
@@ -97,6 +98,7 @@ export interface TimelineReplica {
   readRange(agentId: string): AgentTimelineCursorState | undefined;
   timelineUpdated(agentId: string): void;
   release(agentId: string): void;
+  persistForRelease?(agentId: string): Promise<boolean>;
 }
 
 class TimelineReplicaOwner implements TimelineReplica {
@@ -122,6 +124,11 @@ class TimelineReplicaOwner implements TimelineReplica {
     });
     this.preparations.set(agentId, preparation);
     return preparation;
+  }
+
+  async persistForRelease(agentId: string): Promise<boolean> {
+    this.timelineUpdated(agentId);
+    return this.storage.flushForRetention ? this.storage.flushForRetention() : false;
   }
 
   release(agentId: string): void {
@@ -381,17 +388,55 @@ export function createViewedTimelineOwner(input: {
   let demanded = new Set<string>();
   const released = new Set<string>();
   const pendingReleases = new Set<string>();
+  const releaseWrites = new Set<string>();
+  const timelineVersions = new Map<string, number>();
+  let disposed = false;
+  let cancelReleaseRetry: (() => void) | undefined;
+  const finishRelease = (agentId: string) => {
+    pendingReleases.delete(agentId);
+    input.replica.release(agentId);
+    useSessionStore.getState().releaseAgentTimeline(input.serverId, agentId);
+    timelineVersions.delete(agentId);
+  };
   const pruneReleasedTimelines = () => {
     for (const agentId of pendingReleases) {
       const session = useSessionStore.getState().sessions[input.serverId];
-      if (!canReleaseAgentTimeline(session, agentId)) continue;
-      pendingReleases.delete(agentId);
-      input.replica.timelineUpdated(agentId);
-      input.replica.release(agentId);
-      useSessionStore.getState().releaseAgentTimeline(input.serverId, agentId);
+      if (!canReleaseAgentTimeline(session, agentId) || releaseWrites.has(agentId)) continue;
+      if (!input.replica.persistForRelease) {
+        finishRelease(agentId);
+        continue;
+      }
+      const version = timelineVersions.get(agentId);
+      releaseWrites.add(agentId);
+      void input.replica
+        .persistForRelease(agentId)
+        .then((saved) => {
+          if (
+            disposed ||
+            !saved ||
+            demanded.has(agentId) ||
+            !pendingReleases.has(agentId) ||
+            timelineVersions.get(agentId) !== version ||
+            !canReleaseAgentTimeline(useSessionStore.getState().sessions[input.serverId], agentId)
+          )
+            return false;
+          finishRelease(agentId);
+          return true;
+        })
+        .catch(input.ports.reportError)
+        .finally(() => {
+          releaseWrites.delete(agentId);
+          if (!disposed && pendingReleases.size && !cancelReleaseRetry) {
+            cancelReleaseRetry = input.ports.schedule(() => {
+              cancelReleaseRetry = undefined;
+              pruneReleasedTimelines();
+            }, 30_000);
+          }
+        });
     }
   };
   const onTimelineUpdated = (agentId: string) => {
+    timelineVersions.set(agentId, (timelineVersions.get(agentId) ?? 0) + 1);
     input.replica.timelineUpdated(agentId);
     if (released.has(agentId)) {
       pendingReleases.add(agentId);
@@ -443,6 +488,8 @@ export function createViewedTimelineOwner(input: {
   return {
     ...sync,
     applyTimelineResponse(receivedPayload) {
+      if (released.has(receivedPayload.agentId) && !pendingReleases.has(receivedPayload.agentId))
+        return;
       const payload = consumeForcedTimelineTailReplacement(receivedPayload, forcedTailReplacements);
       const accepted = applyAuthoritativeTimelineResponse({
         serverId: input.serverId,
@@ -454,12 +501,15 @@ export function createViewedTimelineOwner(input: {
       if (accepted) onTimelineUpdated(payload.agentId);
     },
     enqueueStreamEvent(agentId, event) {
+      if (released.has(agentId) && !pendingReleases.has(agentId)) return;
       streamQueue.enqueue(agentId, event);
     },
     flushStreamAgent(agentId) {
       streamQueue.flushAgent(agentId);
     },
     dispose() {
+      disposed = true;
+      cancelReleaseRetry?.();
       unsubscribeRetention();
       streamQueue.dispose({ flush: true });
       // Replacing a connection owner is not a tab-close gesture. Keep visible
@@ -562,9 +612,9 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
   let cancelMembershipRetry: (() => void) | null = null;
   // Chats this session has opened. Visibility is the only way in, so an agent is never
   // subscribed — and never resumed on the daemon — until the user actually opens it.
-  // Membership then survives hiding, workspace switches, backgrounding and reconnect;
-  // only closing the tab or ending the session takes it out.
+  // Hidden chats expire independently of persisted tabs; server updates never renew demand.
   let openedAgentIds: string[] = [];
+  const hiddenExpirations = new Map<string, () => void>();
 
   const visibleAgentIds = () => normalizeAgentIds([...sources.values()].flat());
 
@@ -878,6 +928,27 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
   };
 
   const publishVisibleMembership = () => {
+    const visible = new Set(visibleAgentIds());
+    for (const [agentId, cancel] of hiddenExpirations) {
+      if (visible.has(agentId) || !openedAgentIds.includes(agentId)) {
+        cancel();
+        hiddenExpirations.delete(agentId);
+      }
+    }
+    for (const agentId of openedAgentIds) {
+      if (visible.has(agentId) || hiddenExpirations.has(agentId)) continue;
+      hiddenExpirations.set(
+        agentId,
+        ports.schedule(
+          () => {
+            hiddenExpirations.delete(agentId);
+            openedAgentIds = openedAgentIds.filter((id) => id !== agentId);
+            publishVisibleMembership();
+          },
+          5 * 60 * 1000,
+        ),
+      );
+    }
     commitDesiredMembership(normalizeAgentIds([...openedAgentIds, ...visibleAgentIds()]));
   };
 
@@ -958,6 +1029,8 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
       cancelMembershipRetry = null;
       membershipNeedsRetry = false;
       membershipRetryDelayMs = undefined;
+      for (const cancel of hiddenExpirations.values()) cancel();
+      hiddenExpirations.clear();
       sources.clear();
       membershipGeneration += 1;
       for (const agentId of desired) cancelCatchUp(agentId);

@@ -8,7 +8,7 @@ interface ProcessEntry {
   name: string;
 }
 
-export function summarizeProcessTree(entries: ProcessEntry[], rootPid: number) {
+export function summarizeProcessTree(entries: ProcessEntry[], rootPid: number, limit = 10) {
   const children = new Map<number, ProcessEntry[]>();
   const byPid = new Map(entries.map((entry) => [entry.pid, entry]));
   for (const entry of entries) {
@@ -31,7 +31,7 @@ export function summarizeProcessTree(entries: ProcessEntry[], rootPid: number) {
   return {
     processCount: descendants.length,
     rss: descendants.reduce((total, entry) => total + entry.rss, 0),
-    largest: descendants.sort((a, b) => b.rss - a.rss).slice(0, 10),
+    largest: descendants.sort((a, b) => b.rss - a.rss).slice(0, limit),
   };
 }
 
@@ -42,9 +42,9 @@ const WindowsEntry = z.object({
   Name: z.string(),
 });
 
-/** On demand only: no background process-table polling or command arguments in reports. */
-export async function collectProcessTreeDiagnostics() {
-  const options = { timeout: 3_000, maxBuffer: 4 * 1024 * 1024 };
+/** Samples process names and RSS only, never command arguments or heap contents. */
+export async function collectProcessTreeDiagnostics(options?: { includeAll?: boolean }) {
+  const commandOptions = { timeout: 3_000, maxBuffer: 4 * 1024 * 1024 };
   let entries: ProcessEntry[];
   if (process.platform === "win32") {
     const { stdout } = await execCommand(
@@ -55,7 +55,7 @@ export async function collectProcessTreeDiagnostics() {
         "-Command",
         "@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize,Name) | ConvertTo-Json -Compress",
       ],
-      options,
+      commandOptions,
     );
     const parsed: unknown = JSON.parse(stdout);
     entries = z
@@ -68,7 +68,7 @@ export async function collectProcessTreeDiagnostics() {
         name: entry.Name,
       }));
   } else {
-    const { stdout } = await execCommand("ps", ["-axo", "pid=,ppid=,rss=,ucomm="], options);
+    const { stdout } = await execCommand("ps", ["-axo", "pid=,ppid=,rss=,ucomm="], commandOptions);
     entries = [];
     for (const line of stdout.split("\n")) {
       const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/.exec(line);
@@ -81,7 +81,11 @@ export async function collectProcessTreeDiagnostics() {
       });
     }
   }
-  const result = summarizeProcessTree(entries, process.pid);
+  const result = summarizeProcessTree(
+    entries,
+    process.pid,
+    options?.includeAll ? entries.length : 10,
+  );
   if (!result.processCount) throw new Error("Daemon missing from process snapshot");
   return result;
 }

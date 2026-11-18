@@ -2630,10 +2630,99 @@ async function runBrowserProfileGroup() {
   }
 }
 
+async function runRetentionGroup() {
+  const {
+    BrowserPageLifecycle,
+    PARKED_BROWSER_DISCARD_MS,
+  } = require("../dist/features/browser-automation/page-lifecycle.js");
+  const { CdpSessionQueue } = require("../dist/features/browser-automation/cdp-session-queue.js");
+  const before = app.getAppMetrics();
+  const cycles = [];
+  let url;
+  for (let cycle = 0; cycle < 20; cycle++) {
+    const win = new BrowserWindow({
+      width: 800,
+      height: 600,
+      show: false,
+      webPreferences: { partition: "persist:paseo-retention-harness", backgroundThrottling: true },
+    });
+    await win.loadFile(path.join(ROOT, "bright.html"));
+    const contents = win.webContents;
+    url = contents.getURL();
+    await contents.executeJavaScript(
+      'localStorage.setItem("retention-proof", "saved"); window.unsavedRetentionValue = "temporary"',
+    );
+    const loadedMemory = app
+      .getAppMetrics()
+      .map(({ pid, type, memory }) => ({ pid, type, memory }));
+    const guestPid = contents.getOSProcessId();
+    const page = new BrowserPageLifecycle(contents, new CdpSessionQueue());
+    page.setDiscardHandler(() => contents.close({ waitForBeforeUnload: false }));
+    if (cycle === 0) {
+      win.showInactive();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await fsp.writeFile(path.join(OUT_DIR, "before.png"), (await contents.capturePage()).toPNG());
+      win.hide();
+    }
+    await page.setPresented(false);
+    if (await page.discardIfExpired(Date.now() + PARKED_BROWSER_DISCARD_MS - 1000))
+      fail("Guest expired early");
+    const destroyed = new Promise((resolve) => contents.once("destroyed", resolve));
+    if (!(await page.discardIfExpired(Date.now() + PARKED_BROWSER_DISCARD_MS + 1)))
+      fail("Eligible guest was retained");
+    await withTimeout(destroyed, "retained guest destruction");
+    if (!win.isDestroyed()) win.destroy();
+    const deadline = Date.now() + 5000;
+    while (app.getAppMetrics().some((entry) => entry.pid === guestPid) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (app.getAppMetrics().some((entry) => entry.pid === guestPid))
+      fail("Guest process remained resident");
+    const residents = BrowserWindow.getAllWindows().length;
+    if (residents !== 0) fail("Guest windows accumulated");
+    cycles.push({
+      cycle: cycle + 1,
+      residentWindows: residents,
+      loadedMemory,
+      memory: app.getAppMetrics().map(({ pid, type, memory }) => ({ pid, type, memory })),
+    });
+  }
+  const reopened = new BrowserWindow({
+    width: 800,
+    height: 600,
+    show: false,
+    webPreferences: { partition: "persist:paseo-retention-harness" },
+  });
+  await reopened.loadURL(url);
+  const restored = await reopened.webContents.executeJavaScript(
+    '({saved:localStorage.getItem("retention-proof"), unsaved:typeof window.unsavedRetentionValue})',
+  );
+  if (restored.saved !== "saved" || restored.unsaved !== "undefined")
+    fail("Profile or document lifetime mismatch");
+  reopened.showInactive();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await fsp.writeFile(
+    path.join(OUT_DIR, "reopened.png"),
+    (await reopened.webContents.capturePage()).toPNG(),
+  );
+  const reopenedPid = reopened.webContents.getOSProcessId();
+  reopened.destroy();
+  const deadline = Date.now() + 5000;
+  while (app.getAppMetrics().some((entry) => entry.pid === reopenedPid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  await fsp.writeFile(
+    path.join(OUT_DIR, "retention-results.json"),
+    JSON.stringify({ before, cycles, restored, after: app.getAppMetrics() }, null, 2),
+  );
+  pass("20 real guest release cycles and profile restoration passed");
+}
+
 async function main() {
   ensureDirSync(OUT_DIR);
   if (
     ![
+      "retention",
       "all",
       "existing",
       "permanent-parking",
@@ -2644,6 +2733,11 @@ async function main() {
     ].includes(HARNESS_GROUP)
   ) {
     fail(`unknown harness group ${HARNESS_GROUP}`);
+  }
+
+  if (HARNESS_GROUP === "retention") {
+    await runRetentionGroup();
+    return;
   }
 
   if (HARNESS_GROUP === "agent-widget") {

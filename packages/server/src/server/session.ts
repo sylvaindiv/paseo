@@ -1639,6 +1639,19 @@ export class Session {
    * Subscribe to AgentManager events and forward them to the client
    */
   private refreshObservationProducers(): void {
+    const implicitTimelineReader = [...this.clientSources.entries()].some(
+      ([source, { capabilities }]) =>
+        !this.delivery.isModern(source) && !capabilities.has(CLIENT_CAPS.selectiveAgentTimeline),
+    );
+    let readers: Iterable<string> | "all" = [];
+    if (!this.isCleanedUp) {
+      readers = implicitTimelineReader
+        ? "all"
+        : Array.from(this.timelineSubscriptions.values()).flatMap((entry) =>
+            Array.from(entry.agentIds),
+          );
+    }
+    this.agentManager.setTimelineReaders(this, readers);
     const legacy = this.delivery.hasLegacySources();
     const workspaces =
       legacy || this.delivery.hasDemand("workspaces") || this.wantsEvent("checkout_status_update");
@@ -8939,6 +8952,7 @@ export class Session {
   public async cleanup(): Promise<void> {
     this.sessionLogger.trace({}, "agent.session.lifecycle.cleanup");
     this.isCleanedUp = true;
+    this.agentManager.setTimelineReaders(this, []);
     await this.delivery.close();
 
     if (this.unsubscribeAgentEvents) {

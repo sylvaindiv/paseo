@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { startCommand, daemonRunCommand } from "./start.js";
 import { daemonStatusCommand } from "./status.js";
 import { daemonStopCommand } from "./stop.js";
+import { daemonRecoverCommand } from "./recover.js";
 import { daemonRestartCommand } from "./restart.js";
 import { runSetPasswordCommand } from "./set-password.js";
 import { pairCommand } from "./pair.js";
@@ -18,6 +19,7 @@ export function createDaemonCommand(): Command {
     daemonStatusCommand(),
     daemonStopCommand(),
     daemonRestartCommand(),
+    daemonRecoverCommand(),
     daemonReloadCommand(),
     pairCommand(),
     daemonConfigCommand(),

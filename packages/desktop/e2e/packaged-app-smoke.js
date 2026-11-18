@@ -775,6 +775,84 @@ async function smokeCliTerminal({ appPath, env }) {
   }
 }
 
+async function smokeManagedRecovery({ appPath, env, daemonHome }) {
+  if (process.platform !== "darwin") return;
+  const recoveryPath = path.join(daemonHome, "daemon-recovery.json");
+  const before = JSON.parse(fs.readFileSync(recoveryPath, "utf8"));
+  const status = await runCliShimJsonCommand({
+    appPath,
+    env,
+    args: ["daemon", "status"],
+    label: "Recovery worker identity",
+  });
+  assert.ok(before.processes.some((entry) => entry.pid === status.workerPid));
+  process.kill(status.workerPid, "SIGSTOP");
+  const result = await runCliShimJsonCommand({
+    appPath,
+    env,
+    args: ["daemon", "recover", "--home", daemonHome],
+    label: "Bundled CLI blocked worker recovery",
+  });
+  assert.equal(result.action, "recovered");
+  assert.equal(result.recovery.lastStop.forced, true);
+  const after = JSON.parse(fs.readFileSync(recoveryPath, "utf8"));
+  assert.equal(after.status, "healthy");
+  assert.notEqual(after.generation, before.generation);
+  console.log("Packaged desktop smoke: bundled recovery replaced the blocked generation");
+}
+
+async function smokeRecoveryAfterQuit({ appPath, env, daemonHome, page, child }) {
+  if (process.platform !== "darwin") return;
+  await page.evaluate(() =>
+    window.paseoDesktop.invoke("patch_desktop_settings", {
+      daemon: { keepRunningAfterQuit: true },
+    }),
+  );
+  const status = await runCliShimJsonCommand({
+    appPath,
+    env,
+    args: ["daemon", "status"],
+    label: "Closed-app worker identity",
+  });
+  const recoveryPath = path.join(daemonHome, "daemon-recovery.json");
+  const before = JSON.parse(fs.readFileSync(recoveryPath, "utf8"));
+  assert.ok(before.processes.some((entry) => entry.pid === status.workerPid));
+  child.kill("SIGTERM");
+  await waitForChildExit(child);
+  process.kill(status.workerPid, "SIGSTOP");
+  const deadline = Date.now() + 110_000;
+  while (Date.now() < deadline) {
+    const current = JSON.parse(fs.readFileSync(recoveryPath, "utf8"));
+    if (current.status === "healthy" && current.generation !== before.generation) {
+      console.log(
+        "Packaged desktop smoke: automatic recovery succeeded with the application closed",
+      );
+      return;
+    }
+    await delay(1_000);
+  }
+  throw new Error("Packaged daemon did not recover with its application closed");
+}
+
+function cleanupRecoveryCoordinator(appPath, daemonHome) {
+  if (process.platform !== "darwin") return;
+  const statePath = path.join(daemonHome, "daemon-recovery.json");
+  if (!fs.existsSync(statePath)) return;
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  if (!state.coordinator) return;
+  const helper = path.join(
+    appPath,
+    "Contents/Resources/app.asar.unpacked/node_modules/@getpaseo/server/dist/server/server/paseo-browser-resource",
+  );
+  const result = spawnSync(
+    helper,
+    ["signal", String(state.coordinator.pid), state.coordinator.startedAt, "SIGTERM"],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 && result.status !== 3)
+    throw new Error(`Could not clean isolated recovery observer: ${result.stderr}`);
+}
+
 async function stopCliDaemon({ appPath, env }) {
   console.log("Packaged desktop smoke: stopping daemon through bundled CLI shim");
   await runCliShimCommand({
@@ -979,6 +1057,7 @@ async function smokePackagedDesktopApp({
     console.log("Packaged desktop smoke: every built-in plugin started");
     await smokeCliShim({ appPath, env });
     await smokeCliTerminal({ appPath, env });
+    await smokeManagedRecovery({ appPath, env, daemonHome });
     if (expectedSandbox !== undefined) {
       await assertSandboxState({ browser, page, expectedSandbox, stdout, stderr });
       await openSmokeWorkspace({ appPath, env, page, daemonHome });
@@ -988,6 +1067,7 @@ async function smokePackagedDesktopApp({
       await assertLocalRelease({ page, userData });
     }
     await writeSmokeArtifacts({ page, stdout, stderr, userData, daemonHome });
+    await smokeRecoveryAfterQuit({ appPath, env, daemonHome, page, child });
     await stopDaemonForCleanup();
     console.log(
       `Packaged desktop smoke passed: real renderer and preload loaded; renderer-started desktop daemon pid ${status.pid}, listen ${status.listen}; CLI shim daemon status and terminal smoke succeeded`,
@@ -1015,6 +1095,7 @@ async function smokePackagedDesktopApp({
     }
     releaseChildHandles(child);
     await removeTempDir(userData);
+    cleanupRecoveryCoordinator(appPath, daemonHome);
     await removeTempDir(daemonHome);
   }
 }

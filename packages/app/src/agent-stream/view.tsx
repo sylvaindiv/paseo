@@ -1,3 +1,5 @@
+import { readRetainedReadingPosition, retainReadingPosition } from "./reading-anchor";
+import { planTimelinePromptJump } from "@/timeline/timeline-sync-plan";
 import { styles as interactiveStyles } from "@/interactive-response/styles";
 import { Suspense, lazy } from "react";
 import { InteractiveConversationProvider } from "@/interactive-response/context";
@@ -432,7 +434,23 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         }),
       [isMobile],
     );
+    const resolvedServerId = serverId ?? context.serverId ?? "";
     const [isNearBottom, setIsNearBottom] = useState(true);
+    const nearBottomRef = useRef(true);
+    const retainedPosition = useMemo(
+      () => ({
+        target: readRetainedReadingPosition(resolvedServerId, agentId),
+        fetched: false,
+        settled: false,
+      }),
+      [resolvedServerId, agentId],
+    );
+    const [positionRevision, setPositionRevision] = useState(0);
+    const handleNearBottomChange = useStableEvent((value: boolean) => {
+      nearBottomRef.current = value;
+      setIsNearBottom(value);
+      if (value && !retainedPosition.target) retainReadingPosition(resolvedServerId, agentId, null);
+    });
     const [readingRowId, setReadingRowId] = useState<string | null>(null);
     useEffect(() => {
       setReadingRowId(null);
@@ -455,7 +473,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     );
 
     // Get serverId (fallback to agent's serverId if not provided)
-    const resolvedServerId = serverId ?? context.serverId ?? "";
     const transformTimelineItem = useInstalledTimelineTransform(resolvedServerId);
 
     const client = useSessionStore((state) => state.sessions[resolvedServerId]?.client ?? null);
@@ -752,6 +769,60 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         responseFolding.hiddenMessageResponseIds,
       ],
     );
+    useEffect(() => {
+      const target = retainedPosition.target;
+      if (!target || !isActive || !isAuthoritativeHistoryReady || timelineEpoch === null) return;
+      if (target.epoch !== timelineEpoch) {
+        retainedPosition.target = undefined;
+        retainReadingPosition(resolvedServerId, agentId, null);
+        return;
+      }
+      const item = [...effectiveStreamItems, ...(effectiveStreamHead ?? [])].find(
+        (candidate) =>
+          getStreamItemMessageId(candidate) === target.messageId ||
+          candidate.timelineCursor?.seq === target.seq,
+      );
+      if (item) {
+        const messageId = getStreamItemMessageId(item);
+        if (!visibleMessageIds.has(messageId)) {
+          revealFindMessage(messageId);
+          return;
+        }
+        viewportRef.current?.scrollToMessage?.(messageId);
+        retainedPosition.target = undefined;
+        return;
+      }
+      if (retainedPosition.settled) {
+        retainedPosition.target = undefined;
+        return;
+      }
+      if (retainedPosition.fetched) return;
+      retainedPosition.fetched = true;
+      void getHostRuntimeStore()
+        .fetchAgentTimeline(
+          resolvedServerId,
+          agentId,
+          planTimelinePromptJump({ epoch: target.epoch, seq: target.seq }),
+        )
+        .catch(() => undefined)
+        .finally(() => {
+          retainedPosition.settled = true;
+          setPositionRevision(positionRevision + 1);
+        });
+    }, [
+      agentId,
+      resolvedServerId,
+      retainedPosition,
+      positionRevision,
+      isActive,
+      isAuthoritativeHistoryReady,
+      timelineEpoch,
+      effectiveStreamItems,
+      effectiveStreamHead,
+      visibleMessageIds,
+      revealFindMessage,
+    ]);
+
     const chatOutline = useChatOutline({
       agentId,
       serverId: resolvedServerId,
@@ -769,13 +840,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       ref,
       () => ({
         scrollToBottom(reason = "jump-to-bottom") {
+          retainedPosition.target = undefined;
+          retainReadingPosition(resolvedServerId, agentId, null);
           viewportRef.current?.scrollToBottom(reason);
         },
         prepareForViewportChange() {
           viewportRef.current?.prepareForViewportChange();
         },
       }),
-      [],
+      [resolvedServerId, agentId, retainedPosition],
     );
 
     const scrollToBottom = useCallback(() => {
@@ -1277,6 +1350,12 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           ? undefined
           : (layoutHistoryItemById.get(rowId) ?? layoutLiveHeadItemById.get(rowId));
       chatOutline.reportReadingPosition(row?.item.timelineCursor?.seq ?? null);
+      if (!retainedPosition.target && !nearBottomRef.current && row?.item.timelineCursor) {
+        retainReadingPosition(resolvedServerId, agentId, {
+          ...row.item.timelineCursor,
+          messageId: getStreamItemMessageId(row.item),
+        });
+      }
       setReadingRowId(rowId);
     });
 
@@ -1389,7 +1468,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                 viewportRef,
                 routeBottomAnchorRequest,
                 isAuthoritativeHistoryReady,
-                onNearBottomChange: setIsNearBottom,
+                onNearBottomChange: handleNearBottomChange,
                 onReadingPositionChange: handleReadingPositionChange,
                 onNearHistoryStart: loadOlder,
                 isLoadingOlderHistory: isLoadingOlder,

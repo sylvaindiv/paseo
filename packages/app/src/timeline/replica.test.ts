@@ -43,7 +43,7 @@ function cachedTimeline(): CachedTimeline {
 function createOwner(storage: TimelineReplicaStorage): ViewedTimelineOwner {
   const replica = createTimelineReplica({
     serverId: SERVER_ID,
-    storage,
+    storage: { flushForRetention: async () => true, ...storage },
     prepareAgent: async () => undefined,
   });
   return createViewedTimelineOwner({
@@ -683,6 +683,12 @@ describe("closed transcript retention", () => {
       selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID).status,
     ).toBe("synced");
     owner.replaceOpenTabAgentIds([]);
+    await expect
+      .poll(
+        () =>
+          selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID).status,
+      )
+      .toBe("cold");
     const closedSession = useSessionStore.getState().sessions[SERVER_ID];
     expect(selectAgentTimelineState(closedSession, AGENT_ID)).toEqual({ status: "cold" });
     expect(closedSession?.agentTimelineCursor.has(AGENT_ID)).toBe(false);
@@ -699,7 +705,7 @@ describe("closed transcript retention", () => {
     owner.dispose();
   });
 
-  it("keeps pending submissions on close and releases after authoritative settlement", () => {
+  it("keeps pending submissions on close and releases after authoritative settlement", async () => {
     useSessionStore.getState().initializeSession(SERVER_ID, null);
     const owner = createOwner({
       readTimeline: async () => undefined,
@@ -723,6 +729,12 @@ describe("closed transcript retention", () => {
       selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID).status,
     ).toBe("synced");
     useSessionStore.getState().rejectAgentMessageSubmission(SERVER_ID, AGENT_ID, "pending");
+    await expect
+      .poll(
+        () =>
+          selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID).status,
+      )
+      .toBe("cold");
     expect(
       selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID),
     ).toEqual({ status: "cold" });
@@ -790,4 +802,84 @@ it("keeps visible history readable when the connection owner is replaced", () =>
     status: "synced",
     range: { endSeq: 8 },
   });
+});
+
+it("keeps a transcript when saving fails and when reopened during saving", async () => {
+  useSessionStore.getState().initializeSession(SERVER_ID, null);
+  let saved = false;
+  let finish!: (value: boolean) => void;
+  const owner = createOwner({
+    readTimeline: async () => undefined,
+    commitTimeline: () => undefined,
+    flushForRetention: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+  applySynced(AGENT_ID, 8);
+  owner.replaceVisibleAgentIds("test", []);
+  owner.replaceOpenTabAgentIds([]);
+  finish(false);
+  await Promise.resolve();
+  expect(
+    selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID).status,
+  ).toBe("synced");
+  owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+  owner.replaceVisibleAgentIds("test", []);
+  owner.replaceOpenTabAgentIds([]);
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+  saved = true;
+  finish(saved);
+  await Promise.resolve();
+  expect(
+    selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID).status,
+  ).toBe("synced");
+  owner.dispose();
+});
+
+it("twenty conversation releases leave no resident transcript and ignore late delivery", async () => {
+  useSessionStore.getState().initializeSession(SERVER_ID, null);
+  const commits = new Map<string, CachedTimeline>();
+  const owner = createOwner({
+    readTimeline: async (_serverId, agentId) => commits.get(agentId),
+    commitTimeline: (_serverId, agentId, timeline) => {
+      commits.set(agentId, timeline);
+    },
+  });
+  try {
+    for (let cycle = 0; cycle < 20; cycle++) {
+      owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+      applySynced(AGENT_ID, 8);
+      owner.replaceVisibleAgentIds("test", []);
+      owner.replaceOpenTabAgentIds([]);
+      await expect
+        .poll(
+          () =>
+            selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID)
+              .status,
+        )
+        .toBe("cold");
+      expect(useSessionStore.getState().sessions[SERVER_ID]?.agentTimelineCursor.size).toBe(0);
+      owner.enqueueStreamEvent(AGENT_ID, {
+        event: {
+          type: "timeline",
+          item: { type: "assistant_message", text: "Late" },
+          provider: "codex",
+        } as AgentStreamEventPayload,
+        seq: 9,
+        epoch: "epoch-1",
+        timestamp: new Date(),
+      });
+      owner.flushStreamAgent(AGENT_ID);
+      expect(
+        selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID),
+      ).toEqual({ status: "cold" });
+    }
+  } finally {
+    owner.dispose();
+  }
 });

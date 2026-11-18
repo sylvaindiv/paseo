@@ -26,6 +26,7 @@ export interface DesktopDaemonStatus {
   ownedByDesktop: boolean;
   startedAt: string | null;
   error: string | null;
+  recovery?: { status: string; error: string | null } | null;
 }
 
 export interface DesktopDaemonLogs {
@@ -126,6 +127,10 @@ function parseDesktopDaemonStatus(raw: unknown): DesktopDaemonStatus {
   return {
     serverId: toStringOrNull(raw.serverId) ?? "",
     status: parseDesktopDaemonState(raw.status),
+    recovery:
+      isRecord(raw.recovery) && typeof raw.recovery.status === "string"
+        ? { status: raw.recovery.status, error: toStringOrNull(raw.recovery.error) }
+        : null,
     listen: toStringOrNull(raw.listen),
     hostname: toStringOrNull(raw.hostname),
     pid: toNumberOrNull(raw.pid),

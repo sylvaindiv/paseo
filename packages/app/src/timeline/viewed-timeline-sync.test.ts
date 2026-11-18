@@ -1175,3 +1175,32 @@ test("disposing a view releases its pending observation before bootstrap complet
   await Promise.resolve();
   world.expectNoPendingFetch();
 });
+
+test("hidden open chats expire after five minutes and reopen through fresh demand", async () => {
+  const world = new TimelineWorld();
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  world.sync.replaceVisibleAgentIds("workspace", []);
+  const expire = await world.nextRetry(5 * 60 * 1000);
+  expire();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const reopened = await world.nextMembership();
+  expect(reopened.agentIds).toEqual(["agent-a"]);
+  reopened.succeed();
+  (await world.nextFetch("agent-a")).respond({ hasNewer: false });
+  world.sync.dispose();
+});
+
+test("twenty hide and expire cycles do not accumulate demanded chats", async () => {
+  const world = new TimelineWorld();
+  for (let cycle = 0; cycle < 20; cycle++) {
+    world.sync.replaceVisibleAgentIds("workspace", [`agent-${cycle}`]);
+    world.sync.replaceVisibleAgentIds("workspace", []);
+    (await world.nextRetry(5 * 60 * 1000))();
+  }
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["final"]);
+  const membership = await world.nextMembership();
+  expect(membership.agentIds).toEqual(["final"]);
+  world.sync.dispose();
+});
