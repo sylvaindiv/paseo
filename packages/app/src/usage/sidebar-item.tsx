@@ -3,6 +3,7 @@ import {
   Fragment,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -17,11 +18,14 @@ import {
 } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { builtinSidebarNavLabelKey } from "@/sidebar-nav/model";
-import { useUsagePreferences } from "./display";
+import { useRetainedPanelActive } from "@/components/retained-panel";
+import { useAppVisible } from "@/hooks/use-app-visible";
+import { useAppSettings } from "@/hooks/use-settings";
 import { useUsageHostId } from "./hosts";
 import { useUsageHostReports } from "./queries";
 import { UsageSourceIcon } from "./source-icon";
 import { UsageMeter } from "./meter";
+import { formatSidebarDuration, formatSidebarUnit } from "./format";
 import {
   choosePinnedUsageLayout,
   METER_GAP,
@@ -32,30 +36,25 @@ import {
 } from "./pinned";
 import { UsageModal } from "./usage-modal";
 
-/** Each summary window with data on the usage host, under its source; empty while none has. */
-function useUsageSummary(): readonly PinnedUsageSource[] {
-  const { preferences } = useUsagePreferences();
-  const reports = useUsageHostReports(useUsageHostId());
-  return useMemo(() => resolvePinnedUsage(reports, preferences), [preferences, reports]);
+export function useUsageSummary(enabled: boolean): readonly PinnedUsageSource[] {
+  const { settings } = useAppSettings();
+  const active = useRetainedPanelActive();
+  const visible = useAppVisible();
+  const hostId = useUsageHostId();
+  const reports = useUsageHostReports(enabled && active && visible ? hostId : null, true);
+  return useMemo(() => resolvePinnedUsage(reports, settings.usage), [settings.usage, reports]);
 }
 
-/** Whether the sidebar Usage item has anything to show. */
-export function useHasUsageSummary(): boolean {
-  return useUsageSummary().length > 0;
-}
-
-/**
- * The sidebar footer's usage entry: each summary window's source icon and percent, and nothing
- * while no summary window has data, since the footer's Usage icon already opens Usage.
- * Pressing it opens the Usage modal.
- */
-export function UsageSidebarItem() {
+export function UsageSidebarItem({ sources }: { sources: readonly PinnedUsageSource[] }) {
   const { t } = useTranslation();
-  const label = t(builtinSidebarNavLabelKey("usage"));
   const openUsage = useOpenSidebarUsage();
-  const sources = useUsageSummary();
-  if (sources.length === 0) return null;
-  return <PinnedUsageTrigger label={label} sources={sources} onPress={openUsage} />;
+  return (
+    <PinnedUsageTrigger
+      label={t(builtinSidebarNavLabelKey("usage"))}
+      sources={sources}
+      onPress={openUsage}
+    />
+  );
 }
 
 const OpenSidebarUsageContext = createContext<(() => void) | null>(null);
@@ -88,11 +87,6 @@ export function useOpenSidebarUsage(): () => void {
   const openUsage = useContext(OpenSidebarUsageContext);
   if (!openUsage) throw new Error("Sidebar Usage must be inside UsageSidebarRoot.");
   return openUsage;
-}
-
-function pinnedUsageLabel(label: string, sources: readonly PinnedUsageSource[]): string {
-  const windows = sources.flatMap((source) => source.windows);
-  return `${label}: ${windows.map((window) => window.label).join(", ")}`;
 }
 
 function triggerStyle({ hovered }: PressableStateCallbackType & { hovered?: boolean }) {
@@ -129,22 +123,85 @@ function PinnedUsageTrigger({
   const handlePercentsLayout = useCallback((event: LayoutChangeEvent) => {
     setPercentsWidth(layoutWidth(event));
   }, []);
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  const formatted = sources.map((source) => {
+    const credits =
+      source.credits === undefined
+        ? null
+        : new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(source.credits);
+    const cards = source.resetCredits
+      ? new Intl.NumberFormat(locale).format(source.resetCredits.count)
+      : null;
+    return {
+      ...source,
+      creditsText: credits,
+      cardsText: cards,
+      cardsExpiry: formatSidebarDuration(source.resetCredits?.expiresAt, now, locale),
+      windows: source.windows.map((window) => ({
+        ...window,
+        countdown: formatSidebarDuration(window.codexResetsAt, now, locale, true),
+        period:
+          window.codexResetsAt && window.shortLabel === "wk"
+            ? formatSidebarUnit(7, "day", locale)
+            : null,
+      })),
+    };
+  });
+  const hasCodexDetails = formatted.some(
+    (source) =>
+      source.creditsText !== null ||
+      source.cardsText !== null ||
+      source.windows.some((window) => window.countdown !== null),
+  );
+  const windowCount = sources.reduce((count, source) => count + source.windows.length, 0);
+  const wrap =
+    hasCodexDetails &&
+    available !== null &&
+    labelsWidth !== null &&
+    labelsWidth + windowCount * (MIN_METER_WIDTH + METER_GAP) > available;
   const layout = choosePinnedUsageLayout({
     available,
     labelsWidth,
     percentsWidth,
-    windowCount: sources.reduce((count, source) => count + source.windows.length, 0),
+    windowCount,
   });
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={pinnedUsageLabel(label, sources)}
+      accessibilityLabel={`${label}: ${formatted
+        .flatMap((source) => [
+          ...source.windows.map((window) =>
+            window.countdown ? `${window.label} · ↻ ${window.countdown}` : window.label,
+          ),
+          source.creditsText === null
+            ? null
+            : t("sidebar.usageSummary.credits", { amount: source.creditsText }),
+          source.cardsText === null || !source.resetCredits
+            ? null
+            : [
+                t("sidebar.usageSummary.cards", {
+                  count: source.resetCredits.count,
+                  amount: source.cardsText,
+                }),
+                source.cardsExpiry,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+        ])
+        .filter(Boolean)
+        .join(", ")}`}
       style={triggerStyle}
       testID="sidebar-usage"
     >
-      <View style={styles.line} onLayout={handleAvailableLayout}>
-        <PinnedUsageLine sources={sources} layout={layout} />
+      <View style={[styles.line, wrap && styles.wrapped]} onLayout={handleAvailableLayout}>
+        <PinnedUsageLine sources={formatted} layout={wrap ? "meters" : layout} wrap={wrap} />
       </View>
       <View
         style={styles.measure}
@@ -154,64 +211,115 @@ function PinnedUsageTrigger({
         aria-hidden
       >
         <View style={styles.measured} onLayout={handleLabelsLayout}>
-          <PinnedUsageLine sources={sources} layout="labels" measuring />
+          <PinnedUsageLine sources={formatted} layout="labels" measuring />
         </View>
         <View style={styles.measured} onLayout={handlePercentsLayout}>
-          <PinnedUsageLine sources={sources} layout="percents" measuring />
+          <PinnedUsageLine sources={formatted} layout="percents" measuring />
         </View>
       </View>
     </Pressable>
   );
 }
 
-/**
- * The line's items as direct children of one row, so every meter shares the leftover width
- * equally.
- */
+interface FormattedUsageSource extends PinnedUsageSource {
+  creditsText: string | null;
+  cardsText: string | null;
+  cardsExpiry: string | null;
+  windows: (PinnedUsageSource["windows"][number] & {
+    countdown: string | null;
+    period: string | null;
+  })[];
+}
+
 function PinnedUsageLine({
   sources,
   layout,
   measuring = false,
+  wrap = false,
 }: {
-  sources: readonly PinnedUsageSource[];
+  sources: readonly FormattedUsageSource[];
   layout: PinnedUsageLayout;
   measuring?: boolean;
+  wrap?: boolean;
 }) {
+  const testIds = measuring
+    ? {}
+    : {
+        source: "sidebar-usage-source",
+        window: "sidebar-usage-pinned-window",
+        reset: "sidebar-usage-reset",
+        credits: "sidebar-usage-credits",
+        cards: "sidebar-usage-cards",
+      };
   return sources.map((source, sourceIndex) => (
     <Fragment key={source.key}>
-      <View
-        style={sourceIndex === 0 ? null : styles.sourceGap}
-        testID={measuring ? undefined : "sidebar-usage-source"}
-      >
-        <UsageSourceIcon svg={source.icon} size={14} />
-      </View>
-      {source.windows.map((window, windowIndex) => {
-        const leadStyle = windowIndex === 0 ? styles.iconGap : styles.windowGap;
-        return (
-          <Fragment key={window.key}>
-            {layout === "meters" ? (
-              <View style={[styles.meterSlot, leadStyle]}>
-                <UsageMeter
-                  percent={window.percent}
-                  tone={window.tone}
-                  quiet
-                  style={styles.meter}
-                />
-              </View>
-            ) : null}
-            <Text
-              style={[styles.percent, layout === "meters" ? null : leadStyle]}
-              numberOfLines={1}
-              testID={measuring ? undefined : "sidebar-usage-pinned-window"}
+      {source.windows.map((window, windowIndex) => (
+        <View
+          key={window.key}
+          style={[
+            styles.window,
+            !wrap && (sourceIndex > 0 || windowIndex > 0) && styles.windowGap,
+            layout === "meters" && !wrap && !window.countdown && styles.growingWindow,
+          ]}
+        >
+          {windowIndex === 0 ? (
+            <View style={styles.icon} testID={testIds.source}>
+              <UsageSourceIcon svg={source.icon} size={14} />
+            </View>
+          ) : null}
+          {layout === "meters" ? (
+            <View
+              style={[
+                styles.meterSlot,
+                (wrap || window.countdown !== null) && styles.compactMeterSlot,
+              ]}
             >
-              {window.percentText}
-              {layout === "percents" || window.shortLabel === "" ? null : (
-                <Text style={styles.windowLabel}>{` ${window.shortLabel}`}</Text>
-              )}
+              <UsageMeter percent={window.percent} tone={window.tone} quiet style={styles.meter} />
+            </View>
+          ) : null}
+          {window.period && layout !== "percents" ? (
+            <Text style={[styles.percent, styles.windowLabel]}>{`${window.period} `}</Text>
+          ) : null}
+          <Text
+            style={[styles.percent, window.countdown && styles.strong]}
+            numberOfLines={1}
+            testID={testIds.window}
+          >
+            {window.percentText}
+            {layout === "percents" || window.shortLabel === "" || window.period ? null : (
+              <Text style={styles.windowLabel}>{` ${window.shortLabel}`}</Text>
+            )}
+          </Text>
+          {window.countdown && layout !== "percents" ? (
+            <Text
+              style={[styles.percent, styles.windowLabel]}
+              testID={testIds.reset}
+            >{` ${window.countdown.replace(/\s+/g, "")}`}</Text>
+          ) : null}
+        </View>
+      ))}
+      {source.creditsText !== null || source.cardsText !== null ? (
+        <View style={[styles.details, !wrap && styles.detailDivider]}>
+          {source.creditsText !== null ? (
+            <Text style={[styles.percent, styles.strong]} testID={testIds.credits}>
+              {source.creditsText}
             </Text>
-          </Fragment>
-        );
-      })}
+          ) : null}
+          {source.cardsText !== null ? (
+            <View style={source.creditsText === null ? null : styles.detailDivider}>
+              <Text style={styles.percent} testID={testIds.cards}>
+                <Text style={styles.windowLabel}>↺</Text>
+                <Text style={styles.strong}>{source.cardsText}</Text>
+                {source.cardsExpiry ? (
+                  <Text
+                    style={styles.windowLabel}
+                  >{` ${source.cardsExpiry.replace(/\s+/g, "")}`}</Text>
+                ) : null}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
     </Fragment>
   ));
 }
@@ -251,12 +359,18 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
   },
-  sourceGap: {
-    marginLeft: theme.spacing[3],
+  wrapped: { flexWrap: "wrap", gap: theme.spacing[1] },
+  details: { flexDirection: "row", alignItems: "center", flexShrink: 0 },
+  detailDivider: {
+    marginLeft: theme.spacing[1],
+    paddingLeft: theme.spacing[1],
+    borderLeftWidth: 1,
+    borderLeftColor: theme.colors.border,
   },
-  iconGap: {
-    marginLeft: theme.spacing[1.5],
-  },
+  strong: { fontWeight: theme.fontWeight.semibold },
+  window: { flexDirection: "row", alignItems: "center", flexShrink: 0 },
+  growingWindow: { flexGrow: 1 },
+  icon: { marginRight: theme.spacing[1.5] },
   windowGap: {
     marginLeft: theme.spacing[2],
   },
@@ -268,6 +382,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: MIN_METER_WIDTH,
     marginRight: METER_GAP,
   },
+  compactMeterSlot: { flexGrow: 0, flexBasis: MIN_METER_WIDTH },
   meter: {
     height: 6,
     borderRadius: 3,

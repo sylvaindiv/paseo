@@ -1378,6 +1378,12 @@ export const en = {
       settings: "Settings",
       closeSidebar: "Close sidebar",
     },
+    usageSummary: {
+      credits: "{{amount}} credits",
+      cards: "{{amount}} cards",
+      cards_one: "{{amount}} card",
+      cards_other: "{{amount}} cards",
+    },
     footer: {
       usage: "Usage",
     },

@@ -1390,6 +1390,12 @@ export const ru: TranslationResources = {
       settings: "Настройки",
       closeSidebar: "Закрыть боковую панель",
     },
+    usageSummary: {
+      credits: "{{amount}} кредитов",
+      cards: "{{amount}} карт",
+      cards_one: "{{amount}} карта",
+      cards_other: "{{amount}} карт",
+    },
     footer: {
       usage: "Использование",
     },

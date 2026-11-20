@@ -1408,6 +1408,12 @@ export const es: TranslationResources = {
       settings: "Ajustes",
       closeSidebar: "Cerrar barra lateral",
     },
+    usageSummary: {
+      credits: "{{amount}} créditos",
+      cards: "{{amount}} tarjetas",
+      cards_one: "{{amount}} tarjeta",
+      cards_other: "{{amount}} tarjetas",
+    },
     footer: {
       usage: "Uso",
     },

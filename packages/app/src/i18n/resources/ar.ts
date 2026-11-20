@@ -1370,6 +1370,12 @@ export const ar: TranslationResources = {
       settings: "إعدادات",
       closeSidebar: "إغلاق الشريط الجانبي",
     },
+    usageSummary: {
+      credits: "{{amount}} أرصدة",
+      cards: "{{amount}} بطاقات",
+      cards_one: "{{amount}} بطاقة",
+      cards_other: "{{amount}} بطاقات",
+    },
     footer: {
       usage: "الاستخدام",
     },

@@ -1385,6 +1385,12 @@ export const ja: TranslationResources = {
       settings: "設定",
       closeSidebar: "サイドバーを閉じる",
     },
+    usageSummary: {
+      credits: "{{amount}} クレジット",
+      cards: "{{amount}} カード",
+      cards_one: "{{amount}} カード",
+      cards_other: "{{amount}} カード",
+    },
     footer: {
       usage: "使用状況",
     },

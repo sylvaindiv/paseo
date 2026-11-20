@@ -1398,6 +1398,12 @@ export const ptBR: TranslationResources = {
       settings: "Configurações",
       closeSidebar: "Fechar barra lateral",
     },
+    usageSummary: {
+      credits: "{{amount}} créditos",
+      cards: "{{amount}} cartões",
+      cards_one: "{{amount}} cartão",
+      cards_other: "{{amount}} cartões",
+    },
     footer: {
       usage: "Uso",
     },

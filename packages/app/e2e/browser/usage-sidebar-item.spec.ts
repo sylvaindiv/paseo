@@ -439,3 +439,99 @@ test("released hosts supply source logos through the client conversion", async (
   ).toHaveAttribute("d", codexPath);
   await qaScreenshot(page, "released-host-usage-modal");
 });
+
+test("Codex sidebar shows credits and cards and updates every minute", async ({ page }) => {
+  const now = Date.now();
+  await page.clock.install({ time: now });
+  const codexReport = (remaining: number, count: number) => {
+    const entry = claudeAndCodexReports()[1]!;
+    if (entry.report.status !== "available") throw new Error("Missing Codex fixture");
+    const window = entry.report.windows[1]!;
+    return [
+      {
+        ...entry,
+        report: {
+          ...entry.report,
+          windows: [
+            {
+              ...window,
+              usedPct: 23,
+              resetsAt: new Date(now + (6 * 24 * 60 + 61) * 60_000).toISOString(),
+            },
+          ],
+          balances: [{ id: "credits", label: "Credits", remaining, unit: "credits" as const }],
+          resetCredits: {
+            count,
+            ...(count > 0
+              ? { expiresAt: new Date(now + (10 * 24 + 7.5) * 3_600_000).toISOString() }
+              : {}),
+          },
+        },
+      },
+    ];
+  };
+  let remaining = 66_399.797;
+  let count = 3;
+  const fixture = await installUsageReportsFixture(page, {
+    lists: [() => codexReport(remaining, count)],
+  });
+  await seedSidebarFooterPreferences(page, [{ key: "usage", visible: true }]);
+  await page.addInitScript(() => {
+    if (localStorage.getItem("panel-state") === null) {
+      localStorage.setItem(
+        "panel-state",
+        JSON.stringify({ version: 16, state: { sidebarWidth: 300 } }),
+      );
+    }
+  });
+  await page.setViewportSize(WIDE);
+  await gotoAppShell(page);
+
+  const item = usageItem(page);
+  const credits = item.getByTestId("sidebar-usage-credits");
+  const cards = item.getByTestId("sidebar-usage-cards");
+  await expect(credits).toHaveText("66,400");
+  await expect(cards).toHaveText("↺3 10d7h");
+  await expect(item.getByTestId("sidebar-usage-reset")).toContainText("6d1h");
+  await expect(cards).toBeInViewport({ ratio: 1 });
+  const usageWindow = item.getByTestId("sidebar-usage-pinned-window");
+  await expect.poll(async () => (await item.boundingBox())?.width ?? 0).toBeGreaterThan(270);
+  await expect
+    .poll(async () =>
+      Math.abs((await usageWindow.boundingBox())!.y - (await cards.boundingBox())!.y),
+    )
+    .toBeLessThan(2);
+  await qaScreenshot(page, "codex-normal", { kind: "element", locator: item });
+
+  await page.evaluate(() => {
+    const persisted = JSON.parse(localStorage.getItem("panel-state")!);
+    persisted.state.sidebarWidth = 200;
+    localStorage.setItem("panel-state", JSON.stringify(persisted));
+  });
+  await page.reload();
+  await expect.poll(async () => (await item.boundingBox())?.width ?? Infinity).toBeLessThan(190);
+  await expect
+    .poll(async () =>
+      Math.abs((await usageWindow.boundingBox())!.y - (await cards.boundingBox())!.y),
+    )
+    .toBeGreaterThan(8);
+  await expect(credits).toBeInViewport({ ratio: 1 });
+  await expect(cards).toBeInViewport({ ratio: 1 });
+  await expect
+    .poll(async () => Math.abs((await credits.boundingBox())!.y - (await cards.boundingBox())!.y))
+    .toBeLessThan(2);
+  await qaScreenshot(page, "codex-narrow", { kind: "element", locator: item });
+
+  const before = fixture.listRequests().length;
+  remaining = 0;
+  count = 0;
+  await page.clock.fastForward(60_000);
+  await fixture.waitForListRequests(before + 1);
+  expect(fixture.listRequests().at(-1)?.forceRefresh).toBe(true);
+  await expect(credits).toHaveText("0");
+  await expect(cards).toHaveText("↺0");
+  await expect(item.getByTestId("sidebar-usage-reset")).toContainText("6d0h");
+  await qaScreenshot(page, "codex-zero-after-refresh", { kind: "element", locator: item });
+  await openUsageFromItem(page);
+  await expect(usageModal(page).getByText("Codex", { exact: true })).toBeVisible();
+});

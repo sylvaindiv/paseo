@@ -45,3 +45,30 @@ export function formatAmount(value: number, unit: UsageBalanceUnit, locale: stri
       return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
   }
 }
+
+/** Two units keep long countdowns readable in the sidebar. */
+export function formatSidebarDuration(
+  iso: string | undefined,
+  now: number,
+  locale: string,
+  showElapsed = false,
+): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso) - now;
+  if (!Number.isFinite(ms) || (ms <= 0 && !showElapsed)) return null;
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const formatUnit = (value: number, unit: string) => formatSidebarUnit(value, unit, locale);
+  if (days > 0) return `${formatUnit(days, "day")} ${formatUnit(hours % 24, "hour")}`;
+  if (hours > 0) return `${formatUnit(hours, "hour")} ${formatUnit(minutes % 60, "minute")}`;
+  return formatUnit(minutes, "minute");
+}
+
+export function formatSidebarUnit(value: number, unit: string, locale: string): string {
+  return new Intl.NumberFormat(locale, {
+    style: "unit",
+    unit,
+    unitDisplay: locale.startsWith("fr") ? "short" : "narrow",
+  }).format(value);
+}

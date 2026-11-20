@@ -14,6 +14,7 @@ export interface PinnedUsageWindow {
   /** The share shown, under the user's used/remaining preference. */
   percent: number;
   percentText: string;
+  codexResetsAt?: string;
   tone: UsageTone;
 }
 
@@ -22,6 +23,8 @@ export interface PinnedUsageSource {
   key: string;
   icon: string | null;
   windows: PinnedUsageWindow[];
+  credits?: number;
+  resetCredits?: { count: number; expiresAt?: string };
 }
 
 /** How much of each window the one-line summary has room for. */
@@ -88,10 +91,21 @@ export function resolvePinnedUsage(
           shortLabel: window.shortLabel ?? window.label,
           percent,
           percentText,
+          codexResetsAt: entry.sourceId === "codex" ? (window.resetsAt ?? undefined) : undefined,
           tone: windowTone(window),
         };
       });
     if (windows.length === 0) return [];
-    return [{ key: entry.id, icon: entry.icon ?? null, windows }];
+    const codex = entry.sourceId === "codex" ? entry.report : null;
+    const credits = codex?.balances?.find((balance) => balance.id === "credits")?.remaining;
+    return [
+      {
+        key: entry.id,
+        icon: entry.icon ?? null,
+        windows,
+        ...(credits != null ? { credits } : {}),
+        ...(codex?.resetCredits ? { resetCredits: codex.resetCredits } : {}),
+      },
+    ];
   });
 }

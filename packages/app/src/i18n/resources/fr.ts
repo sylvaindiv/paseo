@@ -1400,6 +1400,12 @@ export const fr: TranslationResources = {
       settings: "Paramètres",
       closeSidebar: "Fermer la barre latérale",
     },
+    usageSummary: {
+      credits: "{{amount}} crédits",
+      cards: "{{amount}} cartes",
+      cards_one: "{{amount}} carte",
+      cards_other: "{{amount}} cartes",
+    },
     footer: {
       usage: "Utilisation",
     },

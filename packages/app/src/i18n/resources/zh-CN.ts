@@ -1362,6 +1362,12 @@ export const zhCN: TranslationResources = {
       settings: "设置",
       closeSidebar: "关闭侧边栏",
     },
+    usageSummary: {
+      credits: "{{amount}} 点数",
+      cards: "{{amount}} 张卡",
+      cards_one: "{{amount}} 张卡",
+      cards_other: "{{amount}} 张卡",
+    },
     footer: {
       usage: "使用情况",
     },

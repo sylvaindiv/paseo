@@ -34,6 +34,14 @@ const rateLimitSchema = z.object({
   primary_window: windowSchema.nullish(),
   secondary_window: windowSchema.nullish(),
 });
+const resetCountSchema = z.number().int().nonnegative();
+const resetInventorySchema = z.object({
+  available_count: resetCountSchema.optional(),
+  credits: z.array(z.unknown()).optional(),
+});
+const resetCardSchema = z.object({ status: z.literal("available"), expires_at: z.iso.datetime() });
+const whamUrl = "https://chatgpt.com/backend-api/wham";
+
 const responseSchema = z.object({
   plan_type: z.string().optional(),
   email: z.string().optional(),
@@ -49,6 +57,7 @@ const responseSchema = z.object({
     .nullish(),
   code_review_rate_limit: rateLimitSchema.nullish(),
   credits: z.object({ balance: number.optional() }).nullish(),
+  rate_limit_reset_credits: z.unknown().optional(),
 });
 
 interface Auth {
@@ -204,7 +213,7 @@ export async function fetchUsage(
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
   };
   if (auth.accountId) headers["ChatGPT-Account-Id"] = auth.accountId;
-  const response = await fetchApi("https://chatgpt.com/backend-api/wham/usage", {
+  const response = await fetchApi(`${whamUrl}/usage`, {
     headers,
     signal: AbortSignal.timeout(15_000),
   });
@@ -233,6 +242,13 @@ export async function fetchUsage(
     }),
   ];
   const balance = usage.credits?.balance;
+  const summary = resetInventorySchema.safeParse(usage.rate_limit_reset_credits);
+  const resetCredits = await fetchResetCredits(
+    fetchApi,
+    headers,
+    summary.data?.available_count,
+    lookup.now ?? Date.now,
+  );
   return {
     status: "available",
     planLabel: usage.plan_type,
@@ -250,7 +266,42 @@ export async function fetchUsage(
             },
           ],
     details: [],
+    ...(resetCredits ? { resetCredits } : {}),
   };
+}
+
+async function fetchResetCredits(
+  fetchApi: typeof fetch,
+  headers: Record<string, string>,
+  summaryCount: number | undefined,
+  now: () => number,
+): Promise<{ count: number; expiresAt?: string } | undefined> {
+  if (summaryCount === 0) return { count: 0 };
+  let count = summaryCount;
+  let earliest = Infinity;
+  try {
+    const response = await fetchApi(`${whamUrl}/rate-limit-reset-credits`, {
+      headers,
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (response.ok) {
+      const inventory = resetInventorySchema.parse(await response.json());
+      count = inventory.available_count ?? count;
+      const readAt = now();
+      for (const card of inventory.credits ?? []) {
+        const parsed = resetCardSchema.safeParse(card);
+        if (!parsed.success) continue;
+        const expiration = Date.parse(parsed.data.expires_at);
+        if (expiration > readAt) earliest = Math.min(earliest, expiration);
+      }
+    }
+  } catch {
+    // The usage response already contains the count when inventory is unavailable.
+  }
+  if (count === undefined) return undefined;
+  return count > 0 && Number.isFinite(earliest)
+    ? { count, expiresAt: new Date(earliest).toISOString() }
+    : { count };
 }
 
 /** JWT claims are decoded locally; no token or email becomes an account key. */

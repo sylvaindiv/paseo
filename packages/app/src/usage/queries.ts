@@ -31,8 +31,7 @@ import {
 } from "./model";
 import type { UsageReportEntry, UsageView } from "./types";
 
-// The daemon caches each report for five minutes, so re-reading it is cheap. Only
-// an explicit refresh passes `forceRefresh` and reaches the source's API.
+// Ordinary reads use the daemon cache. Manual refresh and the visible sidebar read live usage.
 const REPORTS_STALE_TIME_MS = 60_000;
 
 /** Every report list of a host: its own and each agent's. */
@@ -160,15 +159,16 @@ const NO_REPORTS: UsageReportEntry[] = [];
  * The reports of the sidebar's usage host, which is connected and reports usage; none until they
  * load, or without a host.
  */
-export function useUsageHostReports(serverId: string | null): UsageReportEntry[] {
+export function useUsageHostReports(serverId: string | null, live = false): UsageReportEntry[] {
   const queryClient = useQueryClient();
   const query = useFetchQuery({
     queryKey: usageReportsQueryKey(serverId ?? ""),
-    queryFn: serverId ? () => listReports(queryClient, serverId) : skipToken,
+    queryFn: serverId ? () => listReports(queryClient, serverId, live) : skipToken,
+    refetchInterval: live && serverId ? REPORTS_STALE_TIME_MS : false,
     dataShape: "list",
     staleTimeMs: REPORTS_STALE_TIME_MS,
   });
-  return query.data ?? NO_REPORTS;
+  return serverId && !query.isPlaceholderData ? (query.data ?? NO_REPORTS) : NO_REPORTS;
 }
 
 /**

@@ -465,3 +465,49 @@ test("#6155: real Codex and OpenCode stores share an account but keep agent fail
   });
   expect(agent?.loginErrors).toEqual([host!.loginErrors![0]]);
 });
+
+test.each(["available", "failed", "empty"] as const)(
+  "preserves usage and the card count when the card inventory is %s",
+  async (inventory) => {
+    await writeAuth("fixture-cards", "account-cards");
+    const count = inventory === "empty" ? 0 : 3;
+    const report = await fetchUsage(
+      authInput(fixtureHome),
+      async (url, init) => {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("Authorization")).toBe("Bearer fixture-cards");
+        expect(headers.get("ChatGPT-Account-Id")).toBe("account-cards");
+        if (String(url).endsWith("/usage")) {
+          return Response.json({
+            rate_limit_reset_credits: { available_count: count },
+            credits: { balance: "0" },
+          });
+        }
+        expect(String(url)).toMatch(/\/wham\/rate-limit-reset-credits$/);
+        if (inventory === "failed") throw new Error("inventory unavailable");
+        expect(inventory).toBe("available");
+        return Response.json({
+          available_count: 3,
+          credits: [
+            { status: "available", expires_at: "2026-12-02T20:34:20Z" },
+            { status: "redeemed", expires_at: "2026-11-22T20:34:20Z" },
+            { status: "available", expires_at: "2026-11-30T20:34:20.517476Z" },
+            { status: "available", expires_at: "invalid" },
+          ],
+        });
+      },
+      { now: () => Date.parse("2026-11-20T00:00:00Z") },
+    );
+    expect(report).toMatchObject({
+      status: "available",
+      balances: [{ remaining: 0 }],
+      resetCredits: {
+        count,
+        ...(inventory === "available" ? { expiresAt: "2026-11-30T20:34:20.517Z" } : {}),
+      },
+    });
+    if (inventory !== "available") {
+      expect(report).not.toHaveProperty("resetCredits.expiresAt");
+    }
+  },
+);

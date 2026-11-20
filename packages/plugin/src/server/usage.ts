@@ -50,6 +50,7 @@ export type UsageReport =
       windows: UsageWindow[];
       balances?: UsageBalance[];
       details?: UsageDetail[];
+      resetCredits?: { count: number; expiresAt?: string };
     }
   | { status: "unavailable"; problem: UsageProblem }
   | { status: "error"; error: string };

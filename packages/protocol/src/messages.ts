@@ -6559,6 +6559,9 @@ export const UsageReportSchema = z.discriminatedUnion("status", [
     windows: z.array(ProviderUsageWindowSchema),
     balances: z.array(ProviderUsageBalanceSchema).optional(),
     details: z.array(ProviderUsageDetailSchema).optional(),
+    resetCredits: z
+      .object({ count: z.number().int().nonnegative(), expiresAt: z.iso.datetime().optional() })
+      .optional(),
   }),
   z.object({ status: z.literal("unavailable"), problem: UsageProblemSchema }),
   z.object({ status: z.literal("error"), error: z.string() }),

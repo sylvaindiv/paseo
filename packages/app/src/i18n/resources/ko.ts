@@ -1378,6 +1378,12 @@ export const ko: TranslationResources = {
       settings: "설정",
       closeSidebar: "사이드바 닫기",
     },
+    usageSummary: {
+      credits: "{{amount}} 크레딧",
+      cards: "{{amount}} 카드",
+      cards_one: "{{amount}} 카드",
+      cards_other: "{{amount}} 카드",
+    },
     footer: {
       usage: "사용량",
     },
