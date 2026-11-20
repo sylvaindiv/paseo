@@ -22,14 +22,20 @@ import {
   seedAgentProfiles,
   seedModelProvider,
   selectModelRow,
+  openAgentProfileSettings,
 } from "../support/helpers/agent-profiles";
 import { expectWorkspaceAgentConfiguration } from "../support/helpers/command-center-agent-controls";
 import { expectComposerVisible } from "../support/helpers/composer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 import {
+  assertNewWorkspaceSidebarAndHeader,
+  connectNewWorkspaceDaemonClient,
   openGlobalNewWorkspaceComposer,
   selectNewWorkspaceProject,
+  submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
+import { getServerId } from "../support/helpers/server-id";
+import { clickNewChat } from "../support/helpers/launcher";
 
 const PROFILE = {
   id: "agent_profile_e2e_ui_work",
@@ -43,6 +49,54 @@ const PROFILE = {
 };
 
 const PROFILE_SUMMARY = "Mock Load Test · One minute stream · Approval test";
+const DEFAULT_PROFILE = {
+  id: "agent_profile_e2e_default",
+  name: "Default workspace",
+  provider: "default-profile-models",
+  model: "fast",
+  modeId: "bypassPermissions",
+};
+
+function findAgentForWorkspace<T extends { agent: { workspaceId?: string } }>(
+  entries: T[],
+  workspaceId: string,
+): T["agent"] | null {
+  return (
+    (entries.find((entry) => entry.agent.workspaceId === workspaceId)?.agent as
+      | T["agent"]
+      | undefined) ?? null
+  );
+}
+
+async function readDefaultAgentProfileId(page: Page, hostId: string): Promise<string | undefined> {
+  return page.evaluate((id) => {
+    const value = JSON.parse(localStorage.getItem("@paseo:create-agent-preferences") ?? "{}");
+    return value.defaultAgentProfileByHost?.[id];
+  }, hostId);
+}
+
+function hasDefaultProfileAgent(
+  entries: Array<{
+    agent: {
+      workspaceId?: string;
+      provider: string;
+      model: string | null;
+      currentModeId: string | null;
+    };
+  }>,
+  workspaceId: string,
+): boolean {
+  return entries.some(({ agent }) => {
+    const launchProfileId = (agent as typeof agent & { launchProfileId?: string }).launchProfileId;
+    return (
+      agent.workspaceId === workspaceId &&
+      agent.provider === DEFAULT_PROFILE.provider &&
+      agent.model === DEFAULT_PROFILE.model &&
+      agent.currentModeId === DEFAULT_PROFILE.modeId &&
+      launchProfileId === DEFAULT_PROFILE.id
+    );
+  });
+}
 
 async function measureComposerTyping(
   page: Page,
@@ -154,6 +208,127 @@ async function measureProfileCycle(element: HTMLElement) {
 }
 
 test.describe("Agent profiles in the model picker", () => {
+  test("the host default profile persists and configures the first new workspace agent", async ({
+    page,
+  }) => {
+    const serverId = getServerId();
+    const providerSeed = await seedModelProvider({
+      id: DEFAULT_PROFILE.provider,
+      label: "Default profile models",
+      models: [{ id: "fast", label: "Default profile model", description: "E2E default profile" }],
+    });
+    const seed = await seedAgentProfiles([DEFAULT_PROFILE]);
+    const workspace = await seedMockAgentWorkspace({
+      repoPrefix: "agent-profile-default-",
+      title: "Agent profile default",
+      model: "ten-second-stream",
+    });
+    const client = await connectNewWorkspaceDaemonClient({ ownProjects: false });
+    try {
+      await openAgentProfileSettings(page);
+      await page.getByRole("button", { name: "Default profile: No profile" }).click();
+      await page.getByRole("menuitem", { name: DEFAULT_PROFILE.name, exact: true }).click();
+      await expect(
+        page.getByRole("button", { name: `Default profile: ${DEFAULT_PROFILE.name}` }),
+      ).toBeVisible();
+      await page.evaluate(() => {
+        const nonce = localStorage.getItem("@paseo:e2e-seed-nonce");
+        if (nonce) localStorage.setItem("@paseo:e2e-disable-default-seed-once", nonce);
+      });
+      await page.reload();
+      await expect.poll(() => readDefaultAgentProfileId(page, serverId)).toBe(DEFAULT_PROFILE.id);
+      await expect(
+        page.getByRole("button", { name: `Default profile: ${DEFAULT_PROFILE.name}` }),
+      ).toBeVisible();
+
+      await page.getByRole("button", { name: "Back", exact: true }).click();
+      await openGlobalNewWorkspaceComposer(page);
+      await selectNewWorkspaceProject(page, workspace);
+      await expect(
+        page.getByRole("button", { name: "Select model (Default profile model)", exact: true }),
+      ).toBeVisible({ timeout: 5_000 });
+      await submitNewWorkspacePrompt(page, "Use the host default profile");
+      const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
+        serverId,
+        client,
+        previousWorkspaceId: workspace.workspaceId,
+        projectDisplayName: workspace.projectDisplayName,
+        assertSidebarRow: false,
+        assertHeader: false,
+      });
+      await expect
+        .poll(async () => {
+          const agents = (await workspace.client.fetchAgents({ scope: "active" })).entries;
+          const createdAgent = findAgentForWorkspace(agents, createdWorkspace.workspaceId);
+          return createdAgent
+            ? {
+                provider: createdAgent.provider,
+                model: createdAgent.model,
+                modeId: createdAgent.currentModeId,
+                launchProfileId: (
+                  createdAgent as typeof createdAgent & { launchProfileId?: string }
+                ).launchProfileId,
+              }
+            : null;
+        })
+        .toMatchObject({
+          provider: DEFAULT_PROFILE.provider,
+          model: DEFAULT_PROFILE.model,
+          modeId: DEFAULT_PROFILE.modeId,
+          launchProfileId: DEFAULT_PROFILE.id,
+        });
+    } finally {
+      await client.close();
+      await workspace.cleanup();
+      await seed.restore();
+      await providerSeed.restore();
+    }
+  });
+
+  test("the host default profile configures a new workspace draft tab", async ({ page }) => {
+    test.setTimeout(60_000);
+    const providerSeed = await seedModelProvider({
+      id: DEFAULT_PROFILE.provider,
+      label: "Default profile models",
+      models: [{ id: "fast", label: "Default profile model", description: "E2E default profile" }],
+    });
+    const seed = await seedAgentProfiles([DEFAULT_PROFILE]);
+    const workspace = await seedMockAgentWorkspace({
+      repoPrefix: "agent-profile-default-tab-",
+      title: "Agent profile default tab",
+      model: "ten-second-stream",
+    });
+
+    try {
+      await openAgentProfileSettings(page);
+      await page.getByRole("button", { name: "Default profile: No profile" }).click();
+      await page.getByRole("menuitem", { name: DEFAULT_PROFILE.name, exact: true }).click();
+      await page.evaluate(() => {
+        const nonce = localStorage.getItem("@paseo:e2e-seed-nonce");
+        if (nonce) localStorage.setItem("@paseo:e2e-disable-default-seed-once", nonce);
+      });
+      await openAgentRoute(page, workspace);
+      await clickNewChat(page);
+      await expect(
+        page.getByRole("button", { name: "Select model (Default profile model)", exact: true }),
+      ).toBeVisible({ timeout: 15_000 });
+
+      const composer = page.getByRole("textbox", { name: "Message agent..." }).first();
+      await composer.fill("Use the host default profile in a new tab");
+      await composer.press("Enter");
+      await expect
+        .poll(async () => {
+          const agents = (await workspace.client.fetchAgents({ scope: "active" })).entries;
+          return hasDefaultProfileAgent(agents, workspace.workspaceId);
+        })
+        .toBe(true);
+    } finally {
+      await workspace.cleanup();
+      await seed.restore();
+      await providerSeed.restore();
+    }
+  });
+
   for (const delayMs of [0, 150]) {
     test(`rapid Tab keeps every selection with ${delayMs}ms host latency`, async ({
       page,

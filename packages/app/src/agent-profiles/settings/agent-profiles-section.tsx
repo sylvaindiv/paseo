@@ -9,6 +9,7 @@ import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { settingsStyles } from "@/styles/settings";
+import { SettingsCard, SettingsSelect } from "@/components/settings";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { useAgentProfiles } from "../internal/use-agent-profiles";
@@ -16,6 +17,7 @@ import { generateAgentProfileId } from "../internal/profile-id";
 import type { AgentProfileValue } from "../internal/profile-form-model";
 import { AgentProfileEditModal } from "./agent-profile-edit-modal";
 import { AgentProfileRow } from "./agent-profile-row";
+import { useFormPreferences } from "@/hooks/use-form-preferences";
 
 const ThemedPlus = withUnistyles(Plus);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -31,7 +33,44 @@ export function AgentProfilesSection({ serverId }: { serverId: string }): ReactE
   const isConnected = useHostRuntimeIsConnected(serverId);
   const { profiles, isSupported, saveProfiles } = useAgentProfiles(serverId);
   const { entries } = useProvidersSnapshot(serverId, { cwd: null });
+  const { preferences, updatePreferences } = useFormPreferences();
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const [isSavingDefault, setIsSavingDefault] = useState(false);
+  const [defaultSaveError, setDefaultSaveError] = useState<string | null>(null);
+  const selectedDefaultProfileId = preferences.defaultAgentProfileByHost?.[serverId];
+  const visibleDefaultProfileId = profiles?.some(
+    (profile) => profile.id === selectedDefaultProfileId,
+  )
+    ? (selectedDefaultProfileId ?? "")
+    : "";
+  const defaultProfileOptions = useMemo(
+    () => [
+      { label: t("settings.host.agentProfiles.noDefaultProfile"), value: "" },
+      ...(profiles ?? []).map((profile) => ({ label: profile.name, value: profile.id })),
+    ],
+    [profiles, t],
+  );
+  const handleDefaultProfileChange = useCallback(
+    async (profileId: string) => {
+      setDefaultSaveError(null);
+      setIsSavingDefault(true);
+      try {
+        await updatePreferences((current) => {
+          const byHost = { ...current.defaultAgentProfileByHost };
+          if (profileId) byHost[serverId] = profileId;
+          else delete byHost[serverId];
+          return { ...current, defaultAgentProfileByHost: byHost };
+        });
+      } catch (error) {
+        setDefaultSaveError(
+          error instanceof Error ? error.message : t("common.errors.unableToSave"),
+        );
+      } finally {
+        setIsSavingDefault(false);
+      }
+    },
+    [serverId, t, updatePreferences],
+  );
 
   const handleAddOpen = useCallback(() => setEditTarget({ mode: "create" }), []);
   const handleEditClose = useCallback(() => setEditTarget(null), []);
@@ -161,6 +200,17 @@ export function AgentProfilesSection({ serverId }: { serverId: string }): ReactE
         trailing={addButton}
         testID="agent-profiles-section"
       >
+        <SettingsCard testID="agent-profile-default-setting">
+          <SettingsSelect
+            label={t("settings.host.agentProfiles.defaultProfileLabel")}
+            value={visibleDefaultProfileId}
+            options={defaultProfileOptions}
+            onValueChange={handleDefaultProfileChange}
+            disabled={!profiles || isSavingDefault}
+            error={defaultSaveError ?? undefined}
+            testID="agent-profile-default-select"
+          />
+        </SettingsCard>
         <View style={settingsStyles.card} testID="agent-profiles-card">
           {profiles && profiles.length > 0 ? (
             profiles.map((profile, index) => (

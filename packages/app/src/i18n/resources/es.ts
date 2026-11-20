@@ -2807,6 +2807,9 @@ export const es: TranslationResources = {
       },
       agentProfiles: {
         sectionTitle: "Perfiles de agente",
+        defaultProfileLabel: "Perfil predeterminado",
+        noDefaultProfile: "Sin perfil",
+        defaultProfileLoading: "Cargando perfil…",
         unavailable: "Conéctese a este host para administrar perfiles de agente",
         unsupported: "Este host ejecuta un daemon que aún no admite perfiles de agente",
         emptyState:

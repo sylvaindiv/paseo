@@ -2883,6 +2883,9 @@ export const en = {
       },
       agentProfiles: {
         sectionTitle: "Agent profiles",
+        defaultProfileLabel: "Default profile",
+        noDefaultProfile: "No profile",
+        defaultProfileLoading: "Loading profile…",
         unavailable: "Connect to this host to manage agent profiles",
         unsupported: "This host runs a daemon that does not support agent profiles yet",
         emptyState: "No profiles yet. Add one to start agents from a saved provider and model.",

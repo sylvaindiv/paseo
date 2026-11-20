@@ -2721,6 +2721,9 @@ export const zhCN: TranslationResources = {
       },
       agentProfiles: {
         sectionTitle: "Agent 配置",
+        defaultProfileLabel: "默认配置",
+        noDefaultProfile: "无配置",
+        defaultProfileLoading: "正在加载配置…",
         unavailable: "连接到这个 Host 以管理 Agent 配置",
         unsupported: "此 Host 运行的 Daemon 尚不支持 Agent 配置",
         emptyState: "还没有配置。添加一个以便使用保存的 Provider 和 Model 启动 Agent。",

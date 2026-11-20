@@ -26,6 +26,7 @@ import { AfterPaintPublication } from "@/composer/after-paint-publication";
 import { useShallow } from "zustand/shallow";
 import type { ComposerTextSource } from "@/composer/text-source";
 import { isWeb } from "@/constants/platform";
+import { materializeAgentProfile, useAgentProfiles } from "@/agent-profiles";
 
 const DEFAULT_NEW_CONVERSATION_VALUES: CreateAgentInitialValues = {
   provider: "codex",
@@ -55,6 +56,14 @@ function resolveDefaultNewConversationSetup(
   };
 }
 
+function shouldApplyDefaultAgentProfile(options: AgentInputDraftComposerOptions | null): boolean {
+  return Boolean(
+    options?.defaultAgentProfileId &&
+    options.initialValues === undefined &&
+    options.initialFeatureValues === undefined,
+  );
+}
+
 type AttachmentUpdater =
   | UserComposerAttachment[]
   | ((prev: UserComposerAttachment[]) => UserComposerAttachment[]);
@@ -63,6 +72,8 @@ interface AgentInputDraftComposerOptions {
   initialServerId: string | null;
   initialValues?: CreateAgentInitialValues;
   initialFeatureValues?: Record<string, unknown>;
+  defaultAgentProfileId?: string | null;
+  defaultAgentProfilePreferencesLoading?: boolean;
   isVisible?: boolean;
   lockedWorkingDir?: string;
 }
@@ -72,7 +83,7 @@ interface UseAgentInputDraftInput {
   composer?: AgentInputDraftComposerOptions;
 }
 
-type DraftComposerState = UseAgentFormStateResult & {
+export type DraftComposerState = UseAgentFormStateResult & {
   workingDir: string;
   effectiveModelId: string;
   effectiveThinkingOptionId: string;
@@ -81,6 +92,43 @@ type DraftComposerState = UseAgentFormStateResult & {
   resolveFeatureValuesForSubmit: () => Promise<Record<string, unknown> | undefined>;
   commandDraft: DraftCommandTarget;
 };
+
+function useDefaultAgentProfile(input: {
+  enabled: boolean;
+  serverId: string | null;
+  profileId?: string | null;
+  preferencesLoading: boolean;
+  formState: UseAgentFormStateResult;
+  applyFeatureValues: (values: Record<string, unknown>, provider?: string) => void;
+}): boolean {
+  const { profiles, isSupported } = useAgentProfiles(input.enabled ? input.serverId : null);
+  const key = input.enabled ? `${input.serverId}:${input.profileId}` : null;
+  const [resolvedKey, setResolvedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!key || resolvedKey === key || input.preferencesLoading || profiles === null) return;
+    const profile = isSupported
+      ? profiles.find((entry) => entry.id === input.profileId)
+      : undefined;
+    if (!profile) {
+      setResolvedKey(key);
+      return;
+    }
+    if (input.formState.isAllModelsLoading) return;
+    const providerEntry = input.formState.allProviderEntries?.find(
+      (entry) => entry.provider === profile.provider,
+    );
+    if (providerEntry?.status === "loading") return;
+
+    const applied = input.formState.applyProfileAsDefault(materializeAgentProfile(profile));
+    setResolvedKey(key);
+    if (applied) input.applyFeatureValues(profile.featureValues ?? {}, profile.provider);
+  }, [input, isSupported, key, profiles, resolvedKey]);
+
+  return Boolean(
+    input.enabled && (input.preferencesLoading || profiles === null || resolvedKey !== key),
+  );
+}
 
 export interface AgentInputDraft {
   textSource: ComposerTextSource;
@@ -93,6 +141,7 @@ export interface AgentInputDraft {
   isHydrated: boolean;
   attachmentFocusRequestId: number;
   composerState: DraftComposerState | null;
+  isDefaultAgentProfileLoading: boolean;
 }
 
 export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDraft {
@@ -106,6 +155,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     isVisible: composerOptions?.isVisible ?? false,
     isCreateFlow: true,
   });
+  const defaultProfileEnabled = shouldApplyDefaultAgentProfile(composerOptions);
   const draftKey = useMemo(
     () =>
       resolveDraftKey({
@@ -319,6 +369,14 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     },
     [applyProfileFeatureValues, formState],
   );
+  const isDefaultAgentProfileLoading = useDefaultAgentProfile({
+    enabled: defaultProfileEnabled,
+    serverId: composerOptions?.initialServerId ?? null,
+    profileId: composerOptions?.defaultAgentProfileId,
+    preferencesLoading: composerOptions?.defaultAgentProfilePreferencesLoading ?? false,
+    formState,
+    applyFeatureValues: applyProfileFeatureValues,
+  });
 
   const commandDraft = useMemo(
     () =>
@@ -383,6 +441,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     isHydrated,
     attachmentFocusRequestId,
     composerState,
+    isDefaultAgentProfileLoading,
   };
 }
 

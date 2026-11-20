@@ -174,6 +174,10 @@ function isNewWorkspacePending(input: {
   return input.pendingAction !== null || input.isDraftHandoffActive;
 }
 
+function isNewWorkspaceChatSubmitLoading(isPending: boolean, profileLoading: boolean): boolean {
+  return isPending || profileLoading;
+}
+
 function buildFirstAgentContext(input: {
   prompt: string;
   attachments: AgentAttachment[];
@@ -1094,16 +1098,41 @@ function buildComposerConfig(input: {
   serverId: string;
   workspaceDirectory: string | null;
   sourceDirectory: string | null;
+  defaultAgentProfileId?: string | null;
+  defaultAgentProfilePreferencesLoading?: boolean;
   initialSetup?: WorkspaceDraftTabSetup | null;
 }): Parameters<typeof useAgentInputDraft>[0]["composer"] {
-  const { serverId, workspaceDirectory, sourceDirectory, initialSetup } = input;
+  const {
+    serverId,
+    workspaceDirectory,
+    sourceDirectory,
+    defaultAgentProfileId,
+    defaultAgentProfilePreferencesLoading,
+    initialSetup,
+  } = input;
   const workingDir = workspaceDirectory || sourceDirectory || undefined;
   return {
     initialServerId: serverId || null,
     initialValues: buildComposerInitialValues({ initialSetup }),
     initialFeatureValues: initialSetup?.featureValues,
+    defaultAgentProfileId,
+    defaultAgentProfilePreferencesLoading,
     isVisible: true,
     lockedWorkingDir: workingDir,
+  };
+}
+
+function getDefaultAgentProfileConfig(input: {
+  preferences: { defaultAgentProfileByHost?: Record<string, string> };
+  serverId: string;
+  isLoading: boolean;
+}): Pick<
+  NonNullable<Parameters<typeof useAgentInputDraft>[0]["composer"]>,
+  "defaultAgentProfileId" | "defaultAgentProfilePreferencesLoading"
+> {
+  return {
+    defaultAgentProfileId: input.preferences.defaultAgentProfileByHost?.[input.serverId] ?? null,
+    defaultAgentProfilePreferencesLoading: input.isLoading,
   };
 }
 
@@ -1751,8 +1780,11 @@ export function NewWorkspaceScreen({
   // profile). The derived value reads live from preferences until the user manually picks
   // something in this screen, so the async preferences load doesn't race a
   // frozen useState initializer.
-  const { preferences: formPreferences, updatePreferences: updateFormPreferences } =
-    useFormPreferences();
+  const {
+    preferences: formPreferences,
+    isLoading: isFormPreferencesLoading,
+    updatePreferences: updateFormPreferences,
+  } = useFormPreferences();
   const { config: daemonConfig } = useDaemonConfig(selectedServerId);
   const terminalProfiles: readonly TerminalProfile[] = useMemo(
     () => resolveTerminalProfiles(daemonConfig?.terminalProfiles),
@@ -1840,6 +1872,11 @@ export function NewWorkspaceScreen({
       serverId: selectedServerId,
       workspaceDirectory: workspace?.workspaceDirectory ?? null,
       sourceDirectory: selectedSourceDirectory,
+      ...getDefaultAgentProfileConfig({
+        preferences: formPreferences,
+        serverId: selectedServerId,
+        isLoading: isFormPreferencesLoading,
+      }),
       initialSetup: forkDraftSetup?.setup,
     }),
   });
@@ -2498,7 +2535,10 @@ export function NewWorkspaceScreen({
       submitButtonAccessibilityLabel={t("newWorkspace.create")}
       submitButtonTestID="workspace-create-submit"
       submitIcon="return"
-      isSubmitLoading={isPending}
+      isSubmitLoading={isNewWorkspaceChatSubmitLoading(
+        isPending,
+        chatDraft.isDefaultAgentProfileLoading,
+      )}
       waitForForgeAutoAttachOnSubmit
       submitBehavior="preserve-and-lock"
       blurOnSubmit={true}

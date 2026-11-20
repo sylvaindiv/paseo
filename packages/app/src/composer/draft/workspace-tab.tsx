@@ -11,7 +11,8 @@ import { ComposerImportPill } from "@/composer/draft/import-pill";
 import { COMPOSER_PILL_CLEARANCE } from "@/composer/pill-styles";
 import { AgentStreamView } from "@/agent-stream/view";
 import { composerWorkspaceAttachment } from "@/composer/attachments/workspace";
-import { useAgentInputDraft } from "@/composer/draft/input-draft";
+import { useAgentInputDraft, type DraftComposerState } from "@/composer/draft/input-draft";
+import { useFormPreferences } from "@/hooks/use-form-preferences";
 import type { CreateAgentInitialValues } from "@/hooks/use-agent-form-state";
 import { useDraftAgentCreateFlow, type DraftCreateAttempt } from "@/composer/draft/create-flow";
 import { resolveTurnPresentation, TURN_LIVENESS_IDLE } from "@/timeline/turn-liveness";
@@ -33,7 +34,7 @@ import {
 import type { AgentCapabilityFlags } from "@getpaseo/protocol/agent-types";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import type { WorkspaceComposerAttachment } from "@/attachments/types";
+import type { ComposerAttachment, WorkspaceComposerAttachment } from "@/attachments/types";
 import {
   useDraftWorkspaceAttachmentScopeKey,
   useWorkspaceAttachmentScopeKey,
@@ -326,6 +327,53 @@ function resolveImportPillPress(
   return onOpenImportSheet ?? null;
 }
 
+function isWorkspaceDraftAutoSubmitReady(input: {
+  pending: boolean;
+  hydrated: boolean;
+  profileLoading: boolean;
+  workingDirectory: string | null | undefined;
+  client: unknown;
+  modelLoading: boolean;
+}): boolean {
+  return Boolean(
+    input.pending &&
+    input.hydrated &&
+    !input.profileLoading &&
+    input.workingDirectory &&
+    input.client &&
+    !input.modelLoading,
+  );
+}
+
+function validateWorkspaceDraftSubmission(input: {
+  profileLoading: boolean;
+  allowsEmptyAutoSubmit: boolean;
+  attachments: ComposerAttachment[];
+  text: string;
+  composerState: DraftComposerState;
+  autoSubmitConfig: AutoSubmitConfig | null;
+  workingDirectory: string | null;
+  hasClient: boolean;
+  loadingMessage: string;
+}): string | null {
+  if (input.profileLoading) return input.loadingMessage;
+  return validateDraftSubmission({
+    text: input.text,
+    allowsEmptyAutoSubmit: shouldAllowEmptyDraftText({
+      allowsEmptyAutoSubmit: input.allowsEmptyAutoSubmit,
+      attachments: input.attachments,
+    }),
+    composerState: input.composerState,
+    autoSubmitConfig: input.autoSubmitConfig,
+    workspaceDirectory: input.workingDirectory,
+    hasClient: input.hasClient,
+  });
+}
+
+function isDraftCreationLoading(isSubmitting: boolean, isProfileLoading: boolean): boolean {
+  return isSubmitting || isProfileLoading;
+}
+
 export function WorkspaceDraftAgentTab({
   serverId,
   workspaceId,
@@ -345,6 +393,8 @@ export function WorkspaceDraftAgentTab({
   }));
   const workspaceDirectory = workspaceFields?.workspaceDirectory || null;
   const draftSetup = initialSetup ?? null;
+  const { preferences: formPreferences, isLoading: isFormPreferencesLoading } =
+    useFormPreferences();
   const draftWorkingDirectory = resolveDraftWorkingDirectory({
     workspaceDirectory,
     initialSetup: draftSetup,
@@ -367,6 +417,8 @@ export function WorkspaceDraftAgentTab({
       initialServerId: serverId,
       initialValues: draftInitialValues,
       initialFeatureValues: draftSetup?.featureValues,
+      defaultAgentProfileId: formPreferences.defaultAgentProfileByHost?.[serverId] ?? null,
+      defaultAgentProfilePreferencesLoading: isFormPreferencesLoading,
       isVisible: true,
       lockedWorkingDir: draftWorkingDirectory ?? undefined,
     },
@@ -467,20 +519,18 @@ export function WorkspaceDraftAgentTab({
     getPendingServerId: () => serverId,
     initialAttempt: initialCreateAttempt,
     allowEmptyText: allowsEmptyAutoSubmit,
-    validateBeforeSubmit: ({ text, attachments }) => {
-      const allowsEmptyDraftText = shouldAllowEmptyDraftText({
+    validateBeforeSubmit: ({ text, attachments }) =>
+      validateWorkspaceDraftSubmission({
+        profileLoading: draftInput.isDefaultAgentProfileLoading,
         allowsEmptyAutoSubmit,
-        attachments,
-      });
-      return validateDraftSubmission({
         text,
-        allowsEmptyAutoSubmit: allowsEmptyDraftText,
+        attachments,
         composerState,
         autoSubmitConfig,
-        workspaceDirectory: draftWorkingDirectory,
+        workingDirectory: draftWorkingDirectory,
         hasClient: Boolean(client),
-      });
-    },
+        loadingMessage: t("settings.host.agentProfiles.defaultProfileLoading"),
+      }),
     onBeforeSubmit: async () => {
       await composerState.persistFormPreferences();
       if (isWeb) {
@@ -566,13 +616,14 @@ export function WorkspaceDraftAgentTab({
       },
     },
   });
-  const isReadyForPendingAutoSubmit = Boolean(
-    pendingAutoSubmit &&
-    draftInput.isHydrated &&
-    draftWorkingDirectory &&
-    client &&
-    !composerState.isModelLoading,
-  );
+  const isReadyForPendingAutoSubmit = isWorkspaceDraftAutoSubmitReady({
+    pending: Boolean(pendingAutoSubmit),
+    hydrated: draftInput.isHydrated,
+    profileLoading: draftInput.isDefaultAgentProfileLoading,
+    workingDirectory: draftWorkingDirectory,
+    client,
+    modelLoading: composerState.isModelLoading,
+  });
   const autoSubmitKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!isReadyForPendingAutoSubmit) {
@@ -686,7 +737,10 @@ export function WorkspaceDraftAgentTab({
             workspaceId={workspaceId}
             isPaneFocused={isPaneFocused}
             onSubmitMessage={handleCreateFromInput}
-            isSubmitLoading={isSubmitting}
+            isSubmitLoading={isDraftCreationLoading(
+              isSubmitting,
+              draftInput.isDefaultAgentProfileLoading,
+            )}
             submitLabel={formErrorMessage ? t("common.actions.retry") : undefined}
             submitButtonAccessibilityLabel={
               formErrorMessage ? t("common.actions.retry") : undefined

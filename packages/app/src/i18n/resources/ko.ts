@@ -2761,6 +2761,9 @@ export const ko: TranslationResources = {
       },
       agentProfiles: {
         sectionTitle: "에이전트 프로필",
+        defaultProfileLabel: "기본 프로필",
+        noDefaultProfile: "프로필 없음",
+        defaultProfileLoading: "프로필 불러오는 중…",
         unavailable: "에이전트 프로필을 관리하려면 이 호스트에 연결하세요",
         unsupported: "이 호스트에서 실행 중인 데몬은 아직 에이전트 프로필을 지원하지 않습니다",
         emptyState:

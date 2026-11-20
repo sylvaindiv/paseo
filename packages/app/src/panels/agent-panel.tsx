@@ -1198,6 +1198,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     isHydrated,
     attachmentFocusRequestId,
     composerState,
+    isDefaultAgentProfileLoading,
   } = rawAgentInputDraft;
   const agentInputDraft = useMemo(
     (): AgentInputDraft => ({
@@ -1211,6 +1212,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       isHydrated,
       attachmentFocusRequestId,
       composerState,
+      isDefaultAgentProfileLoading,
     }),
     [
       textSource,
@@ -1223,6 +1225,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       isHydrated,
       attachmentFocusRequestId,
       composerState,
+      isDefaultAgentProfileLoading,
     ],
   );
   const composerSection = (

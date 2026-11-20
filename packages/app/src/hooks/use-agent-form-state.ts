@@ -80,6 +80,7 @@ export interface UseAgentFormStateResult {
   refetchProviderModelsIfStale: () => void;
   setProviderAndModelFromUser: (provider: AgentProvider, modelId: string) => void;
   applyProfileFromUser: (profile: MaterializedAgentProfile) => void;
+  applyProfileAsDefault: (profile: MaterializedAgentProfile) => boolean;
   clearProviderSelectionFromUser: () => void;
   workingDirIsEmpty: boolean;
   persistFormPreferences: () => Promise<void>;
@@ -341,11 +342,14 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     [formState.provider, updateCurrentPreferences],
   );
 
-  const applyProfileFromUser = useCallback(
-    (profile: MaterializedAgentProfile) => {
+  const applyProfile = useCallback(
+    (profile: MaterializedAgentProfile, onlyIfUnmodified: boolean) => {
+      if (onlyIfUnmodified && Object.values(userModified).some(Boolean)) {
+        return false;
+      }
       const provider = profile.provider as AgentProvider;
       if (!selectableProviderDefinitionMap.has(provider)) {
-        return;
+        return false;
       }
 
       const previousProvider = formState.provider;
@@ -384,6 +388,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       }).catch((error) => {
         console.warn("[useAgentFormState] persist profile preference failed", error);
       });
+      return true;
     },
     [
       allProviderModels,
@@ -394,6 +399,16 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       updateCurrentPreferences,
       userModified,
     ],
+  );
+  const applyProfileFromUser = useCallback(
+    (profile: MaterializedAgentProfile) => {
+      applyProfile(profile, false);
+    },
+    [applyProfile],
+  );
+  const applyProfileAsDefault = useCallback(
+    (profile: MaterializedAgentProfile) => applyProfile(profile, true),
+    [applyProfile],
   );
 
   const setModeFromUser = useCallback(
@@ -536,6 +551,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       refetchProviderModelsIfStale,
       setProviderAndModelFromUser,
       applyProfileFromUser,
+      applyProfileAsDefault,
       clearProviderSelectionFromUser,
       workingDirIsEmpty,
       persistFormPreferences,
@@ -571,6 +587,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       refetchProviderModelsIfStale,
       setProviderAndModelFromUser,
       applyProfileFromUser,
+      applyProfileAsDefault,
       clearProviderSelectionFromUser,
       workingDirIsEmpty,
       persistFormPreferences,

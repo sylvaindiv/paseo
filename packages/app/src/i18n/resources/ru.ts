@@ -2798,6 +2798,9 @@ export const ru: TranslationResources = {
       },
       agentProfiles: {
         sectionTitle: "Профили агентов",
+        defaultProfileLabel: "Профиль по умолчанию",
+        noDefaultProfile: "Нет профиля",
+        defaultProfileLoading: "Загрузка профиля…",
         unavailable: "Подключитесь к этому хосту, чтобы управлять профилями агентов",
         unsupported: "На этом хосте запущен демон, который пока не поддерживает профили агентов",
         emptyState:

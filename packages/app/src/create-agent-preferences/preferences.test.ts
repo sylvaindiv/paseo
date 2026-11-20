@@ -270,6 +270,16 @@ describe("create agent preferences", () => {
     });
   });
 
+  it("stores default agent profiles independently by host", () => {
+    expect(
+      parseFormPreferences({
+        defaultAgentProfileByHost: { hostA: "profile-a", hostB: "profile-b" },
+      }),
+    ).toEqual({
+      defaultAgentProfileByHost: { hostA: "profile-a", hostB: "profile-b" },
+    });
+  });
+
   it("treats stored preferences without a launch target as undefined, defaulting to chat", () => {
     expect(parseFormPreferences({ provider: "codex" }).launchTarget).toBeUndefined();
   });

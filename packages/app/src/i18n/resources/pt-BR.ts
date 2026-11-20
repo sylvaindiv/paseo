@@ -2790,6 +2790,9 @@ export const ptBR: TranslationResources = {
       },
       agentProfiles: {
         sectionTitle: "Perfis de agente",
+        defaultProfileLabel: "Perfil padrão",
+        noDefaultProfile: "Nenhum perfil",
+        defaultProfileLoading: "Carregando perfil…",
         unavailable: "Conecte-se a este host para gerenciar perfis de agente",
         unsupported: "Este host executa um daemon que ainda não é compatível com perfis de agente",
         emptyState:

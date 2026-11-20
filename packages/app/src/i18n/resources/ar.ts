@@ -2749,6 +2749,9 @@ export const ar: TranslationResources = {
       },
       agentProfiles: {
         sectionTitle: "ملفات تعريف الوكيل",
+        defaultProfileLabel: "الملف الافتراضي",
+        noDefaultProfile: "بلا ملف تعريف",
+        defaultProfileLoading: "جارٍ تحميل الملف…",
         unavailable: "اتصل بهذا المضيف لإدارة ملفات تعريف الوكيل",
         unsupported: "يشغّل هذا المضيف نسخة Daemon لا تدعم ملفات تعريف الوكيل بعد",
         emptyState: "لا توجد ملفات تعريف بعد. أضف واحدًا لبدء الوكلاء من مزود ونموذج محفوظين.",

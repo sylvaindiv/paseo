@@ -2775,6 +2775,9 @@ export const ja: TranslationResources = {
       },
       agentProfiles: {
         sectionTitle: "エージェントプロファイル",
+        defaultProfileLabel: "デフォルトプロフィール",
+        noDefaultProfile: "プロフィールなし",
+        defaultProfileLoading: "プロフィールを読み込み中…",
         unavailable: "エージェントプロファイルを管理するにはこのホストに接続してください",
         unsupported: "このホストで動作するデーモンはまだエージェントプロファイルに対応していません",
         emptyState:
