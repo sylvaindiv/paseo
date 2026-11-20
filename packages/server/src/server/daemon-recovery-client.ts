@@ -41,6 +41,24 @@ export const recoveryStateSchema = z.object({
   ),
 });
 export type RecoveryState = z.infer<typeof recoveryStateSchema>;
+export function publicRecoveryState(state: RecoveryState): RecoveryState {
+  const coordinator = state.coordinator;
+  return {
+    ...state,
+    ...(coordinator && {
+      coordinator: { pid: coordinator.pid, uid: coordinator.uid, startedAt: coordinator.startedAt },
+    }),
+    error: state.error?.slice(0, 1024) ?? null,
+    // Older socket clients require this field.
+    processes: [],
+  };
+}
+
+export async function readDaemonRecoveryStatus(home: string): Promise<RecoveryState | null> {
+  const state = await readDaemonRecovery(home);
+  return state && publicRecoveryState(state);
+}
+
 export type RecoveryCommand =
   | "status"
   | "start"
@@ -72,6 +90,8 @@ export function requestDaemonRecovery(
   return new Promise((resolve, reject) => {
     const socket = connect(recoverySocket(home));
     let buffer = "";
+    let bytes = 0;
+    socket.setEncoding("utf8");
     const timer = setTimeout(
       () =>
         finish(
@@ -90,17 +110,28 @@ export function requestDaemonRecovery(
     socket.on("connect", () => socket.write(`${JSON.stringify({ command })}\n`));
     socket.on("error", (error) => finish(error));
     socket.on("end", () => {
-      if (!buffer.includes("\n")) finish(new Error("Recovery connection closed"));
+      if (!buffer.includes("\n"))
+        finish(
+          Object.assign(new Error("Recovery connection closed"), {
+            code: "RECOVERY_CONNECTION_CLOSED",
+          }),
+        );
     });
     socket.on("data", (chunk) => {
-      buffer += chunk.toString();
-      if (buffer.length > 1024 * 1024) return finish(new Error("Recovery response too large"));
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 1024 * 1024)
+        return finish(
+          Object.assign(new Error("Recovery response too large"), {
+            code: "RECOVERY_RESPONSE_TOO_LARGE",
+          }),
+        );
+      buffer += chunk;
       if (!buffer.includes("\n")) return;
       try {
         const result = JSON.parse(buffer.split("\n")[0]);
         if (result.error && typeof result.error === "object")
           finish(Object.assign(new Error(result.error.message), { code: result.error.code }));
-        else finish(undefined, recoveryStateSchema.parse(result));
+        else finish(undefined, publicRecoveryState(recoveryStateSchema.parse(result)));
       } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)));
       }

@@ -1,15 +1,22 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, access, unlink, readdir, realpath } from "node:fs/promises";
+import { readFile, unlink, readdir, realpath, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { join, dirname, isAbsolute } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { createStream } from "rotating-file-stream";
 import { z } from "zod";
-import { nativeProcessSnapshot, signalNativeProcess } from "./native-process.js";
+import {
+  nativeProcessHelper,
+  nativeProcessSchema,
+  nativeProcessSnapshot,
+  signalNativeProcess,
+  type NativeProcess,
+} from "./native-process.js";
 import { ensurePrivateDirectory } from "./private-files.js";
 import {
   isPidLockOwnerRunning,
@@ -24,71 +31,54 @@ import {
   readDaemonRecovery,
   requestDaemonRecovery,
   recoverySocket,
+  publicRecoveryState,
   writeRecoveryJson,
   type RecoveryState,
   type RecoveryCommand,
 } from "./daemon-recovery-client.js";
 import { withLocalDaemon } from "./daemon-recovery-health.js";
 const execute = promisify(execFile);
-const processSchema = z.object({
-  pid: z.number(),
-  parent: z.number(),
-  startedAt: z.string(),
-  generation: z.string(),
-  shared: z.string().optional(),
-  uid: z.number(),
-  executable: z.string(),
-});
-type NativeProcess = z.infer<typeof processSchema>;
 const launchSchema = z.object({
   command: z.string().refine(isAbsolute),
   args: z.array(z.string()),
   env: z.record(z.string(), z.string().optional()),
   fingerprint: z.string(),
+  archiveRevision: z.string().nullable().optional(),
 });
 type Launch = z.infer<typeof launchSchema>;
-const helperPath = () => {
-  const candidates = [
-    "./paseo-browser-resource",
-    "../../server/server/paseo-browser-resource",
-    "../../dist/server/server/paseo-browser-resource",
-  ];
-  for (const candidate of candidates) {
-    const file = fileURLToPath(new URL(candidate, import.meta.url)).replace(
-      /\.asar\//,
-      ".asar.unpacked/",
-    );
-    if (existsSync(file)) return file;
-  }
-  throw new Error("Bundled native process helper unavailable");
-};
+type LaunchInput = Omit<Launch, "fingerprint">;
 
-function collectGenerationProcesses(
+export function collectGenerationProcesses(
   snapshot: NativeProcess[],
   state: RecoveryState,
   rootPid?: number,
 ): RecoveryState["processes"] {
-  const known = new Map(state.processes.map((p) => [`${p.pid}:${p.startedAt}`, p]));
-  const owned = new Set(
-    state.processes
-      .filter((p) => snapshot.some((s) => s.pid === p.pid && s.startedAt === p.startedAt))
-      .map((p) => p.pid),
-  );
-  if (rootPid) owned.add(rootPid);
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const p of snapshot)
-      if (
-        p.shared !== "1" &&
-        (p.generation === state.generation || owned.has(p.pid) || owned.has(p.parent)) &&
-        !known.has(`${p.pid}:${p.startedAt}`)
-      ) {
-        known.set(`${p.pid}:${p.startedAt}`, p);
-        owned.add(p.pid);
-        changed = true;
-      }
+  const prior = new Map(state.processes.map((p) => [`${p.pid}:${p.startedAt}`, p]));
+  const descendants = new Map<number, NativeProcess[]>();
+  const owned = new Map<number, NativeProcess>();
+  for (const p of snapshot) {
+    if (p.shared === "1" || (p.generation && p.generation !== state.generation)) continue;
+    const children = descendants.get(p.parent) ?? [];
+    children.push(p);
+    descendants.set(p.parent, children);
+    const previous = prior.get(`${p.pid}:${p.startedAt}`);
+    if (
+      p.pid === rootPid ||
+      p.generation === state.generation ||
+      (previous?.startedAt === p.startedAt &&
+        (previous.uid === undefined || previous.uid === p.uid))
+    )
+      owned.set(p.pid, p);
   }
-  return [...known.values()];
+  const queue = [...owned.values()];
+  for (const parent of queue) {
+    for (const child of descendants.get(parent.pid) ?? []) {
+      if (owned.has(child.pid)) continue;
+      owned.set(child.pid, child);
+      queue.push(child);
+    }
+  }
+  return queue;
 }
 
 function captureRecoveryRoot(
@@ -107,18 +97,39 @@ function captureRecoveryRoot(
     );
     const published =
       instance.generation === state.generation && instance.nativeStartedAt === root.startedAt;
-    if (!captured && !published) throw new Error("Daemon identity is unproven; refusing cleanup");
+    if (instance.uid !== root.uid) throw new Error("Daemon owner changed; refusing cleanup");
+    if (!captured && !published) {
+      if (instance.generation === state.generation && instance.nativeStartedAt) return;
+      throw new Error("Daemon identity is unproven; refusing cleanup");
+    }
     state.processes = collectGenerationProcesses(snapshot, state, root.pid);
   }
+}
+
+async function releaseStoppedInstance(home: string, instance: PidLockInfo) {
+  const current = await getPidLockInfo(home);
+  if (current && !isSamePidLock(instance, current))
+    throw new Error("Daemon replaced during cleanup");
+  await releasePidLock(home, { ownerPid: instance.pid, startedAt: instance.startedAt });
 }
 
 async function requestRecoveryShutdown(
   home: string,
   listen: string,
   force: boolean,
+  disconnected: boolean,
+  instance: PidLockInfo,
 ): Promise<boolean> {
   try {
-    await withLocalDaemon(home, listen, (c) => c.shutdownServer({ timeout: limits.shutdownMs }));
+    await withLocalDaemon<unknown>(
+      home,
+      listen,
+      (c) =>
+        disconnected
+          ? c.restartServer("coordinator_replacement", undefined, { timeout: limits.shutdownMs })
+          : c.shutdownServer({ timeout: limits.shutdownMs }),
+      instance,
+    );
     return true;
   } catch (error) {
     const code = String((error as { code?: string }).code);
@@ -131,19 +142,62 @@ async function requestRecoveryShutdown(
   }
 }
 
-async function fingerprint(command: string, args: string[]): Promise<string> {
+function runtimeArchive(args: string[]): string | undefined {
+  const path = args.find((arg) => arg.includes(".asar/"))?.split(".asar/")[0];
+  return path && `${path}.asar`;
+}
+
+async function archiveRevision(archive: string | undefined): Promise<string | null> {
+  if (!archive) return null;
+  const nativeStat = process.versions.electron
+    ? (createRequire(import.meta.url)("original-fs") as typeof import("node:fs")).promises.stat
+    : stat;
+  const info = await nativeStat(archive);
+  return `${info.dev}:${info.ino}:${info.mtimeMs}:${info.size}`;
+}
+
+export async function fingerprint(command: string, args: string[]): Promise<string> {
+  const runner = args.find((arg) => arg.endsWith("/dist/scripts/supervisor-entrypoint.js"));
+  const module = runner
+    ? new URL("../server/server/daemon-recovery.js", pathToFileURL(runner))
+    : new URL(import.meta.url);
+  if (runner?.includes(".asar/") && !existsSync(runner)) {
+    if (process.versions.electron) throw new Error("Bundled daemon runner unavailable");
+    await verifyCandidateBundle(command);
+    const { stdout } = await execute(
+      command,
+      [
+        "--input-type=module",
+        "-e",
+        `const { fingerprint } = await import(${JSON.stringify(import.meta.url)});
+      console.log(await fingerprint(...JSON.parse(process.argv[1])));`,
+        JSON.stringify([command, args]),
+      ],
+      { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, timeout: 30_000 },
+    );
+    return stdout.trim();
+  }
   const hash = createHash("sha256");
-  const files = new Set([command, ...args.filter((a) => existsSync(a)), helperPath()]);
+  const files = new Set([
+    command,
+    ...args.filter((a) => existsSync(a)),
+    runner
+      ? fileURLToPath(new URL("./paseo-browser-resource", module)).replace(
+          /\.asar\//,
+          ".asar.unpacked/",
+        )
+      : nativeProcessHelper(),
+  ]);
   for (const relative of [
     "./daemon-worker.js",
     "../../server/server/daemon-worker.js",
     "../../scripts/supervisor.js",
     "../../scripts/supervisor-entrypoint.js",
   ]) {
-    const file = fileURLToPath(new URL(relative, import.meta.url));
+    const file = fileURLToPath(new URL(relative, module));
     if (existsSync(file)) files.add(file);
   }
-  let packageRoot = dirname(fileURLToPath(import.meta.url));
+  let packageRoot = dirname(fileURLToPath(module));
   while (dirname(packageRoot) !== packageRoot) {
     const manifest = join(packageRoot, "package.json");
     if (
@@ -167,73 +221,192 @@ async function fingerprint(command: string, args: string[]): Promise<string> {
   return hash.digest("hex");
 }
 
-async function replaceUnresponsiveCoordinator(home: string): Promise<void> {
-  const state = await readDaemonRecovery(home);
-  const saved = launchSchema.parse(
-    JSON.parse(await readFile(join(home, "daemon-recovery-launch.json"), "utf8")),
-  );
-  if ((await fingerprint(saved.command, saved.args)) !== saved.fingerprint)
-    throw new Error("Bundled recovery runtime changed; preserving the coordinator");
-  const expected = state?.coordinator;
-  const actual = (await nativeProcessSnapshot()).find((p) => p.pid === expected?.pid);
-  if (!expected) throw new Error("Coordinator native identity is unproven");
-  if (actual?.startedAt === expected.startedAt) {
-    if (actual.executable !== (await realpath(saved.command)))
-      throw new Error("Coordinator executable changed; preserving it");
-    await signalNativeProcess(actual, "SIGKILL").catch((signalError) => {
-      if (signalError.code !== 3) throw signalError;
-    });
+async function killVerifiedProcess(identity: Pick<NativeProcess, "pid" | "startedAt">) {
+  await signalNativeProcess(identity, "SIGKILL").catch((error) => {
+    if (error.code !== 3) throw error;
+  });
+}
+
+async function replaceCoordinator(expected: RecoveryState["coordinator"]): Promise<void> {
+  if (!expected || expected.uid !== process.getuid?.())
+    throw new Error("Coordinator native identity is unproven");
+  const actual = (await nativeProcessSnapshot()).find((p) => p.pid === expected.pid);
+  if (actual?.startedAt !== expected.startedAt) return;
+  if (actual.uid !== expected.uid) throw new Error("Coordinator owner changed");
+  await killVerifiedProcess(actual);
+}
+
+async function startLockedObserver(path: string, timeoutMs: number): Promise<ChildProcess> {
+  const deadline = Date.now() + timeoutMs;
+  const native = nativeProcessHelper();
+  while (Date.now() < deadline) {
+    const observer = spawn(native, ["watch", path], { stdio: ["ignore", "pipe", "ignore"] });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const acquired = await new Promise<boolean>((resolve, reject) => {
+      timer = setTimeout(
+        () => {
+          observer.kill();
+          reject(new Error("Native process observer did not start"));
+        },
+        Math.max(1, deadline - Date.now()),
+      );
+      observer.on("error", reject);
+      observer.once("exit", (code) => {
+        if (code === 73) resolve(false);
+        else reject(new Error("Native process observer exited"));
+      });
+      observer.stdout!.once("readable", () => {
+        if (observer.stdout!.readableLength) resolve(true);
+      });
+    }).finally(() => clearTimeout(timer));
+    if (acquired) return observer;
+    await delay(100);
   }
-  await delay(2500);
+  throw new Error("Recovery observer lock timed out");
+}
+
+async function withTakeoverLock(home: string, action: () => Promise<void>): Promise<void> {
+  const lock = await startLockedObserver(join(home, "daemon-recovery-takeover.lock"), 60_000);
+  lock.stdout!.resume();
+  try {
+    await action();
+  } finally {
+    lock.kill();
+  }
 }
 
 export async function ensureDaemonCoordinator(
   home: string,
-  launch?: { command: string; args: string[]; env: NodeJS.ProcessEnv },
+  launch?: LaunchInput,
   recoverUnresponsive = false,
 ): Promise<void> {
   if (process.platform !== "darwin") throw new Error("Managed recovery requires macOS");
-  try {
-    await requestDaemonRecovery(home, "status");
-    return;
-  } catch (error) {
-    const code = String((error as NodeJS.ErrnoException).code);
-    if (code === "RECOVERY_COORDINATOR_TIMEOUT" && recoverUnresponsive) {
-      await replaceUnresponsiveCoordinator(home);
-    } else if (!["ENOENT", "ECONNREFUSED"].includes(code)) throw error;
-  }
   ensurePrivateDirectory(home);
-  const existing = await getPidLockInfo(home);
+  await withTakeoverLock(await realpath(home), () =>
+    ensureCoordinatorLocked(home, launch, recoverUnresponsive),
+  );
+}
+
+const coordinatorUnavailable = (error: NodeJS.ErrnoException) =>
+  ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE", "RECOVERY_CONNECTION_CLOSED"].includes(
+    error.code ?? "",
+  );
+
+async function readAvailableStatus(
+  home: string,
+  recoverUnresponsive: boolean,
+  hasCurrentBundle: boolean,
+) {
+  try {
+    return await requestDaemonRecovery(home, "status");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (
+      coordinatorUnavailable(error as NodeJS.ErrnoException) ||
+      (hasCurrentBundle && code === "RECOVERY_RESPONSE_TOO_LARGE") ||
+      (recoverUnresponsive && code === "RECOVERY_COORDINATOR_TIMEOUT")
+    )
+      return null;
+    throw error;
+  }
+}
+
+async function verifyCandidateBundle(command: string): Promise<void> {
+  const bundle = command.match(/^(.*?\.app)\/Contents\//)?.[1];
+  if (bundle)
+    await execute("/usr/bin/codesign", ["--verify", "--deep", "--strict", bundle], {
+      timeout: 30_000,
+    });
+}
+
+async function waitForIdleCoordinator(
+  status: RecoveryState | null,
+  readStatus: () => Promise<RecoveryState | null>,
+): Promise<RecoveryState | null> {
+  const deadline = Date.now() + 20_000;
+  while (status && ["recovering", "starting"].includes(status.status)) {
+    if (Date.now() >= deadline) throw new Error("Coordinator replacement is already in progress");
+    await delay(250);
+    status = await readStatus();
+  }
+  return status;
+}
+
+async function ensureCoordinatorLocked(
+  home: string,
+  launch: LaunchInput | undefined,
+  recoverUnresponsive: boolean,
+): Promise<void> {
+  const readStatus = () => readAvailableStatus(home, recoverUnresponsive, Boolean(launch));
+  let status = await readStatus();
   const prior = await readDaemonRecovery(home);
+  const recorded = await readFile(join(home, "daemon-recovery-launch.json"), "utf8")
+    .then((raw) => launchSchema.parse(JSON.parse(raw)))
+    .catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+  const candidate = launch ?? recorded;
+  if (!candidate) throw new Error("No saved recovery launch is available");
+  const build = await fingerprint(candidate.command, candidate.args);
+  const archive = runtimeArchive(candidate.args);
+  const revision = await archiveRevision(archive);
+  if (!launch && build !== recorded?.fingerprint)
+    throw new Error("Bundled recovery runtime changed; use the bundled CLI");
+  if (
+    status &&
+    build === recorded?.fingerprint &&
+    (recorded.archiveRevision === undefined || recorded.archiveRevision === revision)
+  )
+    return;
+  const existing = await getPidLockInfo(home);
   if (existing && isPidLockOwnerRunning(existing) && !prior)
     throw new Error("Existing daemon is attach-only; recovery ownership is unproven");
-  const saved =
-    launch ??
-    launchSchema.parse(
-      JSON.parse(await readFile(join(home, "daemon-recovery-launch.json"), "utf8")),
-    );
+
+  await verifyCandidateBundle(candidate.command);
+  status = await waitForIdleCoordinator(status, readStatus);
+  if ((await archiveRevision(archive)) !== revision)
+    throw new Error("Bundled runtime changed during verification");
+  const previous = await readDaemonRecovery(home);
+  if (previous?.coordinator) await replaceCoordinator(previous.coordinator);
+  else if (status) throw new Error("Coordinator native identity is unproven");
+  await spawnCoordinator(home, {
+    ...candidate,
+    fingerprint: build,
+    archiveRevision: revision,
+  });
+}
+
+async function spawnCoordinator(home: string, saved: Launch): Promise<void> {
   const env = {
     ...saved.env,
     PASEO_HOME: home,
     PASEO_DAEMON_COORDINATOR: "1",
     PASEO_DAEMON_GENERATION: undefined,
-    PASEO_COORDINATOR_LAUNCH: JSON.stringify({ command: saved.command, args: saved.args }),
+    PASEO_COORDINATOR_LAUNCH: JSON.stringify({
+      command: saved.command,
+      args: saved.args,
+      fingerprint: saved.fingerprint,
+      archiveRevision: saved.archiveRevision,
+    }),
   };
   const child = spawn(saved.command, saved.args, { env, detached: true, stdio: "ignore" });
   let spawnError: Error | undefined;
   child.on("error", (error) => {
     spawnError = error;
   });
+  child.once("exit", (code, signal) => {
+    spawnError = new Error(`Recovery coordinator exited (${signal ?? code}); check daemon.log`);
+  });
   child.unref();
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (spawnError) throw spawnError;
     try {
-      await requestDaemonRecovery(home, "status");
-      return;
+      const reply = await requestDaemonRecovery(home, "status");
+      if (reply.coordinator?.pid === child.pid) return;
     } catch (error) {
-      if (!["ENOENT", "ECONNREFUSED"].includes(String((error as NodeJS.ErrnoException).code)))
-        throw error;
+      if (!coordinatorUnavailable(error as NodeJS.ErrnoException)) throw error;
     }
     await delay(100);
   }
@@ -276,8 +449,6 @@ export async function startCoordinatedDaemon(input: {
 export async function runDaemonCoordinator(home: string): Promise<void> {
   process.title = "Paseo Recovery";
   ensurePrivateDirectory(home);
-  const native = helperPath();
-  await access(native);
   const log = createStream("daemon-recovery.log", {
     path: home,
     size: "10M",
@@ -287,11 +458,10 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
   log.on("error", () => {});
   const record = (event: string, fields: Record<string, unknown> = {}) =>
     log.write(`${JSON.stringify({ time: new Date().toISOString(), event, ...fields })}\n`);
-  const helper = spawn(native, ["watch", join(home, "daemon-recovery.lock")], {
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  const helper = await startLockedObserver(join(home, "daemon-recovery.lock"), 8_000);
   let snapshot: NativeProcess[] = [];
   let snapshotAt = 0;
+  let onObservation: (() => void) | undefined;
   let buffer = "";
   let helperFailed = false;
   helper.on("exit", () => {
@@ -307,13 +477,15 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
       const line = buffer.slice(0, split);
       buffer = buffer.slice(split + 1);
       try {
-        snapshot = z.array(processSchema).parse(JSON.parse(line));
+        snapshot = z.array(nativeProcessSchema).parse(JSON.parse(line));
         snapshotAt = Date.now();
+        onObservation?.();
       } catch {
         helperFailed = true;
       }
     }
   });
+  helper.stdout!.resume();
   // The first snapshot is emitted only after the kernel lock has been acquired.
   const observerDeadline = Date.now() + limits.responseMs;
   while (Date.now() < observerDeadline) {
@@ -321,10 +493,7 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
     await delay(25);
   }
   if (!snapshotAt && !helperFailed) throw new Error("Native observer startup timed out");
-  if (helperFailed) {
-    log.end();
-    return;
-  }
+  if (helperFailed) throw new Error("Native observer startup failed");
   const prior = await readDaemonRecovery(home);
   const raw = JSON.parse(process.env.PASEO_COORDINATOR_LAUNCH!);
   const env = { ...process.env };
@@ -336,16 +505,12 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
     args: raw.args,
     env,
     fingerprint: await fingerprint(raw.command, raw.args),
+    archiveRevision: await archiveRevision(runtimeArchive(raw.args)),
   };
-  const saved = await readFile(join(home, "daemon-recovery-launch.json"), "utf8").catch((error) => {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  });
-  if (saved && launchSchema.parse(JSON.parse(saved)).fingerprint !== launch.fingerprint) {
-    record("runtime_changed");
+  if (raw.fingerprint !== launch.fingerprint || raw.archiveRevision !== launch.archiveRevision) {
     helper.kill();
     log.end();
-    throw new Error("Recovery runtime changed; refusing stale launch");
+    throw new Error("Recovery runtime changed during takeover");
   }
   await writeRecoveryJson(home, "daemon-recovery-launch.json", launch);
   let state: RecoveryState = prior ?? {
@@ -383,9 +548,12 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
     return writes;
   };
   let stoppingGeneration = false;
-  const remember = async () => {
+  const verifiedSnapshot = () => {
     if (helperFailed || Date.now() - snapshotAt > 6_000)
       throw new Error("Native identity observer unavailable");
+    return snapshot;
+  };
+  const compact = () => {
     const root = snapshot.find(
       (p) =>
         child?.pid === p.pid &&
@@ -393,9 +561,22 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
         child.exitCode === null &&
         child.signalCode === null,
     );
-    state.processes = collectGenerationProcesses(snapshot, state, root?.pid);
-    await persist();
+    const next = collectGenerationProcesses(verifiedSnapshot(), state, root?.pid);
+    if (JSON.stringify(next) === JSON.stringify(state.processes)) return;
+    state.processes = next;
+    return persist();
   };
+  const remember = async () => {
+    await compact();
+  };
+  onObservation = () => {
+    void compact()?.catch((error) =>
+      record("registry_write_failed", {
+        message: error.message,
+      }),
+    );
+  };
+  await remember();
   const supervisorProbe = async (): Promise<{ healthy: boolean; listen: string | null }> => {
     if (!child?.connected) return { healthy: false, listen: null };
     const id = randomUUID();
@@ -416,7 +597,23 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
     }
   };
   const health = async (): Promise<boolean> => {
-    const response = await supervisorProbe();
+    let response = await supervisorProbe();
+    let verifiedInstance: PidLockInfo | undefined;
+    if (!child?.connected) {
+      const instance = await getPidLockInfo(home);
+      const root = verifiedSnapshot().find((p) => p.pid === instance?.pid);
+      if (
+        instance &&
+        root &&
+        root.shared !== "1" &&
+        instance.generation === state.generation &&
+        instance.nativeStartedAt === root.startedAt &&
+        instance.uid === root.uid
+      ) {
+        verifiedInstance = instance;
+        response = { healthy: true, listen: instance.listen };
+      }
+    }
     if (!response.healthy || !response.listen) {
       record("health_observation", {
         supervisorWorkerReply: response.healthy,
@@ -426,7 +623,12 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
       return false;
     }
     try {
-      await withLocalDaemon(home, response.listen, (c) => c.ping({ timeoutMs: limits.responseMs }));
+      await withLocalDaemon(
+        home,
+        response.listen,
+        (c) => c.ping({ timeoutMs: limits.responseMs }),
+        verifiedInstance,
+      );
       return true;
     } catch (error) {
       record("health_observation", {
@@ -463,49 +665,63 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
     const instance = await getPidLockInfo(home);
     captureRecoveryRoot(instance, snapshot, state);
     await persist();
-    const alive = () =>
-      state.processes.filter((p) =>
-        snapshot.some((s) => s.pid === p.pid && s.startedAt === p.startedAt),
-      );
-    const hadProcesses = alive().length > 0;
+    const alive = () => {
+      const current = new Map(verifiedSnapshot().map((p) => [p.pid, p]));
+      return state.processes.filter((p) => {
+        const observed = current.get(p.pid);
+        return observed?.startedAt === p.startedAt && observed.uid === p.uid;
+      });
+    };
+    const targetsBeforeShutdown = alive();
+    const hadProcesses = targetsBeforeShutdown.length > 0;
+    const endpoint = targetsBeforeShutdown.some((p) => p.pid === instance?.pid)
+      ? instance?.listen
+      : null;
     let usedLifecycleRpc = false;
-    if (instance?.listen)
-      usedLifecycleRpc = await requestRecoveryShutdown(home, instance.listen, force);
-    else if (!force && alive().length) throw new Error("No graceful shutdown channel");
+    if (instance && endpoint)
+      usedLifecycleRpc = await requestRecoveryShutdown(
+        home,
+        endpoint,
+        force,
+        !child?.connected,
+        instance,
+      );
+    else if (!force && hadProcesses) throw new Error("No graceful shutdown channel");
     const deadline = Date.now() + limits.shutdownMs;
     while (alive().length && Date.now() < deadline) await delay(100);
     if (alive().length && !force) throw new Error("Graceful stop was not confirmed");
     if (recovery && !state.desired) throw new Error("Recovery cancelled by stop intent");
-    const forced = alive().length > 0;
     const targets = alive();
+    const forced = targets.length > 0;
     for (let i = targets.length - 1; i >= 0; i--) {
       const p = targets[i];
       record("signal", { generation: state.generation, process: p, signal: "SIGKILL" });
       // The native helper rechecks uid and creation time immediately before kill().
-      await execute(native, ["signal", String(p.pid), p.startedAt, "SIGKILL"], {
-        timeout: limits.responseMs,
-      }).catch((error) => {
-        if (error.code !== 3) throw error;
-      });
+      await killVerifiedProcess(p);
     }
     const killDeadline = Date.now() + limits.killedMs;
     while (alive().length && Date.now() < killDeadline) await delay(100);
     if (alive().length) throw new Error("Old daemon generation still exists");
-    if (instance) {
-      const current = await getPidLockInfo(home);
-      if (current && !isSamePidLock(instance, current))
-        throw new Error("Daemon replaced during cleanup");
-      await releasePidLock(home, { ownerPid: instance.pid, startedAt: instance.startedAt });
-    }
+    if (instance) await releaseStoppedInstance(home, instance);
     recordConfirmedStop(instance, hadProcesses, forced, usedLifecycleRpc);
     child = null;
     stoppingGeneration = false;
     return forced;
   };
+  const archive = runtimeArchive(launch.args);
+  const currentRuntime = async () => {
+    try {
+      return (
+        (await archiveRevision(archive)) === launch.archiveRevision &&
+        (await fingerprint(launch.command, launch.args)) === launch.fingerprint
+      );
+    } catch {
+      return false;
+    }
+  };
   const launchGeneration = async () => {
     if (!state.desired || !state.monitoring) return;
-    if ((await fingerprint(launch.command, launch.args)) !== launch.fingerprint)
-      throw new Error("Bundled runtime changed or unavailable");
+    if (!(await currentRuntime())) throw new Error("Bundled runtime changed or unavailable");
     const existing = await getPidLockInfo(home);
     if (existing && isPidLockOwnerRunning(existing))
       throw new Error("Existing daemon must be verified and stopped before launch");
@@ -594,6 +810,18 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
     }
     if (state.desired) throw new Error("Daemon startup exceeded sixty seconds");
   };
+  const relayRecovery = async (manual: boolean) => {
+    const cli = launch.env.PASEO_CLI;
+    const bundledCli = archive && join(dirname(archive), "bin", "paseo");
+    if (!manual && cli && cli === bundledCli) {
+      // The shim opens the current installation even when this coordinator still has the old ASAR open.
+      await execute(cli, ["daemon", "recover", "--automatic", "--home", home], {
+        env: { ...launch.env, ELECTRON_RUN_AS_NODE: undefined },
+        timeout: 60_000,
+      });
+    }
+    throw new Error("Bundled runtime changed or unavailable; preserving the old generation");
+  };
   const recover = async (manual: boolean, restart = false) => {
     if (!state.desired || !state.monitoring) return;
     if (!restart && (await health())) {
@@ -604,6 +832,7 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
     }
     if (!manual && policy.attempts >= limits.retryMs.length)
       throw new Error("Automatic recovery budget exhausted");
+    if (!(await currentRuntime())) await relayRecovery(manual);
     if (manual) policy.attempts = 0;
     activeKind = "replace";
     const incident = randomUUID();
@@ -614,7 +843,7 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
     record("incident", {
       incident,
       generation: state.generation,
-      processes: state.processes,
+      processCount: state.processes.length,
       manual,
     });
     if (!manual) {
@@ -630,8 +859,7 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
         return;
       }
     }
-    if ((await fingerprint(launch.command, launch.args)) !== launch.fingerprint)
-      throw new Error("Bundled runtime changed or unavailable; preserving the old generation");
+    if (!(await currentRuntime())) throw new Error("Bundled runtime changed during recovery");
     if (!state.desired || !state.monitoring) return;
     const forced = await stopOld(true, true);
     if (forced) {
@@ -676,6 +904,32 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
   await unlink(recoverySocket(home)).catch((error) => {
     if (error.code !== "ENOENT") throw error;
   });
+  let pendingStart: { command: RecoveryCommand; intent: number; completion: Promise<void> } | null =
+    null;
+  const requestStart = async (command: RecoveryCommand): Promise<void> => {
+    if (pendingStart?.command === command && pendingStart.intent === intentRevision)
+      return pendingStart.completion;
+
+    const intent = ++intentRevision;
+    state.desired = true;
+    state.monitoring = true;
+    const completion = (async () => {
+      await persist();
+      if (intent !== intentRevision) return;
+      await run(async () => {
+        if (intent !== intentRevision) return;
+        if (command === "start" && !(await getPidLockInfo(home)) && !state.processes.length)
+          await launchGeneration();
+        else await recover(true, command === "restart");
+      });
+    })();
+    pendingStart = { command, intent, completion };
+    try {
+      await completion;
+    } finally {
+      if (pendingStart?.completion === completion) pendingStart = null;
+    }
+  };
   const handleCommand = async (socket: Socket, input: string): Promise<void> => {
     const { command } = z
       .object({
@@ -683,34 +937,29 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
       })
       .parse(JSON.parse(input));
     if (command === "status") {
-      socket.end(`${JSON.stringify(state)}\n`);
+      socket.end(`${JSON.stringify(publicRecoveryState(state))}\n`);
       return;
     }
     if ((command === "recover" || command === "restart") && !state.monitoring)
       throw new Error("Built-in daemon management is disabled");
-    const intent = ++intentRevision;
     // Publish stop intent before joining any active operation. It cancels delayed relaunches.
     if (command === "stop" || command === "stop_force" || command === "disable") {
+      const intent = ++intentRevision;
       state.desired = false;
       if (command === "disable") state.monitoring = false;
       await persist();
       await active?.catch(() => {});
       if (intent !== intentRevision) {
-        socket.end(`${JSON.stringify(state)}\n`);
+        socket.end(`${JSON.stringify(publicRecoveryState(state))}\n`);
         return;
       }
       if (command !== "disable") await run(() => stopOld(command === "stop_force"));
       state.status = command !== "disable" ? "stopped" : "disabled";
     } else {
-      state.desired = true;
-      state.monitoring = true;
-      await persist();
-      let action = () => recover(true, command === "restart");
-      if (command === "start" && !child && !state.processes.length) action = launchGeneration;
-      await run(action);
+      await requestStart(command);
     }
     await persist();
-    socket.end(`${JSON.stringify(state)}\n`);
+    socket.end(`${JSON.stringify(publicRecoveryState(state))}\n`);
   };
   const server = createServer((socket) => {
     socket.setTimeout(175_000, () => socket.destroy());
@@ -726,7 +975,7 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
       socket.removeAllListeners("data");
       void handleCommand(socket, input).catch((error) =>
         socket.end(
-          `${JSON.stringify({ error: { code: error.code ?? "RECOVERY_FAILED", message: error.message } })}\n`,
+          `${JSON.stringify({ error: { code: error.code ?? "RECOVERY_FAILED", message: String(error.message).slice(0, 2048) } })}\n`,
         ),
       );
     });
@@ -757,18 +1006,22 @@ export async function runDaemonCoordinator(home: string): Promise<void> {
       }
     }, "health").catch(() => {});
   }, limits.intervalMs);
-  // Recovered coordinators do not trust a surviving generation until native identities match.
-  if (state.desired && state.monitoring) void run(() => recover(false)).catch(() => {});
+  // Takeovers use the regular health window and the persisted recovery budget.
 }
 
 export async function managedDaemonCommand(
   home: string,
   command: RecoveryCommand,
+  launch?: LaunchInput,
+  automatic = false,
 ): Promise<RecoveryState> {
   await ensureDaemonCoordinator(
     home,
-    undefined,
-    ["recover", "restart", "stop_force"].includes(command),
+    launch && {
+      ...launch,
+      env: daemonLaunchEnvironment({ ...launch, home, mode: "managed", desktopManaged: true }),
+    },
+    Boolean(launch) || ["recover", "restart", "stop_force"].includes(command),
   );
-  return requestDaemonRecovery(home, command);
+  return requestDaemonRecovery(home, automatic ? "status" : command);
 }

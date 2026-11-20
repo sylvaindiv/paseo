@@ -35,12 +35,22 @@ export {
   type PidLockInfo as DaemonInstance,
 } from "./pid-lock.js";
 
-export { readDaemonRecovery, requestDaemonRecovery } from "./daemon-recovery-client.js";
+export {
+  readDaemonRecoveryStatus as readDaemonRecovery,
+  requestDaemonRecovery,
+} from "./daemon-recovery-client.js";
 export async function managedDaemonCommand(
   home: string,
   command: import("./daemon-recovery-client.js").RecoveryCommand,
+  launch?: { command: string; args: string[]; env: NodeJS.ProcessEnv },
+  automatic = false,
 ) {
-  return (await import("./daemon-recovery.js")).managedDaemonCommand(home, command);
+  return (await import("./daemon-recovery.js")).managedDaemonCommand(
+    home,
+    command,
+    launch,
+    automatic,
+  );
 }
 
 export async function prepareCoordinatedDaemonLaunch(input: {

@@ -2,14 +2,13 @@ import { Command } from "commander";
 import {
   stopDaemonInstance,
   readDaemonRecovery,
-  managedDaemonCommand,
   type DaemonInstance,
 } from "@getpaseo/server/daemon-control";
 import { connectToDaemon } from "../../utils/client.js";
 import { withOutput, type CommandOptions } from "../../output/index.js";
 import { addJsonAndDaemonHostOptions } from "../../utils/command-options.js";
 import { describeDaemonTarget } from "../../utils/daemon-target.js";
-import { parseTimeoutMs } from "./local-daemon.js";
+import { managedDaemonCommand, parseTimeoutMs } from "./local-daemon.js";
 
 export function daemonStopCommand(): Command {
   return addJsonAndDaemonHostOptions(new Command("stop").description("Stop the selected daemon"))

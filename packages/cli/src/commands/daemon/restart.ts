@@ -2,7 +2,6 @@ import { Command } from "commander";
 import {
   readDaemonInstance,
   readDaemonRecovery,
-  managedDaemonCommand,
   isSameDaemonInstance,
   DaemonInstanceError,
 } from "@getpaseo/server/daemon-control";
@@ -11,7 +10,7 @@ import { connectToDaemon } from "../../utils/client.js";
 import { withOutput, type CommandOptions, type SingleResult } from "../../output/index.js";
 import { addJsonAndDaemonHostOptions } from "../../utils/command-options.js";
 import { describeDaemonTarget } from "../../utils/daemon-target.js";
-import { parseTimeoutMs, rejectRemovedLaunchFlags } from "./local-daemon.js";
+import { managedDaemonCommand, parseTimeoutMs, rejectRemovedLaunchFlags } from "./local-daemon.js";
 
 export function daemonRestartCommand(): Command {
   return rejectRemovedLaunchFlags(

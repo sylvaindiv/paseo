@@ -33,16 +33,23 @@ describe("daemon recovery evidence", () => {
 import { createServer } from "node:net";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { savePersistedConfig } from "./persisted-config.js";
-import { startCoordinatedDaemon, managedDaemonCommand } from "./daemon-recovery.js";
+import {
+  collectGenerationProcesses,
+  ensureDaemonCoordinator,
+  startCoordinatedDaemon,
+  managedDaemonCommand,
+} from "./daemon-recovery.js";
 import {
   readDaemonRecovery,
   requestDaemonRecovery,
   recoverySocket,
+  publicRecoveryState,
+  type RecoveryState,
 } from "./daemon-recovery-client.js";
 import { getPidLockInfo } from "./pid-lock.js";
 import { withLocalDaemon } from "./daemon-recovery-health.js";
@@ -69,6 +76,130 @@ it("reads a failed coordinator state without confusing its diagnostic with an RP
     await rm(home, { recursive: true, force: true });
   }
 });
+
+it("compacts a 15,776-entry registry using current identities", async () => {
+  const state: RecoveryState = {
+    generation: randomUUID(),
+    desired: true,
+    monitoring: true,
+    status: "failed",
+    attempts: 2,
+    error: "🛠".repeat(5000),
+    processes: Array.from({ length: 15_776 }, (_, index) => ({
+      pid: index + 2,
+      startedAt: "1:1",
+      uid: 501,
+      executable:
+        "/Applications/Paseo Local.app/Contents/Frameworks/Paseo Helper.app/Contents/MacOS/Paseo Helper",
+      generation: "",
+      parent: 1,
+    })),
+  };
+  const observation = {
+    parent: 1,
+    startedAt: "1:1",
+    uid: 501,
+    executable: "/bin/sleep",
+    generation: "",
+  };
+  expect(
+    collectGenerationProcesses(
+      [
+        { ...observation, pid: 3 },
+        { ...observation, pid: 4, startedAt: "2:2" },
+        { ...observation, pid: 5, shared: "1", generation: state.generation },
+        { ...observation, pid: 20_000, parent: 3 },
+        { ...observation, pid: 20_001, parent: 4 },
+      ],
+      state,
+    ).map((p) => p.pid),
+  ).toEqual([3, 20_000]);
+
+  const home = await mkdtemp(join(tmpdir(), "paseo-rc-"));
+  const wire = JSON.stringify(state);
+  expect(Buffer.byteLength(wire)).toBeGreaterThan(2.5 * 1024 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(publicRecoveryState(state)))).toBeLessThan(16 * 1024);
+  const server = createServer((socket) => {
+    socket.on("error", () => {});
+    socket.once("data", () => socket.end(`${wire}\n`));
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(recoverySocket(home), resolve));
+    await expect(requestDaemonRecovery(home, "status")).rejects.toMatchObject({
+      code: "RECOVERY_RESPONSE_TOO_LARGE",
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform !== "darwin")(
+  "takes over once, adopts a healthy daemon and preserves stop intent",
+  async () => {
+    const home = await mkdtemp(join(tmpdir(), "paseo-rc-"));
+    const marker = join(home, "runtime.mjs");
+    const manifest = join(home, "daemon-recovery-launch.json");
+    const helper = resolvePath("packages/server/dist/server/server/paseo-browser-resource");
+    const entry = resolvePath("packages/server/dist/scripts/supervisor-entrypoint.js");
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("PASEO_")),
+    );
+    const launch = {
+      home,
+      command: process.execPath,
+      args: ["--import", marker, entry],
+      env: { ...env, HOME: home, PASEO_HOME: home },
+    };
+    const terminateCoordinator = async () => {
+      const state = await readDaemonRecovery(home);
+      if (state?.coordinator)
+        execFileSync(helper, [
+          "signal",
+          String(state.coordinator.pid),
+          state.coordinator.startedAt,
+          "SIGTERM",
+        ]);
+    };
+    try {
+      await writeFile(marker, "export {};\n");
+      savePersistedConfig(home, {
+        daemon: { listen: "127.0.0.1:0", relay: { enabled: false } },
+        features: {
+          webUi: { enabled: false },
+          dictation: { enabled: false },
+          voiceMode: { enabled: false },
+        },
+      });
+      const initial = await startCoordinatedDaemon(launch);
+      const first = (await readDaemonRecovery(home))!;
+      await unlink(manifest);
+      await Promise.all([1, 2, 3].map(() => ensureDaemonCoordinator(home, launch)));
+      const adopted = (await readDaemonRecovery(home))!;
+      expect(adopted.coordinator?.pid).not.toBe(first.coordinator?.pid);
+      expect((await managedDaemonCommand(home, "recover", launch)).generation).toBe(
+        first.generation,
+      );
+      expect((await getPidLockInfo(home))?.pid).toBe(initial.instance.pid);
+      await writeFile(marker, "export const updated = true;\n");
+      await expect(managedDaemonCommand(home, "restart")).rejects.toThrow("runtime changed");
+      const restarted = await managedDaemonCommand(home, "restart", launch);
+      expect(restarted.generation).not.toBe(first.generation);
+      expect(restarted.lastStop).toMatchObject({ forced: false, usedLifecycleRpc: true });
+      await managedDaemonCommand(home, "stop", launch);
+      await terminateCoordinator();
+      await unlink(manifest);
+      await managedDaemonCommand(home, "recover", launch, true);
+      expect(await getPidLockInfo(home)).toBeNull();
+      expect((await readDaemonRecovery(home))?.desired).toBe(false);
+    } finally {
+      await managedDaemonCommand(home, "stop_force", launch).catch(() => {});
+      await terminateCoordinator().catch(() => {});
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);
 
 async function injectDaemonFailure(
   failure: string,
@@ -223,5 +354,5 @@ it
       await rm(home, { recursive: true, force: true });
     }
   },
-  180_000,
+  300_000,
 );

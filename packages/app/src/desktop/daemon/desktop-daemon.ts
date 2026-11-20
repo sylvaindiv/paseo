@@ -26,7 +26,18 @@ export interface DesktopDaemonStatus {
   ownedByDesktop: boolean;
   startedAt: string | null;
   error: string | null;
-  recovery?: { status: string; error: string | null } | null;
+  recovery?: {
+    status: string;
+    error: string | null;
+    generation: string | null;
+    attempts: number | null;
+    lastStop: {
+      action: "stopped" | "not_running";
+      pid: number | null;
+      forced: boolean;
+      usedLifecycleRpc: boolean;
+    } | null;
+  } | null;
 }
 
 export interface DesktopDaemonLogs {
@@ -120,6 +131,26 @@ function parseDesktopDaemonState(value: unknown): DesktopDaemonState {
   }
 }
 
+function parseRecoveryStatus(value: unknown): DesktopDaemonStatus["recovery"] {
+  if (!isRecord(value) || typeof value.status !== "string") return null;
+  const stop = value.lastStop;
+  return {
+    status: value.status,
+    error: toStringOrNull(value.error),
+    generation: toStringOrNull(value.generation),
+    attempts: toNumberOrNull(value.attempts),
+    lastStop:
+      isRecord(stop) && (stop.action === "stopped" || stop.action === "not_running")
+        ? {
+            action: stop.action,
+            pid: toNumberOrNull(stop.pid),
+            forced: stop.forced === true,
+            usedLifecycleRpc: stop.usedLifecycleRpc === true,
+          }
+        : null,
+  };
+}
+
 function parseDesktopDaemonStatus(raw: unknown): DesktopDaemonStatus {
   if (!isRecord(raw)) {
     throw new Error("Unexpected desktop daemon status response.");
@@ -127,10 +158,7 @@ function parseDesktopDaemonStatus(raw: unknown): DesktopDaemonStatus {
   return {
     serverId: toStringOrNull(raw.serverId) ?? "",
     status: parseDesktopDaemonState(raw.status),
-    recovery:
-      isRecord(raw.recovery) && typeof raw.recovery.status === "string"
-        ? { status: raw.recovery.status, error: toStringOrNull(raw.recovery.error) }
-        : null,
+    recovery: parseRecoveryStatus(raw.recovery),
     listen: toStringOrNull(raw.listen),
     hostname: toStringOrNull(raw.hostname),
     pid: toNumberOrNull(raw.pid),

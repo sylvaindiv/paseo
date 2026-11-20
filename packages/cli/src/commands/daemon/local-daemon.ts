@@ -6,7 +6,7 @@ import {
   startDaemonInstance,
   resolvePaseoHome,
   readDaemonRecovery,
-  managedDaemonCommand,
+  managedDaemonCommand as runManagedDaemonCommand,
   readDaemonInstance,
 } from "@getpaseo/server/daemon-control";
 const require = createRequire(import.meta.url);
@@ -44,6 +44,33 @@ function resolveDaemonRunnerEntry(): string {
   }
 
   throw new Error("Unable to resolve @getpaseo/server package root for daemon runner");
+}
+
+function bundledRecoveryLaunch() {
+  if (process.platform !== "darwin" || process.env.ELECTRON_RUN_AS_NODE !== "1") return;
+  const entry = resolveDaemonRunnerEntry();
+  const resources = entry.split("/app.asar/")[0];
+  if (resources === entry) return;
+  return {
+    command: process.execPath,
+    args: [
+      "--disable-warning=DEP0040",
+      path.join(resources, "app.asar.unpacked/dist/daemon/node-entrypoint-runner.js"),
+      "node-script",
+      entry,
+    ],
+    env: { ...process.env, PASEO_CLI: path.join(resources, "bin/paseo") },
+  };
+}
+
+export function managedDaemonCommand(
+  home: string,
+  command: Parameters<typeof runManagedDaemonCommand>[1],
+  automatic = false,
+) {
+  const launch = bundledRecoveryLaunch();
+  if (automatic && !launch) throw new Error("Automatic takeover requires the bundled CLI");
+  return runManagedDaemonCommand(home, command, launch, automatic);
 }
 
 export async function launchLocalDaemon(options: {

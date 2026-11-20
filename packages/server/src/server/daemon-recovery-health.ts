@@ -1,5 +1,5 @@
 import { networkInterfaces } from "node:os";
-import { getPidLockInfo, isSamePidLock } from "./pid-lock.js";
+import { getPidLockInfo, isSamePidLock, type PidLockInfo } from "./pid-lock.js";
 import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import { DaemonClient, type WebSocketLike } from "@getpaseo/client/internal/daemon-client";
@@ -11,6 +11,7 @@ export async function withLocalDaemon<T>(
   home: string,
   listen: string,
   action: (client: DaemonClient) => Promise<T>,
+  expected?: PidLockInfo,
 ): Promise<T> {
   let socketPath: string | undefined;
   let url: string;
@@ -33,7 +34,11 @@ export async function withLocalDaemon<T>(
     url = buildDaemonWebSocketUrl(endpoint, { useTls: false });
   }
   const instance = await getPidLockInfo(home);
-  if (!instance?.serverId || instance.listen !== listen)
+  if (
+    !instance?.serverId ||
+    instance.listen !== listen ||
+    (expected && !isSamePidLock(expected, instance))
+  )
     throw Object.assign(new Error("Local daemon endpoint is not ready"), {
       code: "DAEMON_NOT_READY",
     });

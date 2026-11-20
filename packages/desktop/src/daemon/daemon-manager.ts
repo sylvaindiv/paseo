@@ -88,7 +88,7 @@ export interface DesktopDaemonStatus {
   ownedByDesktop: boolean;
   startedAt: string | null;
   error: string | null;
-  recovery?: { status: string; error: string | null } | null;
+  recovery?: Awaited<ReturnType<typeof readDaemonRecovery>>;
 }
 
 interface DesktopDaemonLogs {
@@ -287,6 +287,16 @@ function assertBuiltInDaemonManagementEnabled(settings: DesktopSettings): void {
   }
 }
 
+function desktopDaemonInvocation() {
+  const invocation = createNodeEntrypointInvocation({
+    entrypoint: resolveDaemonRunnerEntrypoint(),
+    argvMode: "node-script",
+    args: [],
+    baseEnv: process.env,
+  });
+  return { ...invocation, env: { ...invocation.env, PASEO_CLI: getBundledCliShimPath() } };
+}
+
 async function startDaemon(): Promise<DesktopDaemonStatus> {
   assertBuiltInDaemonManagementEnabled(await getDesktopSettingsStore().get());
 
@@ -312,20 +322,11 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
   }
 
   const home = getPaseoHome();
-  const invocation = createNodeEntrypointInvocation({
-    entrypoint: resolveDaemonRunnerEntrypoint(),
-    argvMode: "node-script",
-    args: [],
-    baseEnv: process.env,
-  });
+  const invocation = desktopDaemonInvocation();
   startingHome = home;
   try {
     if (process.platform === "darwin") {
-      await prepareCoordinatedDaemonLaunch({
-        home,
-        ...invocation,
-        env: { ...invocation.env, PASEO_CLI: getBundledCliShimPath() },
-      });
+      await prepareCoordinatedDaemonLaunch({ home, ...invocation });
       await runExternalCliJsonCommand(["daemon", "start", "--home", home, "--json"]);
       const instance = await readDaemonInstance(home);
       if (!instance?.listen) throw new Error("Built-in daemon did not become ready");
@@ -335,7 +336,6 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
         home,
         timeoutMs: 30_000,
         ...invocation,
-        env: { ...invocation.env, PASEO_CLI: getBundledCliShimPath() },
         mode: "managed",
         desktopManaged: true,
         onAcquired: (instance) => {
@@ -442,8 +442,13 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
     ...createDesktopSettingsCommandHandlers({ settingsStore: getDesktopSettingsStore() }),
     patch_desktop_settings: async (args) => {
       const result = await getDesktopSettingsStore().patch(args);
-      if (!result.daemon.manageBuiltInDaemon && (await readDaemonRecovery(getPaseoHome())))
-        await managedDaemonCommand(getPaseoHome(), "disable");
+      const home = getPaseoHome();
+      if (!result.daemon.manageBuiltInDaemon && (await readDaemonRecovery(home)))
+        await managedDaemonCommand(
+          home,
+          "disable",
+          process.platform === "darwin" ? desktopDaemonInvocation() : undefined,
+        );
       return result;
     },
     desktop_get_runtime_info: () => ({
