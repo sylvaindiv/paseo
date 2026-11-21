@@ -4,6 +4,8 @@ import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import {
+  currentProjectPhase,
+  groupProjectTasks,
   readProjectTodos,
   writeProjectTodo,
   type BatchDestination,
@@ -143,16 +145,7 @@ function ProjectTodoContent(
   const closeDispatch = useCallback((open: boolean) => {
     if (!open) setSending(undefined);
   }, []);
-  const [openPhases, setOpenPhases] = useState(
-    () =>
-      new Set([
-        (
-          phases.find((phase) => phase.status === "EN COURS") ??
-          phases.find((phase) => phase.status !== "OK") ??
-          phases[0]
-        )?.id,
-      ]),
-  );
+  const [openPhases, setOpenPhases] = useState(() => new Set([currentProjectPhase(phases)?.id]));
   const showPhase = useCallback(
     (id: string) => setOpenPhases((open) => new Set([...open, id])),
     [],
@@ -218,14 +211,7 @@ function ProjectTodoContent(
     (title: string, phaseId: string) => write({ operation: "phase-add", phaseId, title }),
     [write],
   );
-  const groups = useMemo(() => {
-    const grouped = new Map(phases.map((phase) => [phase.id, [] as ProjectTask[]]));
-    for (const task of tasks) {
-      const phase = phases.find((entry) => entry.name === task.stage) ?? phases[0];
-      if (phase) grouped.get(phase.id)?.push(task);
-    }
-    return grouped;
-  }, [phases, tasks]);
+  const groups = useMemo(() => groupProjectTasks(phases, tasks), [phases, tasks]);
   const actionTask = tasks.find((task) => task.id === actions?.id);
   const actionPhase = phases.find((phase) => phase.name === actionTask?.stage) ?? phases[0];
   const nearbyTasks = useMemo(

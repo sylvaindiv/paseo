@@ -4,8 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import type { RpcInput } from "@getpaseo/plugin";
 import { agentPrompt } from "../shared/agent-prompt.js";
 import {
+  groupProjectTasks,
   projectTodoList,
   type BatchObservation,
+  type OverviewPhase,
   type ProjectTask,
   type ProjectTodoList,
   type writeProjectTodo,
@@ -371,6 +373,26 @@ export function openProjectTodoStore(filename: string) {
     return typeof data === "string" ? projectTodoList.parse(JSON.parse(data)) : emptyList();
   }
 
+  function readOverview(projectKeys: readonly string[]) {
+    return projectKeys.map((projectKey) => {
+      const { phases, tasks } = read(projectKey);
+      const grouped = groupProjectTasks(phases, tasks);
+      return {
+        projectKey,
+        phases: phases.map((phase): OverviewPhase => {
+          const phaseTasks = grouped.get(phase.id) ?? [];
+          return {
+            id: phase.id,
+            name: phase.name,
+            status: phase.status ?? null,
+            completed: phaseTasks.filter((task) => task.completed).length,
+            total: phaseTasks.length,
+          };
+        }),
+      };
+    });
+  }
+
   function write(projectKey: string, change: Change) {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -397,5 +419,5 @@ export function openProjectTodoStore(filename: string) {
     }
   }
 
-  return { read, write, observeAgent, importProject, close: () => db.close() };
+  return { read, readOverview, write, observeAgent, importProject, close: () => db.close() };
 }

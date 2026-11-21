@@ -74,6 +74,32 @@ test("each project has its own list with durable titles and subtasks", () => {
   expect(store.read("a").tasks).toEqual([]);
 });
 
+test("overview reads phase counts in board order without changing the lists", () => {
+  store.write("active", { operation: "phase-add", phaseId: "review", title: "Review" });
+  store.write("active", { operation: "phase-status", phaseId: "review", status: "EN COURS" });
+  store.write("active", { operation: "add", taskId: "a", title: "First" });
+  store.write("active", { operation: "add", taskId: "b", title: "Second", phaseId: "review" });
+  store.write("active", { operation: "update", taskId: "b", completed: true });
+  store.write("active", { operation: "phase-reorder", phaseId: "review", overPhaseId: "default" });
+
+  const before = store.read("active");
+  expect(store.readOverview(["empty", "active"])).toEqual([
+    {
+      projectKey: "empty",
+      phases: [{ id: "default", name: "Phase 1", status: null, completed: 0, total: 0 }],
+    },
+    {
+      projectKey: "active",
+      phases: [
+        { id: "review", name: "Review", status: "EN COURS", completed: 1, total: 1 },
+        { id: "default", name: "Phase 1", status: null, completed: 0, total: 1 },
+      ],
+    },
+  ]);
+  expect(store.read("active")).toEqual(before);
+  store.importProject("empty", store.read("empty"));
+});
+
 test("reordering a subset preserves other task positions and rejects IDs from another list", () => {
   for (const id of ["first", "between", "last"])
     store.write("a", { operation: "add", taskId: id, title: id });

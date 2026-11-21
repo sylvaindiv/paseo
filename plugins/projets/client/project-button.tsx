@@ -1,5 +1,6 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode, type Ref } from "react";
 import { Pressable, StyleSheet, Text } from "react-native";
+import type { View } from "react-native";
 import { projectColors } from "./styles.js";
 
 export function ProjectButton({
@@ -8,12 +9,14 @@ export function ProjectButton({
   disabled,
   primary,
   testID,
+  ref,
 }: {
   children: ReactNode;
   onPress(): void;
   disabled?: boolean;
   primary?: boolean;
   testID?: string;
+  ref?: Ref<View>;
 }) {
   const style = useCallback(
     ({ pressed }: { pressed: boolean }) => [
@@ -27,6 +30,7 @@ export function ProjectButton({
   const labelStyle = useMemo(() => [styles.label, primary && styles.primaryLabel], [primary]);
   return (
     <Pressable
+      ref={ref}
       accessibilityRole="button"
       disabled={disabled}
       onPress={onPress}

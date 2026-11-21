@@ -20,6 +20,7 @@ import {
 import { ProjectDragRow, SortableProject } from "./project-drag.js";
 import { SortableTitleBar, SortableTitleStyles, titleActionWebProps } from "./sortable-controls.js";
 import { ProjectTasks } from "./project-tasks.js";
+import { focusOverviewControl, ProjectsOverview } from "./projects-overview.js";
 import type { AgentDestination } from "./project-dispatch.js";
 import type { createBatchTracking } from "./batch-tracking.js";
 import {
@@ -82,6 +83,16 @@ function ProjectsContent({
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  const overviewButton = useRef<View>(null);
+  const openOverview = useCallback(() => {
+    if (Platform.OS === "web") focusOverviewControl(overviewButton.current);
+    setOverviewOpen(true);
+  }, []);
+  const closeOverview = useCallback(() => {
+    setOverviewOpen(false);
+    requestAnimationFrame(() => focusOverviewControl(overviewButton.current));
+  }, []);
   const [showFinished, setShowFinished] = useState(false);
   const toggleFinished = useCallback(() => setShowFinished((open) => !open), []);
   const [retrySave, setRetrySave] = useState<(() => void) | null>(null);
@@ -147,6 +158,10 @@ function ProjectsContent({
   const activeKeys = useMemo(
     () => orderedKeys.filter((key) => !saved?.finished.includes(key)),
     [orderedKeys, saved?.finished],
+  );
+  const activeProjects = useMemo(
+    () => activeKeys.map((key) => byKey.get(key)!.project),
+    [activeKeys, byKey],
   );
   const finishedKeys = orderedKeys.filter((key) => saved?.finished.includes(key));
   const reorder = useCallback(
@@ -237,7 +252,12 @@ function ProjectsContent({
       ) : null}
       <ScrollView style={styles.page} keyboardShouldPersistTaps="handled">
         <View style={styles.boardHeading} onLayout={measure}>
-          <Text style={styles.heading}>À avancer</Text>
+          <View style={styles.boardHeadingGroup}>
+            <Text style={styles.heading}>À avancer</Text>
+            <ProjectButton ref={overviewButton} disabled={controlsDisabled} onPress={openOverview}>
+              Aperçu
+            </ProjectButton>
+          </View>
           {finishedKeys.length > 0 ? (
             <Pressable
               accessibilityRole="button"
@@ -287,6 +307,14 @@ function ProjectsContent({
           </ScrollView>
         ) : null}
       </ScrollView>
+      {overviewOpen ? (
+        <ProjectsOverview
+          hostId={host.id}
+          projects={activeProjects}
+          loadingProjects={isLoading}
+          close={closeOverview}
+        />
+      ) : null}
     </View>
   );
 }

@@ -61,11 +61,45 @@ export type ProjectTask = z.infer<typeof projectTask>;
 export type ProjectSubtask = z.infer<typeof subtask>;
 export type ProjectTodoList = z.infer<typeof projectTodoList>;
 
+export function groupProjectTasks(phases: readonly ProjectPhase[], tasks: readonly ProjectTask[]) {
+  const grouped = new Map(phases.map((phase) => [phase.id, [] as ProjectTask[]]));
+  for (const task of tasks) {
+    const phase = phases.find((entry) => entry.name === task.stage) ?? phases[0];
+    if (phase) grouped.get(phase.id)?.push(task);
+  }
+  return grouped;
+}
+
+export function currentProjectPhase<Phase extends Pick<ProjectPhase, "status">>(
+  phases: readonly Phase[],
+) {
+  return (
+    phases.find((phase) => phase.status === "EN COURS") ??
+    phases.find((phase) => phase.status !== "OK") ??
+    phases[0]
+  );
+}
+
 const projectKey = z.string().min(1).max(4096);
 export const readProjectTodos = defineRpc({
   name: "todos.get",
   input: z.object({ projectKey }),
   output: projectTodoList,
+});
+
+const overviewPhase = z.object({
+  id,
+  name: z.string(),
+  status: phaseStatus,
+  completed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+export type OverviewPhase = z.infer<typeof overviewPhase>;
+
+export const readProjectsOverview = defineRpc({
+  name: "todos.overview.get",
+  input: z.object({ projectKeys: z.array(projectKey) }),
+  output: z.array(z.object({ projectKey, phases: z.array(overviewPhase) })),
 });
 
 const taskUpdate = z.object({

@@ -45,6 +45,7 @@ export const projectStyles = StyleSheet.create({
     paddingHorizontal: 16,
     minHeight: 42,
   },
+  boardHeadingGroup: { flexDirection: "row", alignItems: "center", gap: 8 },
   finishedToggle: {
     flexDirection: "row",
     alignItems: "center",

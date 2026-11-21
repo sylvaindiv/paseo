@@ -2,7 +2,12 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { homedir } from "node:os";
 import path from "node:path";
 import { openProjectTodoStore } from "./server/project-todos.js";
-import { batchLabel, readProjectTodos, writeProjectTodo } from "./shared/project-todos.js";
+import {
+  batchLabel,
+  readProjectTodos,
+  readProjectsOverview,
+  writeProjectTodo,
+} from "./shared/project-todos.js";
 
 export default function contribute(server: PluginServerContext) {
   let store: ReturnType<typeof openProjectTodoStore> | undefined;
@@ -13,6 +18,7 @@ export default function contribute(server: PluginServerContext) {
   }
 
   server.handle(readProjectTodos, ({ projectKey }) => getStore().read(projectKey));
+  server.handle(readProjectsOverview, ({ projectKeys }) => getStore().readOverview(projectKeys));
   server.handle(writeProjectTodo, ({ projectKey, change }) => {
     const list = getStore().write(projectKey, change);
     if (change.operation === "batch-reserve" || change.operation === "batch-observe") {

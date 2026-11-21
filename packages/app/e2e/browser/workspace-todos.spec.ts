@@ -7,6 +7,8 @@ import { getServerId } from "../support/helpers/server-id";
 import { switchWorkspaceViaSidebar } from "../support/helpers/workspace-ui";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { connectNewWorkspaceDaemonClient } from "../support/helpers/new-workspace";
+import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 
 test.use({ video: "off", trace: "off" });
 
@@ -335,6 +337,122 @@ test("Projets keeps project lists separate from workspace To-do", async ({ page 
     await client.patchDaemonConfig({ pluginsEnabled: config.pluginsEnabled ?? false });
     await client.close();
     await workspace.cleanup();
+  }
+});
+
+test("Projets opens a read-only overview on demand", async ({ page }) => {
+  const active = await seedWorkspace({ repoPrefix: "overview-active-", git: false });
+  const empty = await seedWorkspace({ repoPrefix: "overview-empty-", git: false });
+  const client = await connectDaemonClient<DaemonClient>({ clientIdPrefix: "project-overview" });
+  const { config } = await client.getDaemonConfig();
+  const write = (change: object) =>
+    client.invokePluginRpc("projets", "todos.write", { projectKey: active.projectKey, change });
+  await page.routeWebSocket(daemonWsRoutePattern(), (socket) => {
+    const server = socket.connectToServer();
+    let rejected = false;
+    let rejectedRequestId: string | undefined;
+    socket.onMessage((message) => {
+      if (!rejected && typeof message === "string") {
+        const parsed = JSON.parse(message);
+        const session = parsed.message ?? parsed;
+        if (
+          session.type === "plugin.rpc.invoke.request" &&
+          session.method === "todos.overview.get"
+        ) {
+          rejected = true;
+          rejectedRequestId = session.requestId;
+        }
+      }
+      server.send(message);
+    });
+    server.onMessage((message) => {
+      if (typeof message === "string" && rejectedRequestId) {
+        const parsed = JSON.parse(message);
+        const session = parsed.message ?? parsed;
+        if (
+          session.type === "plugin.rpc.invoke.response" &&
+          session.payload.requestId === rejectedRequestId
+        ) {
+          rejectedRequestId = undefined;
+          session.payload.output = null;
+          socket.send(JSON.stringify(parsed));
+          return;
+        }
+      }
+      socket.send(message);
+    });
+  });
+  try {
+    await client.patchDaemonConfig({ pluginsEnabled: true });
+    await client.installDirectoryPlugin(path.resolve(__dirname, "../../../../plugins/projets"));
+    await write({ operation: "phase-status", phaseId: "default", status: "EN ATTENTE" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoAppShell(page);
+    await page.getByRole("button", { name: "Projets", exact: true }).click();
+
+    const board = page.getByTestId("projets-page");
+    const open = board.getByRole("button", { name: "Aperçu", exact: true });
+    const card = board.getByRole("button", { name: active.projectDisplayName, exact: true });
+    const panel = page.getByTestId("projets-overview");
+    const rows = panel.getByTestId("projets-overview-row");
+    const close = panel.getByRole("button", { name: "Fermer", exact: true });
+    await expect(panel).toHaveCount(0);
+    await card.click();
+    await expect(card).toHaveAttribute("aria-expanded", "false");
+    await open.click();
+    await expect(close).toBeFocused();
+    await expect(rows).toHaveCount(2);
+    await expect(rows.first()).toContainText(active.projectDisplayName);
+    await expect(rows.last()).toContainText(empty.projectDisplayName);
+    await expect(panel.getByRole("alert")).toHaveText("Aperçu indisponible");
+    await panel.getByRole("button", { name: "Réessayer", exact: true }).click();
+    await expect(rows.first()).toContainText("En attente");
+    await expect(rows.last()).toContainText("Sans tâche");
+    await expect(panel.getByTestId("projets-overview-phases")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect(open).toBeFocused();
+    await expect(card).toHaveAttribute("aria-expanded", "false");
+
+    await write({ operation: "phase-add", phaseId: "sprint", title: "Sprint" });
+    await write({ operation: "phase-status", phaseId: "sprint", status: "EN COURS" });
+    await write({ operation: "add", phaseId: "sprint", taskId: "t1", title: "Première tâche" });
+    await write({ operation: "add", phaseId: "sprint", taskId: "t2", title: "Deuxième tâche" });
+    await write({ operation: "update", taskId: "t1", completed: true });
+    await open.click();
+    const track = rows.first().getByTestId("projets-overview-phases");
+    await expect(rows.first()).toContainText("Sprint · 1/2");
+    await expect(track).toHaveAccessibleName("Phase 1 · En attente, Sprint · En cours");
+    await expect(rows.getByRole("button")).toHaveCount(0);
+    await track.click();
+    await expect(rows).toHaveCount(2);
+    await expect(panel.getByText("Première tâche")).toHaveCount(0);
+    await expect.poll(async () => (await panel.boundingBox())?.x).toBe(0);
+    await page.getByTestId("projets-overview-backdrop").click({ position: { x: 1300, y: 48 } });
+    await expect(open).toBeFocused();
+
+    await page.setViewportSize({ width: 390, height: 780 });
+    const menu = page.getByRole("button", { name: "Open menu", exact: true });
+    await expect(open.or(menu).first()).toBeVisible();
+    if (!(await open.isVisible())) {
+      await menu.click();
+      await page.getByRole("button", { name: "Projets", exact: true }).click();
+    }
+    await open.click();
+    const name = rows.first().getByText(active.projectDisplayName, { exact: true });
+    await expect(track).toBeVisible();
+    await expect
+      .poll(async () => (await track.boundingBox())!.y - (await name.boundingBox())!.y)
+      .toBeGreaterThan(15);
+    await close.click();
+    await expect(panel).toHaveCount(0);
+    await expect(open).toBeFocused();
+  } finally {
+    await client.removePlugin("projets").catch(() => undefined);
+    await client.patchDaemonConfig({ pluginsEnabled: config.pluginsEnabled ?? false });
+    await client.close();
+    await empty.cleanup();
+    await active.cleanup();
   }
 });
 
