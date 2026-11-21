@@ -170,10 +170,12 @@ describe("new workspace isolation defaults", () => {
     expect(getDefaultWorkspaceIsolation(null)).toBe("worktree");
   });
 
-  test.each(["prj_c6385f310e80ffe2", "prj_79623d369509ceac", "prj_4538b764102aa626"])(
-    "keeps the local exception %s independent of its display name",
-    (projectId) => {
-      expect(getDefaultWorkspaceIsolation(projectId)).toBe("local");
-    },
-  );
+  test.each([
+    "prj_6215a8c65deea221",
+    "prj_c6385f310e80ffe2",
+    "prj_79623d369509ceac",
+    "prj_4538b764102aa626",
+  ])("keeps the local exception %s independent of its display name", (projectId) => {
+    expect(getDefaultWorkspaceIsolation(projectId)).toBe("local");
+  });
 });

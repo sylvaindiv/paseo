@@ -31,7 +31,7 @@ const OPENCODE_SERVER_FORCE_SHUTDOWN_TIMEOUT_MS = 1_000;
 
 export interface OpenCodeServerAcquisition {
   environment: Record<string, string>;
-  server: { port: number; url: string };
+  server: { port: number; url: string; getPid?: () => number | undefined };
   events: OpenCodeEventSource;
   release: () => Promise<void>;
 }
@@ -211,7 +211,11 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     server.refCount += 1;
     let releasePromise: Promise<void> | null = null;
     return {
-      server: { port: server.port, url: server.url },
+      server: {
+        port: server.port,
+        url: server.url,
+        getPid: () => (this.isServerLive(server) ? server.process.pid : undefined),
+      },
       events: server.events,
       environment: server.environment,
       release: async () => {

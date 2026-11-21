@@ -539,6 +539,7 @@ export function observeBrowserPageActivity(contents: Electron.WebContents): void
 export function registerBrowserAutomationIpc(options?: { ipc?: IpcHandlerRegistry }): void {
   const ipc = options?.ipc ?? ipcMain;
   let resourceLog: ResourceRetentionLog | undefined;
+  let interfacePeak: { at: string; bytes: number } | undefined;
   ipc.handle("paseo:resources:sample", async (_event, raw: unknown) => {
     const counts = raw as { views?: unknown; pages?: unknown; releasedViews?: unknown } | null;
     if (
@@ -552,14 +553,26 @@ export function registerBrowserAutomationIpc(options?: { ipc?: IpcHandlerRegistr
     resourceLog ??= new ResourceRetentionLog(
       join(app.getPath("userData"), "resource-retention.ndjson"),
     );
-    await resourceLog.sample(async () => ({
-      views: counts.views,
-      releasedViews: Number.isSafeInteger(counts.releasedViews) ? counts.releasedViews : 0,
-      pages: counts.pages,
-      releasedPages,
-      pageRetention: [...pageLifecyclesByContentsId.values()].map((page) => page.retentionReason),
-      processes: app.getAppMetrics().map(({ pid, type, memory }) => ({ pid, type, memory })),
-    }));
+    await resourceLog.sample(async () => {
+      const processes = app.getAppMetrics().map(({ pid, type, memory }) => ({ pid, type, memory }));
+      const bytes = processes.reduce(
+        (total, entry) => total + entry.memory.workingSetSize * 1024,
+        0,
+      );
+      if (!interfacePeak || bytes > interfacePeak.bytes) {
+        interfacePeak = { at: new Date().toISOString(), bytes };
+      }
+      return {
+        views: counts.views,
+        releasedViews: Number.isSafeInteger(counts.releasedViews) ? counts.releasedViews : 0,
+        pages: counts.pages,
+        releasedPages,
+        pageRetention: [...pageLifecyclesByContentsId.values()].map((page) => page.retentionReason),
+        interfaceBytes: bytes,
+        interfacePeak,
+        processes,
+      };
+    });
   });
 
   ipc.handle("paseo:browser:set-presented", async (event, rawInput: unknown) => {

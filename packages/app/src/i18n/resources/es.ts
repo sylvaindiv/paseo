@@ -2440,6 +2440,11 @@ export const es: TranslationResources = {
       playing: "Jugando...",
       playbackFailed: "Error de reproducción:{{message}}",
       app: {
+        agentMemory: "Memoria estimada de los agentes",
+        memoryPeak: "Pico de {{memory}} · {{time}}",
+        noMemoryAgents: "Ningún agente en memoria",
+        hibernate: "Suspender",
+        hibernateUnavailable: "No se pudo suspender el agente.",
         title: "App diagnostic",
         rowTitle: "App diagnostic",
         rowHint: "Collect connection, daemon, provider, desktop, and log details",

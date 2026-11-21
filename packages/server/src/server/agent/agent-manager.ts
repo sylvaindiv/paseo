@@ -1,4 +1,6 @@
+import type { ResourceMemorySample } from "../resource-retention.js";
 import { DaemonBusyError } from "../lifecycle-reasons.js";
+import { closeAgentBrowser } from "../agent-browser.js";
 import { agentBrowserEnv } from "../agent-browser-env.js";
 import { interactiveResponsesForHome } from "../interactive-responses.js";
 import { projectTimelineRows } from "./timeline-projection.js";
@@ -786,6 +788,7 @@ export class AgentManager {
   private readonly sessionEventTails = new Map<string, Promise<void>>();
   private readonly steerEventBarriers = new Map<string, SteerEventBarrier>();
   private readonly foregroundMutationTails = new Map<string, Promise<void>>();
+  private readonly browserCleanupTails = new Map<string, Promise<void>>();
   private readonly runs = new AgentRunState();
   private readonly subscribers = new Set<SubscriptionRecord>();
   private readonly timelineReaders = new Map<object, Set<string> | "all">();
@@ -833,7 +836,11 @@ export class AgentManager {
       )
     )
       return "subagent";
-    if (!agent.session.canCloseForInactivity) return "provider-unverified";
+    if (
+      !agent.session.canCloseForInactivity ||
+      agent.session.supportsInactivityClosure?.() === false
+    )
+      return "provider-unverified";
     return null;
   }
 
@@ -849,9 +856,9 @@ export class AgentManager {
       const agentIds = Array.from(this.agents.keys());
       for (const id of agentIds) {
         await this.runLifecycleMutation(id, async () => {
-          let agent = this.agents.get(id);
+          const agent = this.agents.get(id);
           if (!agent) return;
-          let reason = this.inactivityRetentionReason(agent);
+          const reason = this.inactivityRetentionReason(agent);
           if (reason) {
             this.inactiveSince.delete(id);
             count(reason);
@@ -867,63 +874,7 @@ export class AgentManager {
             count("recent-use");
             return;
           }
-          try {
-            let timer: ReturnType<typeof setTimeout> | undefined;
-            let safe: boolean | undefined;
-            try {
-              safe = await Promise.race([
-                agent.session.canCloseForInactivity!(),
-                new Promise<false>((resolveDeadline) => {
-                  timer = setTimeout(() => resolveDeadline(false), 3_000);
-                  timer.unref();
-                }),
-              ]);
-            } finally {
-              clearTimeout(timer);
-            }
-            await this.drainSessionEvents(id);
-            agent = this.agents.get(id);
-            if (!agent) return;
-            reason = this.inactivityRetentionReason(agent);
-            if (
-              !safe ||
-              reason ||
-              agent.updatedAt.getTime() !== updatedAt ||
-              this.foregroundMutationTails.has(id)
-            ) {
-              this.inactiveSince.delete(id);
-              count(reason ?? "provider-unverified");
-              return;
-            }
-            // Save before releasing the provider as well as through normal durable closure.
-            await this.persistSnapshot(agent);
-            if (
-              this.inactivityRetentionReason(agent) ||
-              agent.updatedAt.getTime() !== updatedAt ||
-              this.foregroundMutationTails.has(id)
-            ) {
-              this.inactiveSince.delete(id);
-              count("changed");
-              return;
-            }
-            await this.closeAgentRuntime(id, {
-              canClose: () =>
-                this.agents.get(id) === agent &&
-                !this.inactivityRetentionReason(agent!) &&
-                agent!.updatedAt.getTime() === updatedAt &&
-                !this.foregroundMutationTails.has(id),
-            });
-            this.inactiveSince.delete(id);
-            this.releasedInactiveSessions++;
-            count("released");
-          } catch (err) {
-            count("failure");
-            this.inactiveSince.delete(id);
-            this.logger.warn(
-              { err, agentId: id },
-              "Keeping inactive agent after failed safety check or persistence",
-            );
-          }
+          count(await this.hibernateAgentLocked(agent, updatedAt));
         });
       }
       return {
@@ -936,6 +887,112 @@ export class AgentManager {
       this.inactivitySweep = null;
     });
     return this.inactivitySweep;
+  }
+
+  hibernateAgent(id: string): Promise<boolean> {
+    return this.runLifecycleMutation(id, async () => {
+      const agent = this.agents.get(id);
+      if (!agent || this.inactivityRetentionReason(agent)) return false;
+      return (await this.hibernateAgentLocked(agent, agent.updatedAt.getTime())) === "released";
+    });
+  }
+
+  private cleanupTurnBrowser(agent: LiveManagedAgent): void {
+    const { id, session } = agent;
+    if (
+      !session.supportsInactivityClosure?.() ||
+      !session.canCloseForInactivity ||
+      this.browserCleanupTails.has(id)
+    )
+      return;
+    const updatedAt = agent.updatedAt.getTime();
+    const unchanged = () =>
+      this.agents.get(id) === agent &&
+      (agent.lifecycle === "idle" || agent.lifecycle === "error") &&
+      !agent.activeForegroundTurnId &&
+      !agent.activeTurnId &&
+      !agent.pendingReplacement &&
+      !this.runs.hasRun(id) &&
+      !this.foregroundMutationTails.has(id) &&
+      agent.updatedAt.getTime() === updatedAt;
+    const env = agentBrowserEnv(
+      agent.workspaceId ?? agent.cwd,
+      { kind: "agent", id },
+      this.paseoHome,
+    );
+    const cleanup = this.runLifecycleMutation(id, async () => {
+      if (!unchanged()) return;
+      await closeAgentBrowser(
+        env,
+        unchanged,
+        async () =>
+          (await session.canCloseForInactivity!()) &&
+          (session.inactivityProofIsCurrent?.() ?? true),
+      );
+    })
+      .catch((err) => this.logger.debug({ err, agentId: id }, "Agent browser cleanup deferred"))
+      .finally(() => this.browserCleanupTails.delete(id));
+    this.browserCleanupTails.set(
+      id,
+      cleanup.then(() => undefined),
+    );
+  }
+
+  private async hibernateAgentLocked(agent: LiveManagedAgent, updatedAt: number): Promise<string> {
+    const { id } = agent;
+    const unchanged = () =>
+      this.agents.get(id) === agent &&
+      !this.inactivityRetentionReason(agent) &&
+      agent.updatedAt.getTime() === updatedAt &&
+      !this.foregroundMutationTails.has(id);
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let safe: boolean;
+      try {
+        safe = await Promise.race([
+          agent.session.canCloseForInactivity!(),
+          new Promise<false>((resolveDeadline) => {
+            timer = setTimeout(() => resolveDeadline(false), 3000);
+            timer.unref();
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      await this.drainSessionEvents(id);
+      if (!safe || !unchanged())
+        return this.inactivityRetentionReason(agent) ?? "provider-unverified";
+
+      await this.persistSnapshot(agent);
+      const canClose = () => unchanged() && (agent.session.inactivityProofIsCurrent?.() ?? true);
+      if (!canClose()) return "changed";
+      await this.closeAgentRuntime(id, { canClose });
+      this.releasedInactiveSessions++;
+      return "released";
+    } catch (err) {
+      this.logger.warn({ err, agentId: id }, "Inactive agent safety check or closure failed");
+      return "failure";
+    } finally {
+      this.inactiveSince.delete(id);
+    }
+  }
+
+  resourceMemory: { current: ResourceMemorySample; peak: ResourceMemorySample } | null = null;
+
+  getMemoryOwners() {
+    return [...this.agents.values()].map((agent) => ({
+      id: agent.id,
+      pid: agent.session.getRuntimePid?.(),
+    }));
+  }
+
+  getMemoryAgentDetails(id: string) {
+    const agent = this.agents.get(id);
+    if (!agent || agent.internal) return null;
+    return {
+      title: agent.config.title?.trim() || agent.provider,
+      canHibernate: !this.inactivityRetentionReason(agent),
+    };
   }
 
   private readonly idFactory: () => string;
@@ -2043,7 +2100,7 @@ export class AgentManager {
       throw new Error("Agent became active before inactivity closure");
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
-    await agent.session.close();
+    await agent.session.close({ forInactivity: !!options?.canClose });
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = this.prepareAgentForClosure(agent, "agent closed");
 
@@ -2842,6 +2899,12 @@ export class AgentManager {
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
     try {
+      // A new run can supersede cleanup before it starts, or wait for a close already sent.
+      const cleanup = this.browserCleanupTails.get(agentId);
+      if (cleanup) await cleanup;
+      if (pendingRun.settled) {
+        throw new Error(`Agent ${agentId} run was canceled before its turn started`);
+      }
       const result = await agent.session.startTurn(prompt, options);
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
@@ -2868,6 +2931,7 @@ export class AgentManager {
       });
       this.finalizeForegroundTurn(agent);
       this.runs.settleForegroundRun(agentId, pendingRun.token);
+      this.cleanupTurnBrowser(agent);
       throw error;
     }
   }
@@ -5065,6 +5129,7 @@ export class AgentManager {
         if (isForegroundEvent) {
           this.finalizeForegroundTurn(agent, eventTurnId);
         }
+        if (terminalDisposition !== "stale") this.cleanupTurnBrowser(agent);
       }
 
       if (flags.shouldDispatchEvent) {

@@ -2081,6 +2081,11 @@ class ClaudeAgentSession implements AgentSession {
   private readonly harnessEnvironment: Record<string, string>;
   private readonly usageSessionKey = randomUUID();
   private childProcess: ChildProcess | null = null;
+
+  getRuntimePid(): number | undefined {
+    const child = this.childProcess;
+    return child?.exitCode === null && child.signalCode === null ? child.pid : undefined;
+  }
   private input: AsyncMessageInput<SDKUserMessage> | null = null;
   /** The exact SDK query/input pair that owns the current foreground turn. */
   private activeForegroundQuery: Query | null = null;

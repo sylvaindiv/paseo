@@ -3,9 +3,11 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 
+import { agentBrowserEnv } from "../../agent-browser-env.js";
+import { ensureAgentLoaded } from "../agent-loading.js";
 import { AgentManager } from "../agent-manager.js";
 import { AgentStorage } from "../agent-storage.js";
 
@@ -17,6 +19,15 @@ function isCodexInstalled(): boolean {
   try {
     const out = execFileSync("which", ["codex"], { encoding: "utf8" }).trim();
     return out.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function hasAgentBrowser(): boolean {
+  try {
+    execFileSync("agent-browser", ["--version"], { stdio: "ignore" });
+    return true;
   } catch {
     return false;
   }
@@ -217,6 +228,248 @@ function waitForEvent<TEvent extends AgentStreamEvent>(params: {
 }
 
 describe("Codex app-server provider (local e2e)", () => {
+  test.runIf(process.platform === "darwin" && isCodexInstalled() && hasAgentBrowser())(
+    "closes only the owned agent-browser session when a Codex turn ends",
+    async () => {
+      const home = mkdtempSync(path.join(os.tmpdir(), "codex-browser-cleanup-"));
+      const mockServer = await startMockResponsesServer([assistantMessageSse("finished")]);
+      const logger = createTestLogger();
+      const storage = new AgentStorage(path.join(home, "agents"), logger);
+      const manager = new AgentManager({
+        paseoHome: home,
+        clients: { codex: new CodexAppServerAgentClient(logger) },
+        registry: storage,
+        logger,
+      });
+      const runBrowser = (env: Record<string, string>, ...args: string[]) =>
+        execFileSync("agent-browser", args, {
+          env: { ...process.env, ...env },
+          encoding: "utf8",
+          timeout: 10000,
+        });
+      const sessions = (env: Record<string, string>): string[] =>
+        JSON.parse(runBrowser(env, "session", "list", "--json")).data.sessions;
+      const other = agentBrowserEnv(home, { kind: "agent", id: "separate-test-owner" }, home);
+      let owned: Record<string, string> | undefined;
+      try {
+        writeMockCodexConfig(home, mockServer.url);
+        vi.stubEnv("CODEX_HOME", home);
+        const { id } = await manager.createAgent(
+          { provider: "codex", cwd: home, modeId: "auto", model: "mock-model" },
+          undefined,
+          { workspaceId: undefined },
+        );
+        owned = agentBrowserEnv(home, { kind: "agent", id }, home);
+        runBrowser(owned, "open", "about:blank");
+        runBrowser(other, "open", "about:blank");
+        expect(sessions(owned)).toContain(owned.AGENT_BROWSER_SESSION);
+        expect(sessions(other)).toContain(other.AGENT_BROWSER_SESSION);
+        await manager.runAgent(id, "finish the browser task");
+        await expect
+          .poll(() => sessions(owned!), { timeout: 7000 })
+          .toEqual([other.AGENT_BROWSER_SESSION]);
+        expect(runBrowser(other, "get", "url").trim()).toBe("about:blank");
+      } finally {
+        for (const env of [owned, other]) {
+          if (env && sessions(env).includes(env.AGENT_BROWSER_SESSION!)) runBrowser(env, "close");
+        }
+        for (const { id } of manager.listAgents()) await manager.closeAgent(id);
+        await storage.flush();
+        vi.unstubAllEnvs();
+        await mockServer.close();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  test.runIf(isCodexInstalled())(
+    "keeps real Codex running while a background terminal is active",
+    async () => {
+      const home = mkdtempSync(path.join(os.tmpdir(), "codex-background-"));
+      const mockServer = await startMockResponsesServer([
+        sse([
+          responseCreated("resp-background"),
+          functionCallEvent(
+            "call-background",
+            "exec_command",
+            JSON.stringify({ cmd: "sleep 12", yield_time_ms: 1000 }),
+          ),
+          responseCompleted("resp-background"),
+        ]),
+        assistantMessageSse("background started"),
+      ]);
+      const logger = createTestLogger();
+      const storage = new AgentStorage(path.join(home, "agents"), logger);
+      const manager = new AgentManager({
+        paseoHome: home,
+        clients: { codex: new CodexAppServerAgentClient(logger) },
+        registry: storage,
+        logger,
+      });
+      try {
+        writeMockCodexConfig(home, mockServer.url);
+        vi.stubEnv("CODEX_HOME", home);
+        const { id } = await manager.createAgent(
+          { provider: "codex", cwd: home, modeId: "auto", model: "mock-model" },
+          undefined,
+          { workspaceId: undefined },
+        );
+        const result = await manager.runAgent(id, "start a short background task");
+        expect(result.finalText).toContain("background started");
+        const agent = manager.getAgent(id);
+        expect(agent?.lifecycle).toBe("idle");
+        // Verify a terminal really exists, independently of the manager's verdict.
+        const { client } = agent!.session as unknown as {
+          client: {
+            request(method: string, params: { threadId: string }): Promise<{ data: unknown[] }>;
+          };
+        };
+        const terminals = await client.request("thread/backgroundTerminals/list", {
+          threadId: agent!.persistence!.sessionId,
+        });
+        expect(terminals.data).toHaveLength(1);
+        expect(await manager.hibernateAgent(id)).toBe(false);
+        expect(manager.getAgent(id)?.session?.getRuntimePid?.()).toBeGreaterThan(1);
+      } finally {
+        for (const { id } of manager.listAgents()) await manager.closeAgent(id);
+        await storage.flush();
+        vi.unstubAllEnvs();
+        await mockServer.close();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  test.runIf(isCodexInstalled())(
+    "hibernates a real idle Codex process and resumes the same history",
+    async () => {
+      const home = mkdtempSync(path.join(os.tmpdir(), "codex-hibernation-"));
+      const mockServer = await startMockResponsesServer([assistantMessageSse("retained reply")]);
+      const logger = createTestLogger();
+      const storage = new AgentStorage(path.join(home, "agents"), logger);
+      const manager = new AgentManager({
+        paseoHome: home,
+        clients: { codex: new CodexAppServerAgentClient(logger) },
+        registry: storage,
+        logger,
+      });
+      try {
+        writeMockCodexConfig(home, mockServer.url);
+        vi.stubEnv("CODEX_HOME", home);
+        const { id } = await manager.createAgent(
+          { provider: "codex", cwd: home, modeId: "auto", model: "mock-model" },
+          undefined,
+          { workspaceId: undefined },
+        );
+        await manager.runAgent(id, "keep this prompt");
+        const threadId = manager.getAgent(id)?.persistence?.sessionId;
+        expect(threadId).toBeTruthy();
+        const history = manager.fetchTimeline(id, { limit: 0 });
+        for (let cycle = 0; cycle < 3; cycle++) {
+          const pid = manager.getAgent(id)?.session?.getRuntimePid?.();
+          expect(pid).toBeGreaterThan(1);
+          await expect.poll(() => manager.hibernateAgent(id), { timeout: 5000 }).toBe(true);
+          expect(() => process.kill(pid!, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+          const resumed = await ensureAgentLoaded(id, {
+            agentManager: manager,
+            agentStorage: storage,
+            logger,
+          });
+          expect(resumed.persistence?.sessionId).toBe(threadId);
+          expect(manager.fetchTimeline(id, { limit: 0 })).toEqual(history);
+        }
+      } finally {
+        for (const { id } of manager.listAgents()) await manager.closeAgent(id);
+        await storage.flush();
+        vi.unstubAllEnvs();
+        await mockServer.close();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  test.runIf(isCodexInstalled()).each([
+    { chrome: undefined, rea: undefined, expected: [] },
+    { chrome: "1", rea: undefined, expected: ["chrome-devtools"] },
+    { chrome: undefined, rea: "1", expected: ["rea"] },
+  ])(
+    "launches only opted-in Codex MCPs (Chrome=$chrome, REA=$rea) on create and resume",
+    async ({ chrome, rea, expected }) => {
+      const home = mkdtempSync(path.join(os.tmpdir(), "codex-mcp-defaults-"));
+      const mockServer = await startMockResponsesServer([]);
+      const logger = createTestLogger();
+      const storage = new AgentStorage(path.join(home, "agents"), logger);
+      const client = new CodexAppServerAgentClient(logger, {
+        env: {
+          CODEX_HOME: home,
+          ...(chrome ? { PASEO_CODEX_CHROME_DEVTOOLS: chrome } : {}),
+          ...(rea ? { PASEO_CODEX_REA_MCP: rea } : {}),
+        },
+      });
+      const manager = new AgentManager({
+        paseoHome: home,
+        clients: { codex: client },
+        registry: storage,
+        logger,
+      });
+      const launches = path.join(home, "launches");
+      try {
+        writeMockCodexConfig(home, mockServer.url);
+        vi.stubEnv("PASEO_CODEX_CHROME_DEVTOOLS", undefined);
+        vi.stubEnv("PASEO_CODEX_REA_MCP", undefined);
+        const fakeServer = path.join(home, "mcp.mjs");
+        writeFileSync(
+          fakeServer,
+          String.raw`
+import { appendFileSync } from "node:fs";
+import { McpServer } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js"))};
+import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};
+const [name, launches] = process.argv.slice(2);
+appendFileSync(launches, name + "\n");
+const server = new McpServer({ name, version: "1.0.0" });
+server.registerTool("ping", {}, async () => ({ content: [{ type: "text", text: "pong" }] }));
+await server.connect(new StdioServerTransport());
+`,
+        );
+        const mcpConfig = ["chrome-devtools", "rea"]
+          .map(
+            (name) => `
+[mcp_servers.${name}]
+command = ${JSON.stringify(process.execPath)}
+args = ${JSON.stringify([fakeServer, name, launches])}
+required = true
+`,
+          )
+          .join("");
+        writeFileSync(path.join(home, "config.toml"), mcpConfig, { flag: "a" });
+
+        const { id } = await manager.createAgent(
+          { provider: "codex", cwd: home, modeId: "auto", model: "mock-model" },
+          undefined,
+          { workspaceId: undefined },
+        );
+        expect((await manager.runAgent(id, "verify startup")).finalText).toBe("done");
+        const launched = () =>
+          existsSync(launches) ? readFileSync(launches, "utf8").trim().split("\n") : [];
+        expect(launched()).toEqual(expected);
+
+        await manager.reloadAgentSession(id, undefined, { rehydrateFromDisk: true });
+        expect((await manager.runAgent(id, "verify resume")).finalText).toBe("done");
+        expect(launched()).toEqual([...expected, ...expected]);
+      } finally {
+        for (const { id } of manager.listAgents()) await manager.closeAgent(id);
+        await storage.flush();
+        vi.unstubAllEnvs();
+        await mockServer.close();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
   test.runIf(isCodexInstalled())(
     "reloads a persisted idle thread repeatedly without overlapping writers",
     async () => {
@@ -332,6 +585,7 @@ describe("Codex app-server provider (local e2e)", () => {
           await session.startTurn("ask something");
 
           const permissionEvent = await questionRequested;
+          await expect(session.canCloseForInactivity?.()).resolves.toBe(false);
           expect(permissionEvent.request.input).toEqual({
             questions: [
               {

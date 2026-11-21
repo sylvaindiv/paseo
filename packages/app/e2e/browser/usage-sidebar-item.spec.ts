@@ -443,6 +443,7 @@ test("released hosts supply source logos through the client conversion", async (
 test("Codex sidebar shows credits and cards and updates every minute", async ({ page }) => {
   const now = Date.now();
   await page.clock.install({ time: now });
+  let showSession = false;
   const codexReport = (remaining: number, count: number) => {
     const entry = claudeAndCodexReports()[1]!;
     if (entry.report.status !== "available") throw new Error("Missing Codex fixture");
@@ -453,6 +454,14 @@ test("Codex sidebar shows credits and cards and updates every minute", async ({ 
         report: {
           ...entry.report,
           windows: [
+            ...(showSession
+              ? [
+                  {
+                    ...entry.report.windows[0]!,
+                    resetsAt: new Date(now + 5 * 3_600_000).toISOString(),
+                  },
+                ]
+              : []),
             {
               ...window,
               usedPct: 23,
@@ -495,7 +504,10 @@ test("Codex sidebar shows credits and cards and updates every minute", async ({ 
   await expect(item.getByTestId("sidebar-usage-reset")).toContainText("6d1h");
   await expect(cards).toBeInViewport({ ratio: 1 });
   const usageWindow = item.getByTestId("sidebar-usage-pinned-window");
-  await expect.poll(async () => (await item.boundingBox())?.width ?? 0).toBeGreaterThan(270);
+  await expect(usageWindow).toHaveText("23%");
+  await expect(item).not.toContainText(/7[\s\u202f]*[dj]\b/);
+  await expect(item).toHaveCSS("width", "300px");
+  await expect(item.getByTestId("sidebar-usage-source")).toBeVisible();
   await expect
     .poll(async () =>
       Math.abs((await usageWindow.boundingBox())!.y - (await cards.boundingBox())!.y),
@@ -509,12 +521,13 @@ test("Codex sidebar shows credits and cards and updates every minute", async ({ 
     localStorage.setItem("panel-state", JSON.stringify(persisted));
   });
   await page.reload();
-  await expect.poll(async () => (await item.boundingBox())?.width ?? Infinity).toBeLessThan(190);
+  await expect(item).toHaveCSS("width", "200px");
+  await expect(item.getByTestId("sidebar-usage-source")).toHaveCount(0);
   await expect
     .poll(async () =>
       Math.abs((await usageWindow.boundingBox())!.y - (await cards.boundingBox())!.y),
     )
-    .toBeGreaterThan(8);
+    .toBeLessThan(2);
   await expect(credits).toBeInViewport({ ratio: 1 });
   await expect(cards).toBeInViewport({ ratio: 1 });
   await expect
@@ -532,6 +545,34 @@ test("Codex sidebar shows credits and cards and updates every minute", async ({ 
   await expect(cards).toHaveText("↺0");
   await expect(item.getByTestId("sidebar-usage-reset")).toContainText("6d0h");
   await qaScreenshot(page, "codex-zero-after-refresh", { kind: "element", locator: item });
+  showSession = true;
+  remaining = 66_399.797;
+  count = 3;
+  await page.clock.fastForward(60_000);
+  const pinnedWindows = item.getByTestId("sidebar-usage-pinned-window");
+  await expect(pinnedWindows).toHaveText(["7%", "23%"]);
+  const countdowns = item.getByTestId("sidebar-usage-reset");
+  await expect(countdowns).toHaveText(["4h", "6d"]);
+  expect(
+    await countdowns.evaluateAll((nodes) =>
+      nodes.every((node) => node.scrollWidth <= node.clientWidth + 1),
+    ),
+  ).toBe(true);
+  await expect(credits).toHaveText("66,400");
+  await expect(cards).toHaveText("↺3 10d7h");
+  await expect(cards).toBeInViewport({ ratio: 1 });
+  await expect
+    .poll(async () => {
+      const positions = await Promise.all(
+        [pinnedWindows.nth(0), pinnedWindows.nth(1), credits, cards].map(async (locator) => {
+          const box = await locator.boundingBox();
+          return box?.y ?? Infinity;
+        }),
+      );
+      return Math.max(...positions) - Math.min(...positions);
+    })
+    .toBeLessThan(2);
+  await qaScreenshot(page, "codex-narrow-two-windows", { kind: "element", locator: item });
   await openUsageFromItem(page);
   await expect(usageModal(page).getByText("Codex", { exact: true })).toBeVisible();
 });

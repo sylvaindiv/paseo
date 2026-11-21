@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { execCommand } from "../utils/spawn.js";
 
-interface ProcessEntry {
+export interface ProcessEntry {
   pid: number;
   ppid: number;
   rss: number;
@@ -43,7 +43,7 @@ const WindowsEntry = z.object({
 });
 
 /** Samples process names and RSS only, never command arguments or heap contents. */
-export async function collectProcessTreeDiagnostics(options?: { includeAll?: boolean }) {
+export async function collectProcessEntries(): Promise<ProcessEntry[]> {
   const commandOptions = { timeout: 3_000, maxBuffer: 4 * 1024 * 1024 };
   let entries: ProcessEntry[];
   if (process.platform === "win32") {
@@ -81,6 +81,11 @@ export async function collectProcessTreeDiagnostics(options?: { includeAll?: boo
       });
     }
   }
+  return entries;
+}
+
+export async function collectProcessTreeDiagnostics(options?: { includeAll?: boolean }) {
+  const entries = await collectProcessEntries();
   const result = summarizeProcessTree(
     entries,
     process.pid,

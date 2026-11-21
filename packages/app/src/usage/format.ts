@@ -51,7 +51,7 @@ export function formatSidebarDuration(
   iso: string | undefined,
   now: number,
   locale: string,
-  showElapsed = false,
+  { showElapsed = false, singleUnit = false } = {},
 ): string | null {
   if (!iso) return null;
   const ms = Date.parse(iso) - now;
@@ -60,12 +60,18 @@ export function formatSidebarDuration(
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
   const formatUnit = (value: number, unit: string) => formatSidebarUnit(value, unit, locale);
-  if (days > 0) return `${formatUnit(days, "day")} ${formatUnit(hours % 24, "hour")}`;
-  if (hours > 0) return `${formatUnit(hours, "hour")} ${formatUnit(minutes % 60, "minute")}`;
+  if (days > 0) {
+    const day = formatUnit(days, "day");
+    return singleUnit ? day : `${day} ${formatUnit(hours % 24, "hour")}`;
+  }
+  if (hours > 0) {
+    const hour = formatUnit(hours, "hour");
+    return singleUnit ? hour : `${hour} ${formatUnit(minutes % 60, "minute")}`;
+  }
   return formatUnit(minutes, "minute");
 }
 
-export function formatSidebarUnit(value: number, unit: string, locale: string): string {
+function formatSidebarUnit(value: number, unit: string, locale: string): string {
   return new Intl.NumberFormat(locale, {
     style: "unit",
     unit,

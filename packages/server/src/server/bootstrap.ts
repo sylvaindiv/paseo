@@ -1872,7 +1872,12 @@ export async function createPaseoDaemon(
       scriptHealthMonitor.start();
       stopResourceRetention = startResourceRetention({
         file: path.join(config.paseoHome, "logs", "resource-retention.ndjson"),
+        paseoHome: config.paseoHome,
         sweep: () => agentManager.hibernateInactiveAgents(),
+        owners: () => agentManager.getMemoryOwners(),
+        publish: (current, peak) => {
+          agentManager.resourceMemory = { current, peak };
+        },
         reportError: (err) => logger.warn({ err }, "Resource retention sample failed"),
       });
       try {

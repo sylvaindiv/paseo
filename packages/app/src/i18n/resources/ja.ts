@@ -2406,6 +2406,11 @@ export const ja: TranslationResources = {
       playing: "再生中...",
       playbackFailed: "再生に失敗しました: {{message}}",
       app: {
+        agentMemory: "エージェントの推定メモリ使用量",
+        memoryPeak: "ピーク {{memory}} · {{time}}",
+        noMemoryAgents: "メモリに常駐中のエージェントはありません",
+        hibernate: "スリープにする",
+        hibernateUnavailable: "エージェントをスリープにできませんでした。",
         title: "App diagnostic",
         rowTitle: "App diagnostic",
         rowHint: "Collect connection, daemon, provider, desktop, and log details",

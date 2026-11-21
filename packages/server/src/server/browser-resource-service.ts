@@ -11,7 +11,11 @@ import type { AgentManager } from "./agent/agent-manager.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
 import { agentBrowserEnv } from "./agent-browser-env.js";
-import { browserProcessSchema, type BrowserOwner } from "./browser-resource-state.js";
+import {
+  browserProcessSchema,
+  browserRegistrySchema,
+  type BrowserOwner,
+} from "./browser-resource-state.js";
 import { writeBrowserResourceJson } from "./browser-resource-worker.js";
 const run = promisify(execFile);
 const eventSchema = z.object({
@@ -24,6 +28,57 @@ const eventSchema = z.object({
   timestamp: z.number(),
 });
 
+const directory = join(homedir(), ".paseo-browser-resource");
+
+function browserResourceBinary(): string {
+  // Electron cannot execute a native binary inside asar.
+  return fileURLToPath(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "../../dist/server/server/paseo-browser-resource"
+        : "./paseo-browser-resource",
+      import.meta.url,
+    ),
+  ).replace(/\.asar\//, ".asar.unpacked/");
+}
+
+async function browserResourceSnapshot(binary: string) {
+  return z
+    .array(browserProcessSchema)
+    .parse(
+      JSON.parse(
+        (await run(binary, ["snapshot"], { timeout: 3000, maxBuffer: 16 * 1024 ** 2 })).stdout,
+      ),
+    );
+}
+
+export async function readOwnedBrowserPids(paseoHome: string): Promise<Map<number, string>> {
+  if (process.platform !== "darwin") return new Map();
+  const installation = agentBrowserEnv(
+    "",
+    { kind: "agent", id: "" },
+    paseoHome,
+  ).PASEO_BROWSER_INSTALLATION;
+  // The guard's registry includes browser processes that have been reparented.
+  const registry = browserRegistrySchema
+    .parse(JSON.parse(await readFile(join(directory, "registry.json"), "utf8")))
+    .filter((entry) => entry.installation === installation && entry.owner.startsWith("agent:"));
+  if (!registry.length) return new Map();
+  const entries = new Map(
+    (await browserResourceSnapshot(browserResourceBinary())).map(({ pid, startedAt }) => [
+      pid,
+      startedAt,
+    ]),
+  );
+  return new Map(
+    registry.flatMap((entry) =>
+      entry.members
+        .filter(({ pid, startedAt }) => entries.get(pid) === startedAt)
+        .map(({ pid }) => [pid, entry.owner.slice(6)] as const),
+    ),
+  );
+}
+
 export async function startBrowserResourceService(input: {
   paseoHome: string;
   agentManager: AgentManager;
@@ -32,21 +87,10 @@ export async function startBrowserResourceService(input: {
   logger: Logger;
 }): Promise<() => Promise<void>> {
   if (process.platform !== "darwin") return async () => {};
-  const directory = join(homedir(), ".paseo-browser-resource");
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  // Electron cannot execute a native binary inside asar.
-  const binary = fileURLToPath(
-    new URL(
-      import.meta.url.endsWith(".ts")
-        ? "../../dist/server/server/paseo-browser-resource"
-        : "./paseo-browser-resource",
-      import.meta.url,
-    ),
-  ).replace(/\.asar\//, ".asar.unpacked/");
+  const binary = browserResourceBinary();
   await access(binary, constants.X_OK);
-  const processes = z
-    .array(browserProcessSchema)
-    .parse(JSON.parse((await run(binary, ["snapshot"], { maxBuffer: 16 * 1024 ** 2 })).stdout));
+  const processes = await browserResourceSnapshot(binary);
   const daemon = processes.find((p) => p.pid === process.pid);
   if (!daemon) throw new Error("Browser resource guard cannot identify its daemon");
   const installation = agentBrowserEnv(
@@ -92,7 +136,11 @@ export async function startBrowserResourceService(input: {
         "agent",
         agent.id,
         agent.lifecycle === "closed",
-        agent.lifecycle === "running" ? Date.now() : agent.updatedAt.getTime(),
+        // A resident Codex thread can do background work with an idle foreground.
+        // Let the provider-verified turn cleanup or session closure end that ownership.
+        agent.lifecycle === "running" || agent.session?.supportsInactivityClosure
+          ? Date.now()
+          : agent.updatedAt.getTime(),
       );
   };
   refreshAgents();

@@ -2398,6 +2398,11 @@ export const ko: TranslationResources = {
       playing: "재생 중...",
       playbackFailed: "재생 실패: {{message}}",
       app: {
+        agentMemory: "에이전트 예상 메모리 사용량",
+        memoryPeak: "최고 {{memory}} · {{time}}",
+        noMemoryAgents: "메모리에 상주 중인 에이전트 없음",
+        hibernate: "절전 모드로 전환",
+        hibernateUnavailable: "에이전트를 절전 모드로 전환할 수 없습니다.",
         title: "앱 진단",
         rowTitle: "앱 진단",
         rowHint: "연결, 데몬, 프로바이더, 데스크톱 및 로그 세부 정보를 수집합니다.",

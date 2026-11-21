@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsagePreferences } from "./preferences";
-import {
-  choosePinnedUsageLayout,
-  resolvePinnedUsage,
-  type PinnedUsageSource,
-  type PinnedUsageWindow,
-} from "./pinned";
+import { resolvePinnedUsage, type PinnedUsageSource, type PinnedUsageWindow } from "./pinned";
 import type { UsageReportEntry, UsageWindow } from "./types";
 
 function report(input: {
@@ -51,26 +46,6 @@ function preferences(
 ): UsagePreferences {
   return { displayAs, pins: pinned, serverId: null };
 }
-
-describe("choosePinnedUsageLayout", () => {
-  const widths = { labelsWidth: 200, percentsWidth: 120, windowCount: 2 };
-
-  it("shows meters only when every window's meter fits beside the labels", () => {
-    expect(choosePinnedUsageLayout({ ...widths, available: 240 })).toBe("meters");
-    expect(choosePinnedUsageLayout({ ...widths, available: 239 })).toBe("labels");
-  });
-
-  it("drops the labels before it lets the line overflow", () => {
-    expect(choosePinnedUsageLayout({ ...widths, available: 199 })).toBe("percents");
-  });
-
-  it("shows labels until the widths are measured", () => {
-    expect(choosePinnedUsageLayout({ ...widths, available: null })).toBe("labels");
-    expect(choosePinnedUsageLayout({ ...widths, available: 999, labelsWidth: null })).toBe(
-      "labels",
-    );
-  });
-});
 
 describe("resolvePinnedUsage", () => {
   it("defaults to source-wide pins collected from each account", () => {
@@ -139,22 +114,19 @@ describe("resolvePinnedUsage", () => {
     expect(sources[0]).toEqual({
       key: "claude:default",
       icon: "<svg/>",
+      sourceId: "claude",
       windows: [
         {
           key: "claude:default/five-hour",
           label: "Claude Session 31% used",
           shortLabel: "5h",
-          percent: 31,
           percentText: "31%",
-          tone: "default",
         },
         {
           key: "claude:default/weekly",
           label: "Claude Weekly 80% used",
           shortLabel: "wk",
-          percent: 80,
           percentText: "80%",
-          tone: "warning",
         },
       ],
     });

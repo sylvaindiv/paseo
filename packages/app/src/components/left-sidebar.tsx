@@ -24,12 +24,14 @@ import { HostPicker } from "@/components/hosts/host-picker";
 import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-preferences/menu";
 import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
 import { SidebarNavRows } from "@/components/sidebar/sidebar-nav-rows";
+import { OpenDesignRow } from "@/components/sidebar/open-design-row";
 import { SidebarHelpMenu } from "@/components/sidebar/sidebar-help-menu";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { buttonControlHeight } from "@/components/ui/control-geometry";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
+import { getIsElectronMac, isDev } from "@/constants/platform";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
 import { useImportSession } from "@/hooks/use-import-session";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
@@ -474,6 +476,8 @@ function SidebarUsageIcon({ label, theme }: { label: string; theme: SidebarTheme
  * Usage item is left out while it has no summary to show.
  */
 function SidebarFooterRows({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
+  const showOpenDesign =
+    getIsElectronMac() && (isDev || Boolean(process.env.EXPO_PUBLIC_PASEO_BUILD_ID));
   const { items } = useSidebarNavItems("footer");
   const usageEnabled = items.some(
     (item) => item.kind === "builtin" && item.key === "usage" && item.visible,
@@ -483,10 +487,11 @@ function SidebarFooterRows({ onBeforeNavigate }: { onBeforeNavigate?: () => void
   const visibleItems = items.filter(
     (item) => item.visible && (item.kind === "plugin" || usageSources.length > 0),
   );
-  if (visibleItems.length === 0) return null;
+  if (!showOpenDesign && visibleItems.length === 0) return null;
   return (
     <>
       <View ref={rowsRef} collapsable={false} style={styles.footerRows}>
+        {showOpenDesign ? <OpenDesignRow onBeforeNavigate={onBeforeNavigate} /> : null}
         {visibleItems.map((item) =>
           item.kind === "plugin" ? (
             <PluginSidebarItem

@@ -1730,6 +1730,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
   private readonly config: AgentSessionConfig;
   private child: ChildProcessWithoutNullStreams | null = null;
+
+  getRuntimePid(): number | undefined {
+    const child = this.child;
+    return child?.exitCode === null && child.signalCode === null ? child.pid : undefined;
+  }
   private connection: ClientSideConnection | null = null;
   private agentCapabilities: ACPAgentCapabilities | null = null;
   private sessionId: string | null = null;

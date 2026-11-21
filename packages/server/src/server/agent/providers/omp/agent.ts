@@ -800,6 +800,10 @@ export class OmpAgentSession implements AgentSession {
   }
 
   private runtimeSession: OmpRuntimeSession;
+
+  getRuntimePid(): number | undefined {
+    return this.runtimeSession.getPid?.();
+  }
   private hostTools?: OmpHostToolRouter;
   private readonly restartRuntime: OmpAgentSessionOptions["restartRuntime"];
   private readonly config: AgentSessionConfig;

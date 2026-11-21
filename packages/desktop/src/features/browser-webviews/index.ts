@@ -188,6 +188,9 @@ export function registerBrowserWebviewNavigationGuards(contents: WebContents): v
     preventUnsafeBrowserWebviewNavigation(event, event.url);
   });
   contents.on("will-frame-navigate", (event) => {
+    if (!event.isMainFrame && event.url.startsWith("blob:") && contents.getType() === "webview") {
+      return;
+    }
     preventUnsafeBrowserWebviewNavigation(event, event.url);
   });
   contents.on("will-redirect", (event) => {

@@ -70,6 +70,7 @@ export async function revertCodexConversation(input: {
   config?: Record<string, unknown> | null;
   userMessageTurns: CodexUserMessageTurnIndex;
   threadRollbackAvailable: boolean;
+  excludeTurns?: boolean;
   setThreadId: (threadId: string) => void | Promise<void>;
 }): Promise<void> {
   if (!input.threadId) {
@@ -95,7 +96,7 @@ export async function revertCodexConversation(input: {
     model: input.model ?? null,
     serviceTier: input.serviceTier ?? null,
     ...(input.config ? { config: input.config } : {}),
-    excludeTurns: false,
+    excludeTurns: input.excludeTurns ?? false,
     persistExtendedHistory: true,
   };
 

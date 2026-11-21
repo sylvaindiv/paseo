@@ -56,6 +56,10 @@ export class OpenCodeV2Session implements AgentSession {
   private dirty = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+
+  getRuntimePid(): number | undefined {
+    return this.closed ? undefined : this.connection.getPid?.();
+  }
   private history: SessionMessageInfo[] = [];
   private modes: AgentMode[] = [];
   constructor(

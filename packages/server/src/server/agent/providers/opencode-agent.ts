@@ -1513,6 +1513,7 @@ export class OpenCodeAgentClient implements AgentClient {
         false,
         unbindBridge,
         connectServer,
+        connection.getPid,
       );
     } catch (error) {
       await connection.release();
@@ -1568,6 +1569,7 @@ export class OpenCodeAgentClient implements AgentClient {
         registeredAcquisition !== null,
         unbindBridge,
         connectServer,
+        connection.getPid,
       );
     } catch (error) {
       await connection.release();
@@ -1609,6 +1611,7 @@ export class OpenCodeAgentClient implements AgentClient {
       events: acquisition.events,
       environment: acquisition.environment,
       url: acquisition.server.url,
+      getPid: acquisition.server.getPid,
       release: acquisition.release,
     };
   }
@@ -3375,6 +3378,7 @@ interface OpenCodeServerConnection {
   client: OpencodeClient;
   events: OpenCodeEventSource;
   url: string;
+  getPid?: () => number | undefined;
   release: () => Promise<void>;
 }
 
@@ -3468,12 +3472,14 @@ class OpenCodeAgentSession implements AgentSession {
     private readonly externallyDriven = false,
     releaseBridge?: () => void,
     connectServer?: () => Promise<OpenCodeServerConnection>,
+    getPid?: () => number | undefined,
   ) {
     this.config = config;
     this.server = {
       client,
       events,
       url: serverUrl ?? "",
+      getPid,
       release: releaseServer,
       environment: this.harnessEnvironment,
     };
@@ -3489,6 +3495,10 @@ class OpenCodeAgentSession implements AgentSession {
       config.model,
     );
     this.subscribeServerEvents();
+  }
+
+  getRuntimePid(): number | undefined {
+    return this.closed ? undefined : this.server.getPid?.();
   }
 
   usageSession() {

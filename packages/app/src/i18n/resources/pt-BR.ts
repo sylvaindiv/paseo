@@ -2423,6 +2423,11 @@ export const ptBR: TranslationResources = {
       playing: "Reproduzindo...",
       playbackFailed: "Falha na reprodução: {{message}}",
       app: {
+        agentMemory: "Memória estimada dos agentes",
+        memoryPeak: "Pico de {{memory}} · {{time}}",
+        noMemoryAgents: "Nenhum agente na memória",
+        hibernate: "Suspender",
+        hibernateUnavailable: "Não foi possível suspender o agente.",
         title: "App diagnostic",
         rowTitle: "App diagnostic",
         rowHint: "Collect connection, daemon, provider, desktop, and log details",

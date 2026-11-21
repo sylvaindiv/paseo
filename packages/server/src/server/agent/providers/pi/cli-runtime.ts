@@ -83,6 +83,9 @@ export class PiCliRuntime implements PiRuntime {
 }
 
 class PiCliRuntimeSession implements PiRuntimeSession {
+  getPid(): number | undefined {
+    return this.process.pid;
+  }
   private readonly subscribers = new Set<(event: PiRuntimeEvent) => void>();
 
   constructor(

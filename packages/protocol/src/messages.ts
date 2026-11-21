@@ -1546,6 +1546,17 @@ export const HubManagementDaemonPermissionsUpdateRequestSchema = z.object({
   revoke: z.array(DaemonPermissionSchema).default([]),
 });
 
+const ResourceMemoryRequestSchema = z.object({
+  type: z.literal("daemon.resources.get_memory.request"),
+  requestId: z.string(),
+});
+
+const AgentHibernateRequestSchema = z.object({
+  type: z.literal("agent.hibernate.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+});
+
 export const DiagnosticsRequestSchema = z.object({
   type: z.literal("diagnostics.request"),
   requestId: z.string(),
@@ -3459,6 +3470,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   HubManagementDaemonDisconnectRequestSchema,
   HubManagementDaemonPermissionsUpdateRequestSchema,
   DiagnosticsRequestSchema,
+  ResourceMemoryRequestSchema,
+  AgentHibernateRequestSchema,
   PluginCatalogGetRequestSchema,
   PluginListRequestSchema,
   PluginLogsGetRequestSchema,
@@ -3920,6 +3933,8 @@ export const ServerInfoStatusPayloadSchema = z
         agentThinkingUpdate: z.boolean().optional(),
         // COMPAT(daemonDiagnostics): added in v0.1.100, remove gate after 2026-12-25 once daemon floor >= v0.1.100.
         daemonDiagnostics: z.boolean().optional(),
+        // COMPAT(resourceRetention): added in v0.11.1, remove gate after 2027-11-20.
+        resourceRetention: z.boolean().optional(),
         // COMPAT(daemonSelfUpdate): added in v0.1.93, remove gate after 2026-12-13.
         daemonSelfUpdate: z.boolean().optional(),
         // COMPAT(agentForkContext): added in v0.1.102, remove gate after 2026-12-28.
@@ -5325,6 +5340,29 @@ export const DaemonConfigReloadResponseSchema = z.object({
       overrideControlledPaths: z.array(z.string()),
     })
     .passthrough(),
+});
+
+const ResourceMemoryResponseSchema = z.object({
+  type: z.literal("daemon.resources.get_memory.response"),
+  payload: z.object({
+    requestId: z.string(),
+    at: z.string().nullable(),
+    peak: z.object({ at: z.string(), bytes: z.number() }).nullable(),
+    agents: z.array(
+      z.object({
+        id: z.string(),
+        title: z.string(),
+        bytes: z.number(),
+        tools: z.array(z.object({ name: z.string(), bytes: z.number() })),
+        canHibernate: z.boolean(),
+      }),
+    ),
+  }),
+});
+
+const AgentHibernateResponseSchema = z.object({
+  type: z.literal("agent.hibernate.response"),
+  payload: z.object({ requestId: z.string(), released: z.boolean() }),
 });
 
 export const DiagnosticsResponseSchema = z.object({
@@ -7213,6 +7251,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   HubManagementDaemonDisconnectResponseSchema,
   HubManagementDaemonPermissionsUpdateResponseSchema,
   DiagnosticsResponseSchema,
+  ResourceMemoryResponseSchema,
+  AgentHibernateResponseSchema,
   GetDaemonConfigResponseMessageSchema,
   SetDaemonConfigResponseMessageSchema,
   ReadProjectConfigResponseMessageSchema,

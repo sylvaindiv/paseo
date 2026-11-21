@@ -1877,45 +1877,55 @@ describe("Codex app-server provider", () => {
     appServer.assertNoErrors();
   });
 
-  test("unarchives Codex when an active Paseo agent resumes an archived thread", async () => {
-    const threadRequests: string[] = [];
-    let resumeAttempts = 0;
-    const appServer = createFakeCodexAppServer({
-      "thread/loaded/list": () => {
-        threadRequests.push("thread/loaded/list");
-        return { data: [] };
-      },
-      "thread/resume": () => {
-        threadRequests.push("thread/resume");
-        resumeAttempts += 1;
-        if (resumeAttempts === 1) {
-          return Promise.reject(new Error(archivedThreadErrorMessage("archived-thread-id")));
-        }
-        return { thread: { id: "archived-thread-id" } };
-      },
-      "thread/unarchive": () => {
-        threadRequests.push("thread/unarchive");
-        return { thread: { id: "archived-thread-id" } };
-      },
-      "thread/read": () => {
-        threadRequests.push("thread/read");
-        return { thread: { turns: [] } };
-      },
-    });
-    const provider = createProviderWithFakeAppServer(appServer);
+  test.each([
+    { version: "0.170.0", resumeOptions: {} },
+    { version: "0.171.0", resumeOptions: { excludeTurns: true } },
+  ])(
+    "unarchives and resumes an archived thread on Codex $version",
+    async ({ version, resumeOptions }) => {
+      const threadRequests: string[] = [];
+      const resumeRequests: unknown[] = [];
+      const appServer = createFakeCodexAppServer({
+        initialize: () => ({ userAgent: `paseo/${version}` }),
+        "thread/loaded/list": () => {
+          threadRequests.push("thread/loaded/list");
+          return { data: [] };
+        },
+        "thread/resume": (params) => {
+          threadRequests.push("thread/resume");
+          const { threadId, excludeTurns } = params as { threadId: string; excludeTurns?: boolean };
+          resumeRequests.push({ threadId, excludeTurns });
+          if (resumeRequests.length === 1) {
+            return Promise.reject(new Error(archivedThreadErrorMessage("archived-thread-id")));
+          }
+          return { thread: { id: "archived-thread-id" } };
+        },
+        "thread/unarchive": () => {
+          threadRequests.push("thread/unarchive");
+          return { thread: { id: "archived-thread-id" } };
+        },
+        "thread/read": () => {
+          threadRequests.push("thread/read");
+          return { thread: { turns: [] } };
+        },
+      });
+      const provider = createProviderWithFakeAppServer(appServer);
 
-    const session = await provider.resumeSession(archivedThreadHandle());
+      const session = await provider.resumeSession(archivedThreadHandle());
 
-    expect(threadRequests).toEqual([
-      "thread/loaded/list",
-      "thread/resume",
-      "thread/unarchive",
-      "thread/resume",
-      "thread/read",
-    ]);
-    await session.close();
-    appServer.assertNoErrors();
-  });
+      expect(threadRequests).toEqual([
+        "thread/loaded/list",
+        "thread/resume",
+        "thread/unarchive",
+        "thread/resume",
+        "thread/read",
+      ]);
+      const expected = { threadId: "archived-thread-id", ...resumeOptions };
+      expect(resumeRequests).toEqual([expected, expected]);
+      await session.close();
+      appServer.assertNoErrors();
+    },
+  );
 
   test("closes Codex app-server when an interactive resume fails", async () => {
     const appServer = createFakeCodexAppServer({
@@ -2117,65 +2127,71 @@ describe("Codex app-server provider", () => {
     await session.close();
   });
 
-  test("rewinds a legacy conversation with a bounded fork on Codex without thread/rollback", async () => {
-    const appServer = createFakeCodexAppServer({
-      initialize: () => ({ userAgent: "paseo/0.159.0 (Ubuntu 26.4.0; x86_64) (paseo; 0)" }),
-      "thread/read": () => ({
-        thread: { id: "thread-1", historyMode: "legacy", turns: [] },
-      }),
-      "thread/rollback": () => ({
-        __jsonRpcError: {
-          code: -32600,
-          message: "Invalid request: unknown variant `thread/rollback`",
+  test.each([
+    { version: "0.159.0", excludeTurns: false },
+    { version: "0.171.0", excludeTurns: true },
+  ])(
+    "rewinds a legacy conversation with a bounded fork on Codex $version",
+    async ({ version, excludeTurns }) => {
+      const appServer = createFakeCodexAppServer({
+        initialize: () => ({ userAgent: `paseo/${version} (Ubuntu 26.4.0; x86_64) (paseo; 0)` }),
+        "thread/read": () => ({
+          thread: { id: "thread-1", historyMode: "legacy", turns: [] },
+        }),
+        "thread/rollback": () => ({
+          __jsonRpcError: {
+            code: -32600,
+            message: "Invalid request: unknown variant `thread/rollback`",
+          },
+        }),
+      });
+      const session = new CodexAppServerAgentSession(
+        createConfig({ cwd: "/workspace/project" }),
+        null,
+        createTestLogger(),
+        async () => appServer.child,
+      );
+
+      await session.startTurn("remember first");
+      emitCodexUserMessage(appServer, {
+        id: "codex-first",
+        text: "remember first",
+        turnId: "turn-first",
+      });
+      appServer.completeTurn();
+      await session.startTurn("remember second");
+      emitCodexUserMessage(appServer, {
+        id: "codex-second",
+        text: "remember second",
+        turnId: "turn-second",
+      });
+      appServer.completeTurn();
+
+      await session.revertConversation({ messageId: "codex-second" });
+
+      const forkRequests = appServer
+        .requests()
+        .filter((request) => request.method === "thread/fork")
+        .map((request) => request.params);
+      expect(forkRequests).toEqual([
+        {
+          threadId: "thread-1",
+          beforeTurnId: "turn-second",
+          cwd: "/workspace/project",
+          model: "gpt-5.4",
+          serviceTier: null,
+          excludeTurns,
+          persistExtendedHistory: true,
         },
-      }),
-    });
-    const session = new CodexAppServerAgentSession(
-      createConfig({ cwd: "/workspace/project" }),
-      null,
-      createTestLogger(),
-      async () => appServer.child,
-    );
-
-    await session.startTurn("remember first");
-    emitCodexUserMessage(appServer, {
-      id: "codex-first",
-      text: "remember first",
-      turnId: "turn-first",
-    });
-    appServer.completeTurn();
-    await session.startTurn("remember second");
-    emitCodexUserMessage(appServer, {
-      id: "codex-second",
-      text: "remember second",
-      turnId: "turn-second",
-    });
-    appServer.completeTurn();
-
-    await session.revertConversation({ messageId: "codex-second" });
-
-    const forkRequests = appServer
-      .requests()
-      .filter((request) => request.method === "thread/fork")
-      .map((request) => request.params);
-    expect(forkRequests).toEqual([
-      {
-        threadId: "thread-1",
-        beforeTurnId: "turn-second",
-        cwd: "/workspace/project",
-        model: "gpt-5.4",
-        serviceTier: null,
-        excludeTurns: false,
-        persistExtendedHistory: true,
-      },
-    ]);
-    expect(appServer.recordedRollbacks).toEqual([]);
-    await expect(session.getRuntimeInfo()).resolves.toMatchObject({
-      sessionId: "forked-thread",
-    });
-    appServer.assertNoErrors();
-    await session.close();
-  });
+      ]);
+      expect(appServer.recordedRollbacks).toEqual([]);
+      await expect(session.getRuntimeInfo()).resolves.toMatchObject({
+        sessionId: "forked-thread",
+      });
+      appServer.assertNoErrors();
+      await session.close();
+    },
+  );
 
   test("rewinds a paginated conversation through the public session capability", async () => {
     const appServer = createFakeCodexAppServer({
@@ -4906,15 +4922,13 @@ describe("Codex app-server provider", () => {
   });
 
   test("restores nested MultiAgentV2 ownership from persisted child threads", async () => {
-    const session = createSession();
-    session.client = {
-      request: vi.fn(async (method: string, params: unknown) => {
-        if (method !== "thread/read") {
-          return {};
-        }
+    const appServer = createFakeCodexAppServer({
+      initialize: () => ({ userAgent: "paseo/0.171.0" }),
+      "thread/read": (params) => {
         const threadId = (params as { threadId?: string }).threadId;
         const itemsByThreadId = {
           "test-thread": [
+            { type: "imageView", id: "image-history", path: "/tmp/history.png" },
             {
               type: "subAgentActivity",
               id: "spawn-persisted-child",
@@ -4947,25 +4961,44 @@ describe("Codex app-server provider", () => {
             turns: items ? [{ items }] : [],
           },
         };
-      }),
-    };
+      },
+    });
+    const session = await createProviderWithFakeAppServer(appServer).resumeSession({
+      sessionId: "test-thread",
+      metadata: { cwd: "/workspace/project" },
+    });
 
-    await asInternals(session).loadPersistedHistory(session.client);
+    try {
+      expect(
+        appServer.requests().find(({ method }) => method === "thread/resume")?.params,
+      ).toMatchObject({ threadId: "test-thread", excludeTurns: true });
 
-    const history: AgentStreamEvent[] = [];
-    for await (const event of session.streamHistory()) {
-      history.push(event);
+      const history: AgentStreamEvent[] = [];
+      for await (const event of session.streamHistory()) {
+        history.push(event);
+      }
+      const upserts = history.flatMap((event) =>
+        event.type === "provider_subagent" && event.event.type === "upsert" ? [event.event] : [],
+      );
+      expect(upserts).toEqual([
+        expect.objectContaining({ id: "persisted-child", parentSubagentId: null }),
+        expect.objectContaining({
+          id: "persisted-grandchild",
+          parentSubagentId: "persisted-child",
+        }),
+      ]);
+      expect(
+        history.filter(
+          (event) =>
+            event.type === "timeline" &&
+            event.item.type === "assistant_message" &&
+            event.item.text === "![Image](file:///tmp/history.png)",
+        ),
+      ).toHaveLength(1);
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
     }
-    const upserts = history.flatMap((event) =>
-      event.type === "provider_subagent" && event.event.type === "upsert" ? [event.event] : [],
-    );
-    expect(upserts).toEqual([
-      expect.objectContaining({ id: "persisted-child", parentSubagentId: null }),
-      expect.objectContaining({
-        id: "persisted-grandchild",
-        parentSubagentId: "persisted-child",
-      }),
-    ]);
   });
 
   test("coalesces persisted MultiAgentV2 activity for one child into one terminal card", async () => {

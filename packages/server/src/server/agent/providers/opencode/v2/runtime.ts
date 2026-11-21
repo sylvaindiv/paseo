@@ -22,8 +22,10 @@ export interface V2Connection {
   release(): Promise<void>;
   retain(): V2Connection;
   readonly exited: Promise<Error>;
+  getPid?(): number | undefined;
 }
 interface Generation {
+  getPid(): number | undefined;
   client: V2Api;
   users: number;
   stop(): Promise<void>;
@@ -116,6 +118,7 @@ export class V2Runtime {
       release,
       retain: () => this.lease(generation, pending),
       exited: generation.exited,
+      getPid: () => (released ? undefined : generation.getPid()),
     };
   }
 
@@ -253,7 +256,14 @@ export class V2Runtime {
         },
       });
       await client.server.info({ signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) });
-      const generation: Generation = { client, users: 0, stop, exited };
+      const generation: Generation = {
+        client,
+        users: 0,
+        stop,
+        exited,
+        getPid: () =>
+          process.exitCode === null && process.signalCode === null ? process.pid : undefined,
+      };
       this.generations.add(generation);
       process.once("exit", () => {
         this.generations.delete(generation);

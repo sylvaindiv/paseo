@@ -702,8 +702,12 @@ export interface AgentSession {
   /** Affirm that closing cannot interrupt foreground, queued, background or descendant work.
    * Missing support or uncertainty retains the runtime. Never infer this from idle status. */
   canCloseForInactivity?(): Promise<boolean>;
+  supportsInactivityClosure?(): boolean;
+  inactivityProofIsCurrent?(): boolean;
+  /** The owned local process, if this runtime has one. */
+  getRuntimePid?(): number | undefined;
   /** Release live runtime resources without archiving or deleting the durable native session. */
-  close(): Promise<void>;
+  close(options?: { forInactivity?: boolean }): Promise<void>;
   listCommands?(): Promise<AgentSlashCommand[]>;
   setModel?(modelId: string | null): Promise<void>;
   setThinkingOption?(thinkingOptionId: string | null): Promise<void | AgentProviderNotice>;

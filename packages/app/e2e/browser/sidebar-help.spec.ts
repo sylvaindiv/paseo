@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "../support/fixtures";
 import { gotoAppShell, openSettings } from "../support/helpers/app";
+import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { openSettingsSection } from "../support/helpers/settings";
 import { openWhatsNew, release, serveChangelog } from "../support/helpers/changelog";
 
@@ -70,6 +71,71 @@ test("opens troubleshooting and support destinations", async ({ page }) => {
     await openHelpMenu(page);
     await expectExternalPage(page, "sidebar-help-github", GITHUB_ISSUE_DESTINATION);
   });
+});
+
+test("shows host agent memory and hibernates an eligible agent", async ({ page }, testInfo) => {
+  let released = false;
+  const actions: string[] = [];
+  const at = "2026-11-20T16:00:00.000Z";
+  await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((raw) => {
+      const { message } = JSON.parse(raw.toString());
+      const reply = (type: string, payload: object) =>
+        ws.send(
+          JSON.stringify({
+            type: "session",
+            message: { type, payload: { requestId: message.requestId, ...payload } },
+          }),
+        );
+      if (message?.type === "daemon.resources.get_memory.request") {
+        reply("daemon.resources.get_memory.response", {
+          at,
+          peak: { at, bytes: 950_000_000 },
+          agents: [
+            ...(released
+              ? []
+              : [
+                  {
+                    id: "report-agent",
+                    title: "Reporting agent",
+                    bytes: 640_000_000,
+                    tools: [{ name: "Chromium", bytes: 450_000_000 }],
+                    canHibernate: true,
+                  },
+                ]),
+            {
+              id: "active-agent",
+              title: "Busy agent",
+              bytes: 220_000_000,
+              tools: [],
+              canHibernate: false,
+            },
+          ],
+        });
+      } else if (message?.type === "agent.hibernate.request") {
+        actions.push(message.agentId);
+        released = message.agentId === "report-agent";
+        reply("agent.hibernate.response", { released });
+      } else {
+        server.send(raw);
+      }
+    });
+  });
+  await gotoAppShell(page);
+  await openHelpMenu(page);
+  await page.getByTestId("sidebar-help-diagnostics").click();
+  const sheet = page.getByTestId("app-diagnostic-sheet");
+  await expect(sheet.getByText("Reporting agent · 640 MB")).toBeVisible();
+  await expect(sheet.getByText("Chromium 450 MB")).toBeVisible();
+  await expect(sheet.getByText("Busy agent · 220 MB")).toBeVisible();
+  const sleep = sheet.getByRole("button", { name: "Put to sleep" });
+  await expect(sleep).toHaveCount(1);
+  await sheet.screenshot({ path: testInfo.outputPath("agent-memory.png") });
+  await sleep.click();
+  await expect(sheet.getByText("Reporting agent · 640 MB")).toHaveCount(0);
+  await expect(sleep).toHaveCount(0);
+  expect(actions).toEqual(["report-agent"]);
 });
 
 test("renders the changelog in the app and links the website", async ({ page }) => {

@@ -9,6 +9,7 @@ export interface TreeKillTarget {
 }
 
 export interface TerminateWithTreeKillOptions {
+  directOnly?: boolean;
   gracefulSignal?: NodeJS.Signals;
   forceSignal?: NodeJS.Signals;
   gracefulTimeoutMs: number;
@@ -38,13 +39,18 @@ export async function terminateWithTreeKill(
   }
 
   const exitPromise = waitForProcessExit(child);
-  await signalProcessTree(child, options.gracefulSignal ?? "SIGTERM");
+  const signal = (value: NodeJS.Signals) =>
+    options.directOnly ? signalDirectChild(child, value) : signalProcessTree(child, value);
+  if (options.directOnly && (await waitForExitOrTimeout(exitPromise, options.gracefulTimeoutMs))) {
+    return "terminated";
+  }
+  await signal(options.gracefulSignal ?? "SIGTERM");
   if (await waitForExitOrTimeout(exitPromise, options.gracefulTimeoutMs)) {
     return "terminated";
   }
 
   options.onForceSignal?.();
-  await signalProcessTree(child, options.forceSignal ?? "SIGKILL");
+  await signal(options.forceSignal ?? "SIGKILL");
   if (options.forceTimeoutMs === undefined) {
     return "killed";
   }

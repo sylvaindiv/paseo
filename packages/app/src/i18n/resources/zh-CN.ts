@@ -2361,6 +2361,11 @@ export const zhCN: TranslationResources = {
       playing: "正在播放...",
       playbackFailed: "播放失败：{{message}}",
       app: {
+        agentMemory: "智能体内存用量估算",
+        memoryPeak: "峰值 {{memory}} · {{time}}",
+        noMemoryAgents: "没有驻留在内存中的智能体",
+        hibernate: "休眠",
+        hibernateUnavailable: "无法让智能体进入休眠。",
         title: "App diagnostic",
         rowTitle: "App diagnostic",
         rowHint: "Collect connection, daemon, provider, desktop, and log details",

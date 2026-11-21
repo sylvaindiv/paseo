@@ -112,6 +112,9 @@ export class OmpCliRuntime implements OmpRuntime {
 }
 
 class OmpCliRuntimeSession implements OmpRuntimeSession {
+  getPid(): number | undefined {
+    return this.process.pid;
+  }
   private readonly subscribers = new Set<(event: OmpRuntimeEvent) => void>();
   activeBranchEntryId?: string;
 

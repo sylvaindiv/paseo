@@ -1,6 +1,13 @@
 import * as Clipboard from "expo-clipboard";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, Text, View, type PressableStateCallbackType } from "react-native";
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  type PressableStateCallbackType,
+} from "react-native";
 import { Copy, RotateCw } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -41,6 +48,17 @@ interface DiagnosticCollectionResult {
   status: ProgressStatus;
 }
 
+type HostClient = NonNullable<HostRuntimeSnapshot["client"]>;
+type HostMemory = Awaited<ReturnType<HostClient["getResourceMemory"]>>;
+
+function formatMemory(bytes: number, language: string): string {
+  return new Intl.NumberFormat(language, {
+    maximumFractionDigits: 0,
+    style: "unit",
+    unit: "megabyte",
+  }).format(bytes / 1_000_000);
+}
+
 const SNAP_POINTS = ["55%", "88%"];
 const ThemedCopy = withUnistyles(Copy);
 const ThemedRotateCw = withUnistyles(RotateCw);
@@ -55,13 +73,15 @@ export function AppDiagnosticSheet({
   appVersion,
   isDesktopApp,
 }: AppDiagnosticSheetProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
   const hosts = useHosts();
   const [diagnostic, setDiagnostic] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<ProgressRow[]>([]);
   const runIdRef = useRef(0);
+  const [memory, setMemory] = useState<Record<string, HostMemory>>({});
+  const [hibernating, setHibernating] = useState(false);
 
   const updateProgress = useCallback((id: string, label: string, status: ProgressStatus) => {
     setProgress((current) => {
@@ -86,6 +106,7 @@ export function AppDiagnosticSheet({
     setLoading(true);
     setDiagnostic(null);
     setProgress([]);
+    setMemory({});
 
     const sections: string[] = [];
     try {
@@ -113,7 +134,17 @@ export function AppDiagnosticSheet({
         const hostProgressId = `host:${host.serverId}`;
         updateRunProgress(hostProgressId, host.label, "running");
         const snapshot = store.getSnapshot(host.serverId);
+        const client = snapshot?.client;
+        const memoryResult =
+          snapshot?.connectionStatus === "online" &&
+          client?.getLastServerInfoMessage()?.features?.resourceRetention === true
+            ? client.getResourceMemory().catch(() => null)
+            : null;
         const hostResult = await collectHostDiagnosticSections(host, snapshot);
+        const sampled = await memoryResult;
+        if (sampled && isCurrentRun()) {
+          setMemory((current) => ({ ...current, [host.serverId]: sampled }));
+        }
         sections.push(...hostResult.sections);
         updateRunProgress(hostProgressId, host.label, hostResult.status);
       }
@@ -136,8 +167,35 @@ export function AppDiagnosticSheet({
       setLoading(false);
       setDiagnostic(null);
       setProgress([]);
+      setMemory({});
     }
   }, [visible, runDiagnostics]);
+
+  const hibernate = useCallback(
+    async (serverId: string, agentId: string) => {
+      const client = getHostRuntimeStore().getSnapshot(serverId)?.client;
+      if (!client || hibernating) return;
+      const runId = runIdRef.current;
+      setHibernating(true);
+      try {
+        const { released } = await client.hibernateAgent(agentId);
+        if (runIdRef.current !== runId) return;
+        if (!released) {
+          toast.error(t("settings.diagnostics.app.hibernateUnavailable"));
+        }
+        const updated = await client.getResourceMemory();
+        if (runIdRef.current === runId) {
+          setMemory((current) => ({ ...current, [serverId]: updated }));
+        }
+      } catch {
+        if (runIdRef.current === runId)
+          toast.error(t("settings.diagnostics.app.hibernateUnavailable"));
+      } finally {
+        setHibernating(false);
+      }
+    },
+    [hibernating, t, toast],
+  );
 
   const handleRefreshPress = useCallback(() => {
     void runDiagnostics();
@@ -223,6 +281,57 @@ export function AppDiagnosticSheet({
       scrollable={false}
       testID="app-diagnostic-sheet"
     >
+      {Object.keys(memory).length > 0 && (
+        <ScrollView style={styles.memoryScroll}>
+          {hosts.map((host) => {
+            const sample = memory[host.serverId];
+            if (!sample) return null;
+            const fmt = (bytes: number) => formatMemory(bytes, i18n.language);
+            return (
+              <View key={host.serverId} style={styles.progressContent}>
+                <Text style={styles.memoryTitle}>
+                  {t("settings.diagnostics.app.agentMemory")} · {host.label}
+                </Text>
+                {sample.peak && (
+                  <Text style={styles.mutedText}>
+                    {t("settings.diagnostics.app.memoryPeak", {
+                      memory: fmt(sample.peak.bytes),
+                      time: new Date(sample.peak.at).toLocaleString(i18n.language),
+                    })}
+                  </Text>
+                )}
+                {sample.agents.length === 0 && (
+                  <Text style={styles.mutedText}>
+                    {t("settings.diagnostics.app.noMemoryAgents")}
+                  </Text>
+                )}
+                {sample.agents.map((agent) => (
+                  <View key={agent.id} style={styles.progressRow}>
+                    <View style={styles.memoryAgent}>
+                      <Text style={styles.memoryTitle}>
+                        {agent.title} · {fmt(agent.bytes)}
+                      </Text>
+                      {agent.tools.length > 0 && (
+                        <Text style={styles.mutedText}>
+                          {agent.tools.map((tool) => `${tool.name} ${fmt(tool.bytes)}`).join(" · ")}
+                        </Text>
+                      )}
+                    </View>
+                    {agent.canHibernate && (
+                      <HibernateButton
+                        hostId={host.serverId}
+                        agentId={agent.id}
+                        disabled={hibernating}
+                        onHibernate={hibernate}
+                      />
+                    )}
+                  </View>
+                ))}
+              </View>
+            );
+          })}
+        </ScrollView>
+      )}
       {diagnostic ? (
         <ScrollableCodeSurface key={visible ? "visible" : "hidden"} maxHeight={520}>
           {diagnostic}
@@ -258,6 +367,31 @@ export function AppDiagnosticSheet({
         </SurfaceCard>
       )}
     </AdaptiveModalSheet>
+  );
+}
+
+interface HibernateButtonProps {
+  hostId: string;
+  agentId: string;
+  disabled: boolean;
+  onHibernate(hostId: string, agentId: string): Promise<void>;
+}
+
+function HibernateButton({ hostId, agentId, disabled, onHibernate }: HibernateButtonProps) {
+  const { t } = useTranslation();
+  const onPress = useCallback(
+    () => void onHibernate(hostId, agentId),
+    [onHibernate, hostId, agentId],
+  );
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled}
+      style={styles.hibernateButton}
+      onPress={onPress}
+    >
+      <Text style={styles.memoryTitle}>{t("settings.diagnostics.app.hibernate")}</Text>
+    </Pressable>
   );
 }
 
@@ -326,6 +460,15 @@ function formatProgressStatus(status: ProgressStatus): string {
 }
 
 const styles = StyleSheet.create((theme) => ({
+  memoryScroll: { maxHeight: 240, flexGrow: 0, flexShrink: 0 },
+  memoryTitle: { color: theme.colors.foreground, fontWeight: "600" },
+  memoryAgent: { flex: 1, gap: theme.spacing[1] },
+  hibernateButton: {
+    backgroundColor: theme.colors.surface2,
+    borderRadius: theme.borderRadius.sm,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+  },
   progressContent: {
     paddingVertical: theme.spacing[4],
     paddingHorizontal: theme.spacing[4],

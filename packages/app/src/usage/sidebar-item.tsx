@@ -1,6 +1,5 @@
 import {
   createContext,
-  Fragment,
   useCallback,
   useContext,
   useEffect,
@@ -24,16 +23,8 @@ import { useAppSettings } from "@/hooks/use-settings";
 import { useUsageHostId } from "./hosts";
 import { useUsageHostReports } from "./queries";
 import { UsageSourceIcon } from "./source-icon";
-import { UsageMeter } from "./meter";
-import { formatSidebarDuration, formatSidebarUnit } from "./format";
-import {
-  choosePinnedUsageLayout,
-  METER_GAP,
-  MIN_METER_WIDTH,
-  resolvePinnedUsage,
-  type PinnedUsageLayout,
-  type PinnedUsageSource,
-} from "./pinned";
+import { formatSidebarDuration } from "./format";
+import { resolvePinnedUsage, type PinnedUsageSource } from "./pinned";
 import { UsageModal } from "./usage-modal";
 
 export function useUsageSummary(enabled: boolean): readonly PinnedUsageSource[] {
@@ -93,15 +84,10 @@ function triggerStyle({ hovered }: PressableStateCallbackType & { hovered?: bool
   return hovered ? [styles.trigger, styles.triggerHovered] : styles.trigger;
 }
 
-function layoutWidth(event: LayoutChangeEvent): number {
-  return event.nativeEvent.layout.width;
+function compactTriggerStyle(state: PressableStateCallbackType) {
+  return [triggerStyle(state), styles.triggerCompact];
 }
 
-/**
- * One line: each account's icon, then per window a meter and "31% 5h". Off-screen copies measure
- * the line with labels and with percents alone; the richest layout that fits is shown, and what
- * it leaves out takes no space at all.
- */
 function PinnedUsageTrigger({
   label,
   sources,
@@ -111,21 +97,13 @@ function PinnedUsageTrigger({
   sources: readonly PinnedUsageSource[];
   onPress: () => void;
 }) {
-  const [available, setAvailable] = useState<number | null>(null);
-  const [labelsWidth, setLabelsWidth] = useState<number | null>(null);
-  const [percentsWidth, setPercentsWidth] = useState<number | null>(null);
-  const handleAvailableLayout = useCallback((event: LayoutChangeEvent) => {
-    setAvailable(layoutWidth(event));
-  }, []);
-  const handleLabelsLayout = useCallback((event: LayoutChangeEvent) => {
-    setLabelsWidth(layoutWidth(event));
-  }, []);
-  const handlePercentsLayout = useCallback((event: LayoutChangeEvent) => {
-    setPercentsWidth(layoutWidth(event));
-  }, []);
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const [now, setNow] = useState(Date.now);
+  const [compact, setCompact] = useState(false);
+  const handleLayout = useCallback((event: LayoutChangeEvent) => {
+    setCompact(event.nativeEvent.layout.width <= 260);
+  }, []);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
@@ -138,38 +116,27 @@ function PinnedUsageTrigger({
     const cards = source.resetCredits
       ? new Intl.NumberFormat(locale).format(source.resetCredits.count)
       : null;
+    const shortenCountdown =
+      compact && source.windows.length > 1 && (credits !== null || cards !== null);
     return {
       ...source,
       creditsText: credits,
       cardsText: cards,
       cardsExpiry: formatSidebarDuration(source.resetCredits?.expiresAt, now, locale),
-      windows: source.windows.map((window) => ({
-        ...window,
-        countdown: formatSidebarDuration(window.codexResetsAt, now, locale, true),
-        period:
-          window.codexResetsAt && window.shortLabel === "wk"
-            ? formatSidebarUnit(7, "day", locale)
-            : null,
-      })),
+      shortenCountdown,
+      windows: source.windows.map((window) => {
+        const countdown = formatSidebarDuration(window.codexResetsAt, now, locale, {
+          showElapsed: true,
+        });
+        const displayCountdown = shortenCountdown
+          ? formatSidebarDuration(window.codexResetsAt, now, locale, {
+              showElapsed: true,
+              singleUnit: true,
+            })
+          : countdown;
+        return { ...window, countdown, displayCountdown };
+      }),
     };
-  });
-  const hasCodexDetails = formatted.some(
-    (source) =>
-      source.creditsText !== null ||
-      source.cardsText !== null ||
-      source.windows.some((window) => window.countdown !== null),
-  );
-  const windowCount = sources.reduce((count, source) => count + source.windows.length, 0);
-  const wrap =
-    hasCodexDetails &&
-    available !== null &&
-    labelsWidth !== null &&
-    labelsWidth + windowCount * (MIN_METER_WIDTH + METER_GAP) > available;
-  const layout = choosePinnedUsageLayout({
-    available,
-    labelsWidth,
-    percentsWidth,
-    windowCount,
   });
   return (
     <Pressable
@@ -197,26 +164,13 @@ function PinnedUsageTrigger({
         ])
         .filter(Boolean)
         .join(", ")}`}
-      style={triggerStyle}
+      onLayout={handleLayout}
+      style={compact ? compactTriggerStyle : triggerStyle}
       testID="sidebar-usage"
     >
-      <View style={[styles.line, wrap && styles.wrapped]} onLayout={handleAvailableLayout}>
-        <PinnedUsageLine sources={formatted} layout={wrap ? "meters" : layout} wrap={wrap} />
-      </View>
-      <View
-        style={styles.measure}
-        pointerEvents="none"
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-        aria-hidden
-      >
-        <View style={styles.measured} onLayout={handleLabelsLayout}>
-          <PinnedUsageLine sources={formatted} layout="labels" measuring />
-        </View>
-        <View style={styles.measured} onLayout={handlePercentsLayout}>
-          <PinnedUsageLine sources={formatted} layout="percents" measuring />
-        </View>
-      </View>
+      {formatted.map((source) => (
+        <PinnedUsageLine key={source.key} source={source} compact={compact} />
+      ))}
     </Pressable>
   );
 }
@@ -225,175 +179,146 @@ interface FormattedUsageSource extends PinnedUsageSource {
   creditsText: string | null;
   cardsText: string | null;
   cardsExpiry: string | null;
+  shortenCountdown: boolean;
   windows: (PinnedUsageSource["windows"][number] & {
     countdown: string | null;
-    period: string | null;
+    displayCountdown: string | null;
   })[];
 }
 
-function PinnedUsageLine({
-  sources,
-  layout,
-  measuring = false,
-  wrap = false,
-}: {
-  sources: readonly FormattedUsageSource[];
-  layout: PinnedUsageLayout;
-  measuring?: boolean;
-  wrap?: boolean;
-}) {
-  const testIds = measuring
-    ? {}
-    : {
-        source: "sidebar-usage-source",
-        window: "sidebar-usage-pinned-window",
-        reset: "sidebar-usage-reset",
-        credits: "sidebar-usage-credits",
-        cards: "sidebar-usage-cards",
-      };
-  return sources.map((source, sourceIndex) => (
-    <Fragment key={source.key}>
-      {source.windows.map((window, windowIndex) => (
-        <View
-          key={window.key}
-          style={[
-            styles.window,
-            !wrap && (sourceIndex > 0 || windowIndex > 0) && styles.windowGap,
-            layout === "meters" && !wrap && !window.countdown && styles.growingWindow,
-          ]}
-        >
-          {windowIndex === 0 ? (
-            <View style={styles.icon} testID={testIds.source}>
-              <UsageSourceIcon svg={source.icon} size={14} />
-            </View>
-          ) : null}
-          {layout === "meters" ? (
-            <View
-              style={[
-                styles.meterSlot,
-                (wrap || window.countdown !== null) && styles.compactMeterSlot,
-              ]}
-            >
-              <UsageMeter percent={window.percent} tone={window.tone} quiet style={styles.meter} />
-            </View>
-          ) : null}
-          {window.period && layout !== "percents" ? (
-            <Text style={[styles.percent, styles.windowLabel]}>{`${window.period} `}</Text>
-          ) : null}
-          <Text
-            style={[styles.percent, window.countdown && styles.strong]}
-            numberOfLines={1}
-            testID={testIds.window}
-          >
-            {window.percentText}
-            {layout === "percents" || window.shortLabel === "" || window.period ? null : (
-              <Text style={styles.windowLabel}>{` ${window.shortLabel}`}</Text>
-            )}
-          </Text>
-          {window.countdown && layout !== "percents" ? (
+function PinnedUsageLine({ source, compact }: { source: FormattedUsageSource; compact: boolean }) {
+  const hideIcon = compact && source.sourceId === "codex";
+  const textStyle = [styles.text, source.shortenCountdown && styles.denseText];
+  return (
+    <View style={styles.line} testID="sidebar-usage-line">
+      <View style={[styles.windows, compact && styles.windowsCompact]}>
+        {hideIcon ? null : (
+          <View testID="sidebar-usage-source">
+            <UsageSourceIcon svg={source.icon} size={14} />
+          </View>
+        )}
+        {source.windows.map((window) => (
+          <View key={window.key} style={[styles.window, compact && styles.windowCompact]}>
             <Text
-              style={[styles.percent, styles.windowLabel]}
-              testID={testIds.reset}
-            >{` ${window.countdown.replace(/\s+/g, "")}`}</Text>
-          ) : null}
-        </View>
-      ))}
-      {source.creditsText !== null || source.cardsText !== null ? (
-        <View style={[styles.details, !wrap && styles.detailDivider]}>
-          {source.creditsText !== null ? (
-            <Text style={[styles.percent, styles.strong]} testID={testIds.credits}>
-              {source.creditsText}
+              style={[textStyle, styles.strong]}
+              numberOfLines={1}
+              testID="sidebar-usage-pinned-window"
+            >
+              {window.percentText}
+              {window.shortLabel &&
+              !(window.countdown && (hideIcon || window.shortLabel === "wk")) ? (
+                <Text style={[styles.muted, styles.regular]}>{` ${window.shortLabel}`}</Text>
+              ) : null}
             </Text>
+            {window.displayCountdown ? (
+              <Text
+                style={[textStyle, styles.muted, styles.countdown]}
+                numberOfLines={1}
+                testID="sidebar-usage-reset"
+              >
+                {window.displayCountdown.replace(/\s+/g, "")}
+              </Text>
+            ) : null}
+          </View>
+        ))}
+      </View>
+      {source.creditsText !== null || source.cardsText !== null ? (
+        <View style={[styles.details, styles.divider]}>
+          {source.creditsText !== null ? (
+            <View style={[styles.creditBlock, compact && styles.creditBlockCompact]}>
+              <Text style={[textStyle, styles.strong]} testID="sidebar-usage-credits">
+                {source.creditsText}
+              </Text>
+            </View>
           ) : null}
           {source.cardsText !== null ? (
-            <View style={source.creditsText === null ? null : styles.detailDivider}>
-              <Text style={styles.percent} testID={testIds.cards}>
-                <Text style={styles.windowLabel}>↺</Text>
+            <View
+              style={[
+                styles.cardBlock,
+                compact && styles.cardBlockCompact,
+                source.creditsText !== null && styles.divider,
+              ]}
+            >
+              <Text style={textStyle} testID="sidebar-usage-cards">
+                <Text style={styles.muted}>↺</Text>
                 <Text style={styles.strong}>{source.cardsText}</Text>
                 {source.cardsExpiry ? (
-                  <Text
-                    style={styles.windowLabel}
-                  >{` ${source.cardsExpiry.replace(/\s+/g, "")}`}</Text>
+                  <Text style={styles.muted}>{` ${source.cardsExpiry.replace(/\s+/g, "")}`}</Text>
                 ) : null}
               </Text>
             </View>
           ) : null}
         </View>
       ) : null}
-    </Fragment>
-  ));
+    </View>
+  );
 }
 
 const styles = StyleSheet.create((theme) => ({
   trigger: {
-    width: "100%",
+    alignSelf: "stretch",
+    marginHorizontal: -theme.spacing[2],
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
-    overflow: "hidden",
-    // Same row geometry and leading rail as Add project and the footer icons.
+    gap: theme.spacing[2],
     minHeight: 28,
-    paddingVertical: theme.spacing[1],
-    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1.5],
+    paddingHorizontal: theme.spacing[4],
     borderRadius: theme.borderRadius.lg,
   },
+  triggerCompact: { paddingHorizontal: theme.spacing[2] },
   triggerHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
   },
   line: {
-    flex: 1,
+    flexGrow: 1,
+    maxWidth: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  windows: {
+    flexGrow: 1.5,
+    flexShrink: 1,
     minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
-    overflow: "hidden",
+    gap: theme.spacing[1.5],
+    minHeight: 18,
+    paddingEnd: theme.spacing[2],
   },
-  // Wide enough that nothing inside wraps or shrinks; each child reports its natural width.
-  measure: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width: 10_000,
-    opacity: 0,
-  },
-  measured: {
-    alignSelf: "flex-start",
+  windowsCompact: { gap: theme.spacing[1], paddingEnd: theme.spacing[0.5] },
+  window: {
     flexDirection: "row",
     alignItems: "center",
-  },
-  wrapped: { flexWrap: "wrap", gap: theme.spacing[1] },
-  details: { flexDirection: "row", alignItems: "center", flexShrink: 0 },
-  detailDivider: {
-    marginLeft: theme.spacing[1],
-    paddingLeft: theme.spacing[1],
-    borderLeftWidth: 1,
-    borderLeftColor: theme.colors.border,
-  },
-  strong: { fontWeight: theme.fontWeight.semibold },
-  window: { flexDirection: "row", alignItems: "center", flexShrink: 0 },
-  growingWindow: { flexGrow: 1 },
-  icon: { marginRight: theme.spacing[1.5] },
-  windowGap: {
-    marginLeft: theme.spacing[2],
-  },
-  // Every slot takes an equal share of the leftover width, so the line fills the row.
-  meterSlot: {
-    flexGrow: 1,
     flexShrink: 1,
-    flexBasis: 0,
-    minWidth: MIN_METER_WIDTH,
-    marginRight: METER_GAP,
+    minWidth: 0,
+    gap: theme.spacing[1.5],
   },
-  compactMeterSlot: { flexGrow: 0, flexBasis: MIN_METER_WIDTH },
-  meter: {
-    height: 6,
-    borderRadius: 3,
+  windowCompact: { gap: theme.spacing[0.5] },
+  details: { flexGrow: 2, flexDirection: "row", alignItems: "center", minHeight: 18 },
+  creditBlock: {
+    flexGrow: 1,
+    alignItems: "center",
+    paddingHorizontal: theme.spacing[2],
   },
-  percent: {
+  creditBlockCompact: { paddingHorizontal: theme.spacing[0.5] },
+  cardBlock: {
+    flexGrow: 1,
+    alignItems: "flex-end",
+    paddingStart: theme.spacing[2],
+  },
+  cardBlockCompact: { paddingStart: theme.spacing[0.5] },
+  divider: { borderStartWidth: 1, borderStartColor: theme.colors.border },
+  text: {
     flexShrink: 0,
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
     fontVariant: ["tabular-nums"],
   },
-  windowLabel: {
-    color: theme.colors.foregroundMuted,
-  },
+  denseText: { fontSize: theme.fontSize.sm - 1 },
+  countdown: { flexShrink: 1, minWidth: 0 },
+  strong: { fontWeight: theme.fontWeight.semibold },
+  regular: { fontWeight: theme.fontWeight.normal },
+  muted: { color: theme.colors.foregroundMuted },
 }));

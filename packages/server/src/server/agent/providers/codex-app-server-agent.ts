@@ -203,6 +203,9 @@ const CODEX_AUTO_REVIEW_MIN_VERSION: readonly [number, number, number] = [0, 115
 // has to fork before the target turn instead.
 const CODEX_THREAD_ROLLBACK_REMOVED_VERSION: readonly [number, number, number] = [0, 156, 0];
 
+// COMPAT(codex-exclude-turns): added in Paseo v0.11.1, remove after dropping support for Codex <0.171.0.
+const CODEX_EXCLUDE_TURNS_MIN_VERSION: readonly [number, number, number] = [0, 171, 0];
+
 function parseCodexVersion(versionOutput: string): [number, number, number] | null {
   const match = versionOutput.match(/(\d+)\.(\d+)\.(\d+)/);
   if (!match) return null;
@@ -3475,7 +3478,10 @@ export class CodexAppServerAgentSession implements AgentSession {
     observedStart: boolean;
   } | null = null;
   private client: CodexAppServerClient | null = null;
+  private inactivitySupported = false;
+  private inactivityProofRevision: number | null = null;
   private threadRollbackAvailable = true;
+  private excludeTurnsSupported = false;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
@@ -3665,6 +3671,12 @@ export class CodexAppServerAgentSession implements AgentSession {
         await client.request("initialize", buildCodexAppServerInitializeParams()),
       );
       this.threadRollbackAvailable = codexServerHasThreadRollback(initialized?.userAgent);
+      this.excludeTurnsSupported =
+        typeof initialized?.userAgent === "string" &&
+        codexVersionAtLeast(initialized.userAgent, CODEX_EXCLUDE_TURNS_MIN_VERSION);
+      this.inactivitySupported =
+        typeof initialized?.userAgent === "string" &&
+        codexVersionAtLeast(initialized.userAgent, [0, 171, 0]);
       client.notify("initialized", {});
 
       this.speedModels =
@@ -4137,7 +4149,10 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   private async ensureThreadLoaded(): Promise<void> {
     if (!this.client || !this.currentThreadId) return;
-    const params: Record<string, unknown> = { threadId: this.currentThreadId };
+    const params: Record<string, unknown> = {
+      threadId: this.currentThreadId,
+      ...(this.excludeTurnsSupported ? { excludeTurns: true } : {}),
+    };
     if (this.config.writePolicy === "read_only") {
       params.approvalPolicy = "never";
       params.sandbox = "danger-full-access";
@@ -4145,6 +4160,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     const developerInstructions = composeSystemPromptParts(
       this.config.systemPrompt,
       this.config.daemonAppendSystemPrompt,
+      this.browserAndReaInstructions(),
     );
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
@@ -4301,6 +4317,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     const developerInstructions = composeSystemPromptParts(
       this.config.systemPrompt,
       this.config.daemonAppendSystemPrompt,
+      this.browserAndReaInstructions(),
     );
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
@@ -5072,6 +5089,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       config: this.buildCodexInnerConfig(),
       userMessageTurns: this.codexUserMessageTurns(),
       threadRollbackAvailable: this.threadRollbackAvailable,
+      excludeTurns: this.excludeTurnsSupported,
       setThreadId: async (threadId) => {
         this.currentThreadId = threadId;
         this.cachedRuntimeInfo = null;
@@ -5138,7 +5156,89 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  async close(): Promise<void> {
+  getRuntimePid(): number | undefined {
+    return this.client?.pid;
+  }
+
+  private locallyIdle(): boolean {
+    return (
+      !this.closed &&
+      this.connectionState === "connected" &&
+      !this.connectionPromise &&
+      !this.currentTurnId &&
+      !this.activeForegroundTurnId &&
+      !this.pendingForegroundStart &&
+      !this.pendingForegroundTurnIdentification &&
+      this.pendingPermissionHandlers.size === 0 &&
+      this.asyncQuestions.pending().length === 0 &&
+      this.pendingManualCompactionStarts === 0 &&
+      this.pendingRootCompactionItemIds.size === 0 &&
+      this.pendingAnonymousRootCompactions === 0 &&
+      this.pendingSubAgentNotificationsByThreadId.size === 0 &&
+      this.client?.idle === true
+    );
+  }
+
+  supportsInactivityClosure(): boolean {
+    return this.inactivitySupported && !!this.currentThreadId;
+  }
+
+  inactivityProofIsCurrent(): boolean {
+    return this.inactivityProofRevision === this.client?.activityRevision && this.locallyIdle();
+  }
+
+  async canCloseForInactivity(): Promise<boolean> {
+    const { client, currentThreadId: threadId } = this;
+    this.inactivityProofRevision = null;
+    if (!this.inactivitySupported || !client || !threadId || !this.locallyIdle()) return false;
+
+    const page = z.object({ data: z.array(z.unknown()), nextCursor: z.null() });
+    const checks = [
+      client.request("thread/loaded/list", {}, 2500),
+      client.request("thread/backgroundTerminals/list", { threadId }, 2500),
+      client.request("thread/goal/get", { threadId }, 2500),
+      client.request("thread/read", { threadId, includeTurns: false }, 2500),
+    ] as const;
+    const activityRevision = client.activityRevision;
+    const [loaded, terminals, goal, thread] = await Promise.all(checks);
+    const threads = page.safeParse(loaded);
+    const background = page.safeParse(terminals);
+    // A cursor is incomplete evidence. Any additional loaded thread could resume work
+    // independently, even if its last visible subagent event was terminal.
+    const safe =
+      threads.success &&
+      threads.data.data.length === 1 &&
+      threads.data.data[0] === threadId &&
+      background.success &&
+      background.data.data.length === 0 &&
+      z
+        .object({
+          goal: z.union([
+            z.null(),
+            z.object({ threadId: z.literal(threadId), status: z.enum(["paused", "complete"]) }),
+          ]),
+        })
+        .safeParse(goal).success &&
+      z
+        .object({
+          thread: z.object({
+            id: z.literal(threadId),
+            status: z.object({ type: z.literal("idle") }),
+          }),
+        })
+        .safeParse(thread).success &&
+      this.client === client &&
+      this.currentThreadId === threadId &&
+      client.activityRevision === activityRevision &&
+      this.locallyIdle();
+    if (safe) this.inactivityProofRevision = activityRevision;
+    return safe;
+  }
+
+  async close(options?: { forInactivity?: boolean }): Promise<void> {
+    if (options?.forInactivity && !this.inactivityProofIsCurrent()) {
+      throw new Error("Codex became active before inactivity closure");
+    }
     this.closed = true;
     this.clearPendingPermissions();
     this.pendingSubAgentNotificationsByThreadId.clear();
@@ -5147,7 +5247,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.activeClientMessageId = null;
     this.pendingForegroundTurnIdentification?.resolve(null);
     this.pendingForegroundTurnIdentification = null;
-    await this.disposeClient();
+    await this.disposeClient(options?.forInactivity);
     if (this.config.writePolicy === "read_only" && this.agentId) {
       await cleanupReadOnlyCodexTemp(this.agentId, this.deps.readOnlyStateRoot);
     }
@@ -5170,12 +5270,12 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.resolvedPermissionRequests.clear();
   }
 
-  private async disposeClient(): Promise<void> {
+  private async disposeClient(forInactivity?: boolean): Promise<void> {
     const client = this.client;
     this.connectionState = "disconnected";
     this.currentTurnId = null;
     if (client) {
-      await client.dispose();
+      await client.dispose(forInactivity);
     }
     this.client = null;
   }
@@ -5441,6 +5541,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     const developerInstructions = composeSystemPromptParts(
       this.config.systemPrompt,
       this.config.daemonAppendSystemPrompt,
+      this.browserAndReaInstructions(),
     );
     const params: Record<string, unknown> = {
       model,
@@ -5463,6 +5564,17 @@ export class CodexAppServerAgentSession implements AgentSession {
     return { params, approvalPolicy, sandbox };
   }
 
+  private browserAndReaInstructions(): string | undefined {
+    if (!this.harnessEnvironment.PASEO_BROWSER_OWNER || this.config.writePolicy === "read_only") {
+      return undefined;
+    }
+    return [
+      "Use Paseo's integrated browser when the user refers to a page already open there.",
+      "For autonomous browser work, use agent-browser with the inherited named session. Open it only when needed and run agent-browser close when the task ends, including after a failure. Keep any ongoing browser work in a tracked background terminal.",
+      "For reverse engineering, use the REA CLI on demand (rea, or the version-pinned command from the installed REA skill), within the applicable tool permissions.",
+    ].join(" ");
+  }
+
   private buildCodexInnerConfig(): Record<string, unknown> | null {
     const innerConfig: Record<string, unknown> = {};
     Object.assign(innerConfig, this.providerOptions);
@@ -5472,6 +5584,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     const browserEnv = Object.fromEntries(
       Object.entries(this.harnessEnvironment).filter(([key]) =>
         [
+          "PASEO_BROWSER_INSTALLATION",
+          "PASEO_BROWSER_OWNER",
+          "PASEO_BROWSER_WORKSPACE",
           "AGENT_BROWSER_NAMESPACE",
           "AGENT_BROWSER_SOCKET_DIR",
           "AGENT_BROWSER_SESSION",
@@ -7430,7 +7545,18 @@ export class CodexAppServerAgentClient implements AgentClient {
     },
   ): Promise<ChildProcessWithoutNullStreams> {
     const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
-    const args = [...launchPrefix.args, "app-server"];
+    const defaults: string[] = [];
+    if (options && launchEnv?.PASEO_BROWSER_OWNER && options.readOnlyCwd === undefined) {
+      const environment =
+        options.environment ?? buildCodexAppServerEnv(this.runtimeSettings, launchEnv);
+      if (environment.PASEO_CODEX_CHROME_DEVTOOLS !== "1") {
+        defaults.push("-c", 'mcp_servers.chrome-devtools={command="false",enabled=false}');
+      }
+      if (environment.PASEO_CODEX_REA_MCP !== "1") {
+        defaults.push("-c", 'mcp_servers.rea={command="false",enabled=false}');
+      }
+    }
+    const args = [...defaults, ...launchPrefix.args, "app-server"];
     if (options?.goalsEnabled) {
       args.push("--enable", "goals");
     }

@@ -12377,6 +12377,7 @@ test("inactive runtime closure requires provider proof and no reader across clie
     live.session.canCloseForInactivity = async () => true;
     manager.setTimelineReaders(reader, [agent.id]);
     expect(await manager.hibernateInactiveAgents(0)).toMatchObject({ reader: 1 });
+    expect(await manager.hibernateAgent(agent.id)).toBe(false);
     manager.setTimelineReaders(reader, []);
     expect(await manager.hibernateInactiveAgents(0)).toMatchObject({ "recent-use": 1 });
     expect(await manager.hibernateInactiveAgents(15 * 60_000 - 1)).toMatchObject({
@@ -12457,9 +12458,8 @@ test("twenty verified runtime sleep and resume cycles retain the same complete h
       const live = manager.getAgent(agent.id)!;
       if (!live.session) throw new Error("Expected live session");
       live.session.canCloseForInactivity = async () => true;
-      const now = cycle * 16 * 60_000;
-      await manager.hibernateInactiveAgents(now);
-      expect(await manager.hibernateInactiveAgents(now + 15 * 60_000)).toMatchObject({
+      expect(await manager.hibernateAgent(agent.id)).toBe(true);
+      expect(await manager.hibernateInactiveAgents()).toMatchObject({
         resident: 0,
         releasedTotal: cycle + 1,
       });

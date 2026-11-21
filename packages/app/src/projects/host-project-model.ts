@@ -16,6 +16,7 @@ export interface HostProjectRouteContext {
 
 // Host-local project IDs keep these personal defaults stable across renames.
 const LOCAL_WORKSPACE_PROJECT_IDS = new Set([
+  "prj_6215a8c65deea221", // Paseo
   "prj_c6385f310e80ffe2", // PARA
   "prj_79623d369509ceac", // SeO Compagnon
   "prj_4538b764102aa626", // debug

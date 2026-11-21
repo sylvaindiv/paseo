@@ -1,4 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { EventEmitter } from "node:events";
+import type { WebContents } from "electron";
+import { describe, expect, test, vi } from "vitest";
 import { PASEO_BROWSER_PROFILE_PARTITION } from "../browser-profile.js";
 import {
   getPaseoBrowserIdForWebContents,
@@ -6,9 +8,32 @@ import {
   isPaseoBrowserWebviewAttach,
   preparePaseoBrowserWebContents,
   registerAttachedPaseoBrowser,
+  registerBrowserWebviewNavigationGuards,
   unregisterPaseoBrowser,
   unregisterPaseoBrowserFromHost,
 } from "./index.js";
+
+describe("browser webview navigation guards", () => {
+  const blobUrl = "blob:http://127.0.0.1:51144/46b77bea-e860-4ea2-ae73-118d63b93a7c";
+
+  test.each([
+    ["webview", "will-frame-navigate", false, blobUrl, false],
+    ["webview", "will-frame-navigate", true, blobUrl, true],
+    ["webview", "will-navigate", true, blobUrl, true],
+    ["webview", "will-redirect", false, blobUrl, true],
+    ["window", "will-frame-navigate", false, blobUrl, true],
+    ["webview", "will-frame-navigate", false, "file:///private/example.html", true],
+    ["webview", "will-frame-navigate", false, "https://example.com", false],
+  ])("filters %s %s (main frame: %s) to %s", (type, event, isMainFrame, url, blocked) => {
+    const contents = Object.assign(new EventEmitter(), { getType: () => type });
+    registerBrowserWebviewNavigationGuards(contents as unknown as WebContents);
+    const preventDefault = vi.fn();
+
+    contents.emit(event, { url, isMainFrame, preventDefault });
+
+    expect(preventDefault).toHaveBeenCalledTimes(blocked ? 1 : 0);
+  });
+});
 
 class FakeRenderer {
   public constructor(public readonly id: number) {}

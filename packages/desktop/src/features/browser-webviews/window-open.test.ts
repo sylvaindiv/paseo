@@ -142,17 +142,20 @@ describe("browser webview window-open requests", () => {
     expect(result).toEqual({ kind: "popup" });
   });
 
-  it("denies unsupported window-open requests", () => {
-    const result = decideBrowserWindowOpenRequest({
-      url: "file:///etc/passwd",
-      disposition: "new-window",
-      frameName: "oauth",
-      features: "width=500,height=600",
-      hasPostBody: false,
-    });
+  it.each(["file:///etc/passwd", "blob:https://example.com/preview"])(
+    "denies unsupported window-open requests to %s",
+    (url) => {
+      const result = decideBrowserWindowOpenRequest({
+        url,
+        disposition: "new-window",
+        frameName: "oauth",
+        features: "width=500,height=600",
+        hasPostBody: false,
+      });
 
-    expect(result).toEqual({ kind: "deny" });
-  });
+      expect(result).toEqual({ kind: "deny" });
+    },
+  );
 });
 
 describe("pending browser window-open requests", () => {

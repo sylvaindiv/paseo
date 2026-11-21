@@ -22,6 +22,9 @@ type OptionalAgentSessionMethodName = {
 
 const OPTIONAL_AGENT_SESSION_METHOD_NAMES = [
   "canCloseForInactivity",
+  "supportsInactivityClosure",
+  "inactivityProofIsCurrent",
+  "getRuntimePid",
   "steerActiveTurn",
   "listCommands",
   "setModel",
@@ -145,6 +148,21 @@ class FakeSession implements AgentSession {
     return true;
   }
 
+  supportsInactivityClosure() {
+    this.recordedCalls.push("supportsInactivityClosure");
+    return true;
+  }
+
+  inactivityProofIsCurrent() {
+    this.recordedCalls.push("inactivityProofIsCurrent");
+    return true;
+  }
+
+  getRuntimePid() {
+    this.recordedCalls.push("getRuntimePid");
+    return 42;
+  }
+
   async listCommands() {
     this.recordedCalls.push("listCommands");
     return [];
@@ -197,6 +215,9 @@ describe("wrapSessionProvider", () => {
 
     await wrapped.steerActiveTurn?.("follow-up", { expectedTurnId: "turn-1" });
     expect(await wrapped.canCloseForInactivity?.()).toBe(true);
+    expect(wrapped.supportsInactivityClosure?.()).toBe(true);
+    expect(wrapped.inactivityProofIsCurrent?.()).toBe(true);
+    expect(wrapped.getRuntimePid?.()).toBe(42);
     await wrapped.listCommands?.();
     await wrapped.setModel?.("sonnet");
     await wrapped.setThinkingOption?.("high");
@@ -213,6 +234,9 @@ describe("wrapSessionProvider", () => {
     expect(session.recordedCalls).toEqual([
       "steerActiveTurn",
       "canCloseForInactivity",
+      "supportsInactivityClosure",
+      "inactivityProofIsCurrent",
+      "getRuntimePid",
       "listCommands",
       "setModel",
       "setThinkingOption",

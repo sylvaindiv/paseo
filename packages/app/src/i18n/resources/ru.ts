@@ -2424,6 +2424,11 @@ export const ru: TranslationResources = {
       playing: "Воспроизведение...",
       playbackFailed: "Ошибка воспроизведения: {{message}}",
       app: {
+        agentMemory: "Оценка памяти агентов",
+        memoryPeak: "Пик {{memory}} · {{time}}",
+        noMemoryAgents: "Нет агентов в памяти",
+        hibernate: "Приостановить",
+        hibernateUnavailable: "Не удалось приостановить агента.",
         title: "Диагностика приложения",
         rowTitle: "Диагностика приложения",
         rowHint:

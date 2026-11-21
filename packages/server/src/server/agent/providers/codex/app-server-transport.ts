@@ -174,6 +174,20 @@ export class CodexAppServerClient {
   private notificationHandler: NotificationHandler | null = null;
   private unexpectedTerminationHandler: UnexpectedTerminationHandler | null = null;
   private nextId = 1;
+  private handlingRequests = 0;
+  private sideEffects = 0;
+
+  get activityRevision(): number {
+    return this.nextId + this.sideEffects;
+  }
+
+  get pid(): number | undefined {
+    return this.disposed ? undefined : this.child.pid;
+  }
+
+  get idle(): boolean {
+    return !this.disposed && !this.pending.size && !this.handlingRequests;
+  }
   private disposed = false;
   private stderrBuffer = "";
 
@@ -252,11 +266,12 @@ export class CodexAppServerClient {
     if (this.disposed) {
       return;
     }
+    this.sideEffects++;
     const payload: JsonRpcNotification = { method, params };
     this.child.stdin.write(`${JSON.stringify(payload)}\n`);
   }
 
-  async dispose(): Promise<void> {
+  async dispose(forInactivity = false): Promise<void> {
     this.disposed = true;
     this.unexpectedTerminationHandler = null;
     this.rl.close();
@@ -267,6 +282,7 @@ export class CodexAppServerClient {
       // ignore
     }
     const result = await terminateWithTreeKill(this.child, {
+      directOnly: forInactivity,
       gracefulTimeoutMs: APP_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
       forceTimeoutMs: APP_SERVER_FORCE_SHUTDOWN_TIMEOUT_MS,
       onForceSignal: () => {
@@ -359,6 +375,8 @@ export class CodexAppServerClient {
         const request = raw;
         this.traceRawEvent(request);
         const handler = this.requestHandlers.get(request.method);
+        this.sideEffects++;
+        this.handlingRequests++;
         try {
           const result = handler ? await handler(request.params, request.id) : {};
           this.writeJsonRpcResponse({ id: request.id, result });
@@ -367,12 +385,15 @@ export class CodexAppServerClient {
             id: request.id,
             error: { message: error instanceof Error ? error.message : String(error) },
           });
+        } finally {
+          this.handlingRequests--;
         }
         return;
       }
     }
 
     if (isJsonRpcNotification(raw)) {
+      this.sideEffects++;
       this.traceRawEvent(raw);
       this.notificationHandler?.(raw.method, raw.params);
     }

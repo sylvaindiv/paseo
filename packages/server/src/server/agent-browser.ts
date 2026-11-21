@@ -1,11 +1,36 @@
 import { findExecutable } from "../executable-resolution/executable-resolution.js";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve as resolvePath } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { execCommand } from "../utils/spawn.js";
 import { agentBrowserEnv } from "./agent-browser-env.js";
 export { agentBrowserEnv } from "./agent-browser-env.js";
+
+export async function closeAgentBrowser(
+  env: Record<string, string>,
+  mayClose: () => boolean,
+  verify?: () => Promise<boolean>,
+): Promise<void> {
+  const session = env.AGENT_BROWSER_SESSION;
+  const socketDir = env.AGENT_BROWSER_SOCKET_DIR;
+  const namespace = env.AGENT_BROWSER_NAMESPACE;
+  if (!session || !socketDir || !namespace || !mayClose()) return;
+  // Agent-browser has nothing to close before this session's socket exists.
+  if (process.platform !== "win32") {
+    const socket = join(socketDir, "namespaces", namespace, "run", `${session}.sock`);
+    if (!(await lstat(socket).catch(() => null))?.isSocket()) return;
+  }
+  const executable = await findExecutable("agent-browser");
+  if (!executable) return;
+  const run = (args: string[]) =>
+    execCommand(executable, args, { envOverlay: env, timeout: 2500, maxBuffer: 64 * 1024 });
+  const { stdout } = await run(["session", "list", "--json"]);
+  const sessions = JSON.parse(stdout)?.data?.sessions;
+  if (!Array.isArray(sessions) || !sessions.includes(session) || !mayClose()) return;
+  if (verify && !(await verify())) return;
+  if (mayClose()) await run(["close"]);
+}
 
 export type AgentBrowserErrorCode = "tool_missing" | "version_incompatible" | "start_failed";
 export class AgentBrowserError extends Error {

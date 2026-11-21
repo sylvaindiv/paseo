@@ -2517,6 +2517,11 @@ export const en = {
       playing: "Playing...",
       playbackFailed: "Playback failed: {{message}}",
       app: {
+        agentMemory: "Agent memory estimate",
+        memoryPeak: "Peak {{memory}} · {{time}}",
+        noMemoryAgents: "No resident agents",
+        hibernate: "Put to sleep",
+        hibernateUnavailable: "The agent couldn’t be put to sleep.",
         title: "App diagnostic",
         rowTitle: "App diagnostic",
         rowHint: "Collect connection, daemon, provider, desktop, and log details",

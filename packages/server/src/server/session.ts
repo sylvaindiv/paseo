@@ -2374,6 +2374,56 @@ export class Session {
     return undefined;
   }
 
+  private async handleResourceMemoryRequest(
+    msg: Extract<
+      SessionInboundMessage,
+      { type: "daemon.resources.get_memory.request" | "agent.hibernate.request" }
+    >,
+  ): Promise<void> {
+    if (msg.type === "agent.hibernate.request") {
+      const released = await this.agentManager.hibernateAgent(msg.agentId);
+      this.emit({
+        type: "agent.hibernate.response",
+        payload: { requestId: msg.requestId, released },
+      });
+      return;
+    }
+    if (!this.authorization.allowsPermission("daemon.read")) {
+      this.emit({
+        type: "rpc_error",
+        payload: {
+          requestId: msg.requestId,
+          requestType: msg.type,
+          error: "Host diagnostics access is required",
+          code: "access_denied",
+        },
+      });
+      return undefined;
+    }
+    const snapshot = this.agentManager.resourceMemory;
+    const canWrite = this.authorization.allowsPermission("workspace.write");
+    this.emit({
+      type: "daemon.resources.get_memory.response",
+      payload: {
+        requestId: msg.requestId,
+        at: snapshot?.current.at ?? null,
+        peak: snapshot ? { at: snapshot.peak.at, bytes: snapshot.peak.totalBytes } : null,
+        agents: (snapshot?.current.agents ?? []).flatMap((agent) => {
+          const details = this.agentManager.getMemoryAgentDetails(agent.id);
+          return details
+            ? [
+                {
+                  ...agent,
+                  ...details,
+                  canHibernate: canWrite && details.canHibernate,
+                },
+              ]
+            : [];
+        }),
+      },
+    });
+  }
+
   private async dispatchInboundMessage(msg: SessionInboundMessage, source?: object): Promise<void> {
     const promise =
       this.dispatchSubscriptionMessage(msg, source) ??
@@ -3225,6 +3275,9 @@ export class Session {
 
   private async dispatchMiscMessage(msg: SessionInboundMessage): Promise<void> {
     switch (msg.type) {
+      case "daemon.resources.get_memory.request":
+      case "agent.hibernate.request":
+        return this.handleResourceMemoryRequest(msg);
       case "list_commands_request":
         await this.handleListCommandsRequest(msg);
         return;

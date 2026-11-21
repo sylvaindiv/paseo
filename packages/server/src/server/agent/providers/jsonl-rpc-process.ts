@@ -85,6 +85,10 @@ export class JsonlRpcProcess {
   private closing: Promise<void> | null = null;
   private readonly frameDecoder: JsonlFrameDecoder;
 
+  get pid(): number | undefined {
+    return this.disposed || this.exited ? undefined : this.child.pid;
+  }
+
   constructor(private readonly options: JsonlRpcProcessOptions) {
     this.diagnosticName = options.diagnosticName ?? "JSONL RPC";
     this.frameDecoder = new JsonlFrameDecoder({

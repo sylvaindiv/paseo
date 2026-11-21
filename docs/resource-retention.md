@@ -8,7 +8,34 @@ expiration and its test harness are described in [browser capture](browser-captu
 
 ## Local samples
 
-Every thirty seconds the daemon writes `$PASEO_HOME/logs/resource-retention.ndjson`. Samples contain
+Every thirty seconds the daemon writes `$PASEO_HOME/logs/resource-retention.ndjson`. It records
+estimated process RSS by agent and for the daemon, shared runtimes and unassigned descendants. A
+shared process enters the total once. On macOS the browser guard also supplies verified ownership
+for detached browsers. Each entry includes the highest daemon-side sample since startup, its time
+and the largest tool processes on that sample. The diagnostics sheet reads the latest cached sample.
+
+The desktop records interface memory and its sampled peak separately in `resource-retention.ndjson`
+under Electron's user-data directory. Its sample includes mounted workspaces and browser guests.
+Closing the window ends its sampling. Each journal has two segments of at most five MiB each.
+`.1` is the previous segment. Slow samples are skipped rather than queued.
+
+## Codex sessions
+
+Codex 0.171.0 and later must affirm an idle thread, no background terminals, no active goal and
+no other loaded thread before Paseo releases the runtime. Pending work, a reader on any client or
+an incomplete response retains it. **Put to sleep** in host diagnostics skips the inactivity
+delay and uses the same proof and durable save. It requires workspace write access.
+
+Paseo gives Codex a dedicated, named agent-browser session. Browse on demand and use the integrated
+browser for an existing Paseo page. On turn completion, Paseo closes the dedicated session only
+when Codex confirms it has no remaining work. The macOS guard retains ownership evidence for
+orphaned browser processes.
+
+Use the REA CLI on demand. Set `PASEO_CODEX_CHROME_DEVTOOLS=1` or `PASEO_CODEX_REA_MCP=1` in a
+Codex provider profile to use the corresponding configured MCP server on launch. Paseo applies
+its defaults at launch, so the global Codex configuration and running sessions are preserved.
+
+Samples contain
 process RSS for the daemon and descendants, Node memory, resident runtime counts, cumulative releases
 and counts by retention reason. `provider-unverified` means no provider proof is available, including
 a refused or timed-out check. A retained runtime is expected in that case.

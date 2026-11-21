@@ -2511,6 +2511,11 @@ export const fr: TranslationResources = {
       playing: "Lecture...",
       playbackFailed: "Échec de la lecture : {{message}}",
       app: {
+        agentMemory: "Mémoire estimée des agents",
+        memoryPeak: "Pic de {{memory}} · {{time}}",
+        noMemoryAgents: "Aucun agent en mémoire",
+        hibernate: "Mettre en veille",
+        hibernateUnavailable: "Impossible de mettre l’agent en veille.",
         title: "Diagnostic de l’application",
         rowTitle: "Diagnostic de l’application",
         rowHint:

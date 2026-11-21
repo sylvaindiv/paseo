@@ -1,3 +1,4 @@
+import { attributeResourceMemory } from "../../resource-retention.js";
 import { summarizeProcessTree } from "../../process-tree-diagnostics.js";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -545,5 +546,42 @@ describe("process tree diagnostics", () => {
       largest: [table[2], table[1], table[0]],
     });
     expect(summarizeProcessTree(table, 99)).toEqual({ processCount: 0, rss: 0, largest: [] });
+  });
+});
+
+test("attributes a detached browser and an agent spike, counting a shared runtime once", () => {
+  const entries = [
+    { pid: 1, ppid: 0, rss: 10, name: "daemon" },
+    { pid: 2, ppid: 1, rss: 10, name: "codex" },
+    { pid: 3, ppid: 2, rss: 120, name: "node" },
+    { pid: 4, ppid: 0, rss: 40, name: "Chromium" },
+    { pid: 5, ppid: 1, rss: 17, name: "opencode" },
+    { pid: 6, ppid: 5, rss: 3, name: "git" },
+    { pid: 7, ppid: 1, rss: 5, name: "unknown" },
+    { pid: 8, ppid: 0, rss: 250, name: "Other application" },
+  ];
+  const memory = attributeResourceMemory(
+    entries,
+    1,
+    [
+      { id: "shared-a", pid: 5 },
+      { id: "shared-b", pid: 5 },
+      { id: "spiking", pid: 2 },
+    ],
+    new Map([[4, "spiking"]]),
+  );
+  expect(memory).toMatchObject({
+    totalBytes: 205,
+    daemonBytes: 10,
+    sharedBytes: 20,
+    unattributedBytes: 5,
+  });
+  expect(memory.agents[0]).toEqual({
+    id: "spiking",
+    bytes: 170,
+    tools: [
+      { name: "node", bytes: 120 },
+      { name: "Chromium", bytes: 40 },
+    ],
   });
 });

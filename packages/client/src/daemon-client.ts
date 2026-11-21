@@ -5391,6 +5391,18 @@ export class DaemonClient {
     });
   }
 
+  getResourceMemory() {
+    return this.sendNamespacedCorrelatedSessionRequest<"daemon.resources.get_memory.response">({
+      message: { type: "daemon.resources.get_memory.request" },
+    });
+  }
+
+  hibernateAgent(agentId: string) {
+    return this.sendNamespacedCorrelatedSessionRequest<"agent.hibernate.response">({
+      message: { type: "agent.hibernate.request", agentId },
+    });
+  }
+
   async collectDiagnostics(requestId?: string): Promise<DiagnosticsPayload> {
     return this.sendNamespacedCorrelatedSessionRequest({
       requestId,

@@ -1252,6 +1252,10 @@ export class PiRpcAgentSession implements AgentSession {
   }
 
   private readonly runtimeSession: PiRuntimeSession;
+
+  getRuntimePid(): number | undefined {
+    return this.runtimeSession.getPid?.();
+  }
   private readonly config: AgentSessionConfig;
   private readonly cleanup?: () => void;
   private readonly extensionTimeoutMs: number;

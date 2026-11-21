@@ -2386,6 +2386,11 @@ export const ar: TranslationResources = {
       playing: "جارٍ اللعب...",
       playbackFailed: "فشل التشغيل:{{message}}",
       app: {
+        agentMemory: "ذاكرة الوكلاء المقدّرة",
+        memoryPeak: "الذروة {{memory}} · {{time}}",
+        noMemoryAgents: "لا يوجد وكلاء في الذاكرة",
+        hibernate: "وضع السكون",
+        hibernateUnavailable: "تعذّر وضع الوكيل في السكون.",
         title: "App diagnostic",
         rowTitle: "App diagnostic",
         rowHint: "Collect connection, daemon, provider, desktop, and log details",

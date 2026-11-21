@@ -44,6 +44,16 @@ describe("SessionAuthorization", () => {
     expect(writer.allowsInbound(inboundMessage("workspace.todos.mutate.request"))).toBe(true);
   });
 
+  test("memory diagnostics do not grant permission to hibernate an agent", () => {
+    const reader = new SessionAuthorization(["daemon.read", "workspace.read"]);
+    const writer = new SessionAuthorization(["workspace.write"]);
+    const hub = new SessionAuthorization(["hub.execute"]);
+    expect(reader.allowsInbound(inboundMessage("daemon.resources.get_memory.request"))).toBe(true);
+    expect(reader.allowsInbound(inboundMessage("agent.hibernate.request"))).toBe(false);
+    expect(hub.allowsInbound(inboundMessage("agent.hibernate.request"))).toBe(false);
+    expect(writer.allowsInbound(inboundMessage("agent.hibernate.request"))).toBe(true);
+  });
+
   test("owner authority covers every session operation", () => {
     const authorization = new SessionAuthorization(OWNER_PERMISSIONS);
 
