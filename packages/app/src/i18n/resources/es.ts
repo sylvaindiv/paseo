@@ -2,6 +2,23 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const es: TranslationResources = {
+  schedules: {
+    allProjects: "Todos los proyectos",
+    unassigned: "Sin proyecto",
+    allStatuses: "Todos los estados",
+    active: "Activas",
+    paused: "En pausa",
+    ended: "Finalizadas",
+    nextRun: "Próxima ejecución",
+    nameOrder: "Nombre (A–Z)",
+    recent: "Más recientes",
+    projectFilter: "Filtrar por proyecto",
+    statusFilter: "Filtrar por estado",
+    sort: "Ordenar programaciones",
+    noResults: "No hay programaciones que coincidan",
+    reset: "Restablecer filtros",
+    empty: "No hay programaciones",
+  },
   interactive: {
     deepenPrompt:
       "Explore this response: explain the assumptions, compare alternatives and ask a focused question if needed.",

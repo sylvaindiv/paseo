@@ -86,10 +86,15 @@ test.describe("Schedules", () => {
     const scheduleId = await seedMockSchedule(workspace, scheduleName);
     cleanupTasks.push(() => deleteSeededSchedule(workspace, scheduleId));
 
-    await page.goto(buildSchedulesRoute());
+    await gotoAppShell(page);
+    await waitForSidebarHydration(page);
+    await page.getByRole("button", { name: "Schedules", exact: true }).click();
     const row = page.getByTestId(`schedule-row-${scheduleId}`);
     await expect(row).toBeVisible({ timeout: 30_000 });
-    await expect(row).toContainText(workspace.projectDisplayName, { timeout: 30_000 });
+    const project = page.getByTestId("schedule-project-group").filter({ has: row });
+    await expect(project.getByTestId("schedule-project-toggle")).toContainText(
+      workspace.projectDisplayName,
+    );
 
     await row.click();
     const formSheet = page.getByTestId("schedule-form-sheet");

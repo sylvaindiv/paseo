@@ -3,6 +3,8 @@ import type { ProjectSummary } from "@/utils/projects";
 import {
   buildProjectNameByCwd,
   buildScheduleProjectTargets,
+  buildScheduleProjectLookup,
+  resolveScheduleProject,
   describeScheduleCwd,
 } from "./schedule-project-targets";
 
@@ -78,5 +80,68 @@ describe("describeScheduleCwd", () => {
     expect(
       describeScheduleCwd({ serverId: "host-1", cwd: "/Users/sam/api", projectNameByCwd: byCwd }),
     ).toBe("~/api");
+  });
+});
+
+describe("resolveScheduleProject", () => {
+  const workspace = {
+    id: "worktree-1",
+    name: "Feature",
+    workspaceKind: "worktree",
+    status: "running",
+    currentBranch: null,
+    changeRequestNumber: null,
+  } satisfies ProjectSummary["hosts"][number]["workspaces"][number];
+  const lookup = buildScheduleProjectLookup([
+    makeProject({
+      viewKey: "shared",
+      projectName: "Same name",
+      hosts: [
+        makeHost({ repoRoot: "/tmp/shared", workspaces: [workspace] }),
+        makeHost({ serverId: "host-2", repoRoot: "/mnt/shared" }),
+      ],
+    }),
+    makeProject({
+      viewKey: "other",
+      projectName: "Same name",
+      hosts: [makeHost({ serverId: "host-2", repoRoot: "/tmp/shared" })],
+    }),
+  ]);
+  const target = (cwd: string) =>
+    ({ type: "new-agent", config: { provider: "codex", cwd } }) as const;
+  const heartbeat = { type: "agent", agentId: "agent-1" } as const;
+
+  it("merges matching project placements across hosts while distinguishing homonyms", () => {
+    expect(resolveScheduleProject(lookup, "host-1", target("/tmp/shared"))?.id).toBe(
+      "project:shared",
+    );
+    expect(resolveScheduleProject(lookup, "host-2", target("/mnt/shared"))?.id).toBe(
+      "project:shared",
+    );
+    expect(resolveScheduleProject(lookup, "host-2", target("/tmp/shared"))?.id).toBe(
+      "project:other",
+    );
+  });
+
+  it("prefers the agent's workspace and falls back to its known project root", () => {
+    expect(
+      resolveScheduleProject(lookup, "host-1", heartbeat, {
+        workspaceId: workspace.id,
+        cwd: "/tmp/worktrees/feature",
+        projectRoot: "/retired/root",
+      })?.id,
+    ).toBe("project:shared");
+    expect(
+      resolveScheduleProject(lookup, "host-2", heartbeat, {
+        workspaceId: workspace.id,
+        cwd: "/tmp/worktrees/feature",
+        projectRoot: "/mnt/shared",
+      })?.id,
+    ).toBe("project:shared");
+  });
+
+  it("leaves missing targets and unknown paths unassigned", () => {
+    expect(resolveScheduleProject(lookup, "host-2", heartbeat)).toBeNull();
+    expect(resolveScheduleProject(lookup, "host-1", target("/tmp/shared-backup"))).toBeNull();
   });
 });

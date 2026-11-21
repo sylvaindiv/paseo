@@ -2,6 +2,23 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ko: TranslationResources = {
+  schedules: {
+    allProjects: "모든 프로젝트",
+    unassigned: "프로젝트 없음",
+    allStatuses: "모든 상태",
+    active: "활성",
+    paused: "일시 중지",
+    ended: "종료",
+    nextRun: "다음 실행",
+    nameOrder: "이름순",
+    recent: "최신순",
+    projectFilter: "프로젝트로 필터링",
+    statusFilter: "상태로 필터링",
+    sort: "예약 정렬",
+    noResults: "일치하는 예약 없음",
+    reset: "필터 초기화",
+    empty: "예약 없음",
+  },
   interactive: {
     deepenPrompt:
       "Explore this response: explain the assumptions, compare alternatives and ask a focused question if needed.",

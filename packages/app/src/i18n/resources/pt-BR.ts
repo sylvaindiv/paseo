@@ -2,6 +2,23 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ptBR: TranslationResources = {
+  schedules: {
+    allProjects: "Todos os projetos",
+    unassigned: "Sem projeto",
+    allStatuses: "Todos os estados",
+    active: "Ativos",
+    paused: "Pausados",
+    ended: "Encerrados",
+    nextRun: "Próxima execução",
+    nameOrder: "Nome (A–Z)",
+    recent: "Mais recentes",
+    projectFilter: "Filtrar por projeto",
+    statusFilter: "Filtrar por estado",
+    sort: "Ordenar agendamentos",
+    noResults: "Nenhum agendamento encontrado",
+    reset: "Limpar filtros",
+    empty: "Nenhum agendamento",
+  },
   interactive: {
     deepenPrompt:
       "Explore this response: explain the assumptions, compare alternatives and ask a focused question if needed.",

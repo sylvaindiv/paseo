@@ -69,10 +69,9 @@ interface ScheduleRowProps extends ScheduleRowActions {
   state: ScheduleDerivedState;
   /** Host name, rendered when the list spans more than one host. */
   serverName?: string;
-  /** True when only one host exists and the host name would be redundant. */
-  singleHost?: boolean;
+  /** The project header already identifies project targets. */
+  showTarget: boolean;
   pending?: ScheduleRowPending;
-  isFirst: boolean;
 }
 
 function stateBadge(state: ScheduleDerivedState): {
@@ -93,51 +92,33 @@ function stateBadge(state: ScheduleDerivedState): {
   }
 }
 
-// Meta reads left-to-right as identity → history → future: how often, when it
-// was created, when it last ran, and (only while it can still run) when it runs
-// next. Status lives on the badge, never repeated here.
-function buildMeta(input: {
-  schedule: ScheduleSummary;
-  state: ScheduleDerivedState;
-  createdAgo: string;
-  lastRunAgo: string;
-  serverName: string | undefined;
-  singleHost: boolean;
-}): string {
-  const { schedule, state, serverName, singleHost } = input;
-  const parts = [
-    formatCadence(schedule.cadence),
-    `Created ${input.createdAgo}`,
-    schedule.lastRunAt ? `Last run ${input.lastRunAgo}` : "Never run",
-  ];
-  if (state === "active") {
-    const next = formatNextRun(schedule.nextRunAt);
-    if (next) {
-      parts.push(`Next run ${next}`);
-    }
-  }
-  if (serverName && !singleHost) {
-    parts.unshift(serverName);
-  }
-  return parts.join(" · ");
-}
-
 function ScheduleMeta({
   schedule,
   state,
   serverName,
-  singleHost,
+  targetLabel,
 }: {
   schedule: ScheduleSummary;
   state: ScheduleDerivedState;
   serverName: string | undefined;
-  singleHost: boolean;
+  targetLabel?: string;
 }) {
   const createdAgo = useTimeAgo(new Date(schedule.createdAt));
   const lastRunAgo = useTimeAgo(schedule.lastRunAt ? new Date(schedule.lastRunAt) : null);
-  const meta = buildMeta({ schedule, state, createdAgo, lastRunAgo, serverName, singleHost });
+  const next = state === "active" ? formatNextRun(schedule.nextRunAt) : null;
+  const cadence = formatCadence(schedule.cadence);
+  const meta = [
+    next ? `Next run ${next}` : cadence,
+    serverName,
+    targetLabel,
+    next ? cadence : null,
+    `Created ${createdAgo}`,
+    schedule.lastRunAt ? `Last run ${lastRunAgo}` : "Never run",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <Text style={settingsStyles.rowHint} numberOfLines={1}>
+    <Text style={styles.meta} numberOfLines={1} accessibilityLabel={meta}>
       {meta}
     </Text>
   );
@@ -175,9 +156,8 @@ export function ScheduleRow({
   provider,
   state,
   serverName,
-  singleHost,
+  showTarget,
   pending,
-  isFirst,
   onEdit,
   onPause,
   onResume,
@@ -198,11 +178,11 @@ export function ScheduleRow({
     ({ pressed }: PressableStateCallbackType) => [
       settingsStyles.row,
       styles.row,
-      !isFirst && settingsStyles.rowBorder,
+      settingsStyles.rowBorder,
       isHovered && !isCompact && styles.rowHovered,
       pressed && styles.rowPressed,
     ],
-    [isFirst, isHovered, isCompact],
+    [isHovered, isCompact],
   );
 
   return (
@@ -226,14 +206,11 @@ export function ScheduleRow({
             <Text style={settingsStyles.rowTitle} numberOfLines={1}>
               {title}
             </Text>
-            <Text style={styles.target} numberOfLines={1}>
-              {targetLabel}
-            </Text>
             <ScheduleMeta
               schedule={schedule}
               state={state}
               serverName={serverName}
-              singleHost={singleHost ?? false}
+              targetLabel={showTarget ? targetLabel : undefined}
             />
           </View>
         </View>
@@ -406,7 +383,10 @@ const styles = StyleSheet.create((theme) => ({
     position: "relative",
   },
   row: {
-    gap: theme.spacing[3],
+    minHeight: 44,
+    paddingVertical: theme.spacing[1.5],
+    paddingHorizontal: theme.spacing[3],
+    gap: theme.spacing[1.5],
   },
   rowHovered: {
     backgroundColor: theme.colors.surface2,
@@ -418,8 +398,8 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
     flexDirection: "row",
-    alignItems: "flex-start",
-    gap: theme.spacing[3],
+    alignItems: "center",
+    gap: theme.spacing[1.5],
   },
   leading: {
     width: PROVIDER_ICON_SIZE,
@@ -431,15 +411,14 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
   },
-  target: {
-    marginTop: theme.spacing[1],
+  meta: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.base,
+    fontSize: theme.fontSize.sm,
   },
   trailing: {
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[2],
+    gap: theme.spacing[1],
   },
   kebabTrigger: {
     padding: theme.spacing[1],

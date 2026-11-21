@@ -2,6 +2,23 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ja: TranslationResources = {
+  schedules: {
+    allProjects: "すべてのプロジェクト",
+    unassigned: "プロジェクトなし",
+    allStatuses: "すべての状態",
+    active: "有効",
+    paused: "一時停止中",
+    ended: "終了",
+    nextRun: "次回の実行",
+    nameOrder: "名前順",
+    recent: "新しい順",
+    projectFilter: "プロジェクトで絞り込む",
+    statusFilter: "状態で絞り込む",
+    sort: "スケジュールを並べ替える",
+    noResults: "該当するスケジュールがありません",
+    reset: "フィルターをリセット",
+    empty: "スケジュールがありません",
+  },
   interactive: {
     deepenPrompt:
       "Explore this response: explain the assumptions, compare alternatives and ask a focused question if needed.",

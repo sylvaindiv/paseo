@@ -1,3 +1,4 @@
+import type { ScheduleSummary } from "@getpaseo/protocol/schedule/types";
 import type { ProjectSummary } from "@/utils/projects";
 import { shortenPath } from "@/utils/shorten-path";
 
@@ -73,5 +74,76 @@ export function describeScheduleCwd(input: {
 }): string {
   return (
     input.projectNameByCwd.get(projectNameKey(input.serverId, input.cwd)) ?? shortenPath(input.cwd)
+  );
+}
+
+export interface ScheduleProject {
+  id: string;
+  label: string;
+}
+
+export interface ScheduleProjectLookup {
+  roots: ReadonlyMap<string, ScheduleProject | null>;
+  workspaces: ReadonlyMap<string, ScheduleProject>;
+}
+
+export interface ScheduleAgentPlacement {
+  workspaceId?: string | null;
+  cwd: string;
+  projectRoot?: string | null;
+}
+
+export function buildScheduleProjectLookup(
+  projects: readonly ProjectSummary[],
+): ScheduleProjectLookup {
+  const roots = new Map<string, ScheduleProject | null>();
+  const workspaces = new Map<string, ScheduleProject>();
+  const labelCounts = new Map<string, number>();
+  for (const { projectName } of projects) {
+    labelCounts.set(projectName, (labelCounts.get(projectName) ?? 0) + 1);
+  }
+
+  for (const project of projects) {
+    const firstHost = project.hosts[0];
+    const disambiguation =
+      firstHost && (labelCounts.get(project.projectName) ?? 0) > 1
+        ? [firstHost.serverName, shortenPath(firstHost.repoRoot)].filter(Boolean).join(" · ")
+        : "";
+    const ref: ScheduleProject = {
+      id: `${PROJECT_OPTION_PREFIX}${project.viewKey}`,
+      label: disambiguation ? `${project.projectName} · ${disambiguation}` : project.projectName,
+    };
+    for (const host of project.hosts) {
+      if (host.repoRoot.trim()) {
+        const key = projectNameKey(host.serverId, host.repoRoot);
+        const existing = roots.get(key);
+        roots.set(key, existing === undefined || existing?.id === ref.id ? ref : null);
+      }
+      for (const workspace of host.workspaces) {
+        workspaces.set(JSON.stringify([host.serverId, workspace.id]), ref);
+      }
+    }
+  }
+  return { roots, workspaces };
+}
+
+export function resolveScheduleProject(
+  lookup: ScheduleProjectLookup,
+  serverId: string,
+  target: ScheduleSummary["target"],
+  agent?: ScheduleAgentPlacement,
+): ScheduleProject | null {
+  if (target.type === "new-agent") {
+    return lookup.roots.get(projectNameKey(serverId, target.config.cwd)) ?? null;
+  }
+  if (!agent) return null;
+  const workspace = agent.workspaceId
+    ? lookup.workspaces.get(JSON.stringify([serverId, agent.workspaceId]))
+    : undefined;
+  return (
+    workspace ??
+    (agent.projectRoot ? lookup.roots.get(projectNameKey(serverId, agent.projectRoot)) : null) ??
+    lookup.roots.get(projectNameKey(serverId, agent.cwd)) ??
+    null
   );
 }

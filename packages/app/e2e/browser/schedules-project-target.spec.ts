@@ -1,3 +1,4 @@
+import type { CreateScheduleInput } from "@getpaseo/protocol/schedule/types";
 import { expect, test, type Page } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import { addScheduleHostAndReload, createScheduleHost } from "../support/helpers/schedule-host";
@@ -27,8 +28,12 @@ interface ScheduleListItem {
 }
 
 interface ScheduleSeedClient {
+  scheduleCreate(
+    input: CreateScheduleInput,
+  ): Promise<{ schedule: ScheduleListItem | null; error: string | null }>;
   scheduleList(): Promise<{ schedules: ScheduleListItem[]; error: string | null }>;
   scheduleDelete(input: { id: string }): Promise<{ error: string | null }>;
+  schedulePause(input: { id: string }): Promise<{ error: string | null }>;
 }
 
 async function selectModelByLabel(page: Page, label: string): Promise<void> {
@@ -141,6 +146,22 @@ async function findScheduleIdByName(workspace: SeededWorkspace, name: string): P
   return schedule.id;
 }
 
+function distinctColumnPositions(elements: Element[]): number {
+  return new Set(elements.map((element) => Math.round(element.getBoundingClientRect().x))).size;
+}
+
+function horizontalOverflow(element: Element): number {
+  return element.scrollWidth - element.clientWidth;
+}
+
+async function checkScheduleColumns(page: Page, count: number, path: string) {
+  const groups = page.getByTestId("schedule-project-group");
+  const list = page.getByTestId("schedules-list");
+  await expect.poll(() => groups.evaluateAll(distinctColumnPositions)).toBe(count);
+  await expect.poll(() => list.evaluate(horizontalOverflow)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path });
+}
+
 test.describe("Schedules project target", () => {
   const cleanupTasks: Array<() => Promise<void>> = [];
 
@@ -149,6 +170,98 @@ test.describe("Schedules project target", () => {
       await cleanup();
     }
     cleanupTasks.length = 0;
+  });
+
+  test("packs project sections by available width and keeps the schedule actions", async ({
+    page,
+  }, testInfo) => {
+    const projects = [
+      [
+        "Atelier",
+        ["Revue des PR", "Bilan hebdomadaire", "Tests de régression", "Veille des dépendances"],
+      ],
+      ["Documentation", ["Vérification des liens"]],
+      ["Infra", ["Sauvegarde du serveur", "Nettoyage des journaux"]],
+      ["Paseo", ["Rapport de stabilité"]],
+    ] as const;
+    let scheduleId = "";
+    for (const [label, names] of projects) {
+      const workspace = await seedWorkspace({
+        repoPrefix: `schedule-layout-${label.toLowerCase()}-`,
+        title: label,
+        git: false,
+      });
+      cleanupTasks.push(() => workspace.cleanup());
+      await workspace.client.renameProject(workspace.projectId, label);
+      const client = workspace.client as unknown as ScheduleSeedClient;
+      for (const [index, name] of names.entries()) {
+        const result = await client.scheduleCreate({
+          name,
+          prompt: "Run the scheduled task.",
+          cadence: { type: "cron", expression: `0 ${9 + index * 3} * * *` },
+          target: {
+            type: "new-agent",
+            config: {
+              provider: "mock",
+              cwd: workspace.repoPath,
+              model: "ten-second-stream",
+              modeId: "load-test",
+            },
+          },
+          runOnCreate: false,
+        });
+        if (!result.schedule) throw new Error(result.error ?? "Could not seed schedule");
+        const id = result.schedule.id;
+        cleanupTasks.push(async () => {
+          await client.scheduleDelete({ id });
+        });
+        if (name === "Revue des PR") scheduleId = id;
+        if (name === "Nettoyage des journaux") {
+          const paused = await client.schedulePause({ id });
+          if (paused.error) throw new Error(paused.error);
+        }
+      }
+    }
+
+    await page.setViewportSize({ width: 1280, height: 880 });
+    await page.goto(buildSchedulesRoute());
+    const groups = page.getByTestId("schedule-project-group");
+    await expect(groups).toHaveCount(projects.length, { timeout: 30_000 });
+    const toggles = page.getByTestId("schedule-project-toggle");
+    const row = page.getByTestId(`schedule-row-${scheduleId}`);
+
+    await checkScheduleColumns(page, 3, testInfo.outputPath("schedules-three-columns.png"));
+    const projectFilter = page.getByTestId("schedules-project-filter");
+    const filterBox = await projectFilter.boundingBox();
+    expect(filterBox?.height).toBe(32);
+    const left = async (index: number) => (await groups.nth(index).boundingBox())?.x;
+    await expect.poll(async () => (await left(3)) === (await left(1))).toBe(true);
+    await toggles.first().click();
+    await expect(toggles.first()).toHaveAttribute("aria-expanded", "false");
+    await expect(row).toHaveCount(0);
+    await expect.poll(async () => (await left(3)) === (await left(0))).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("schedules-reflow.png") });
+
+    await page.setViewportSize({ width: 845, height: 880 });
+    await expect(toggles.first()).toHaveAttribute("aria-expanded", "false");
+    await toggles.first().click();
+    await checkScheduleColumns(page, 2, testInfo.outputPath("schedules-two-columns.png"));
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await checkScheduleColumns(page, 1, testInfo.outputPath("schedules-one-column.png"));
+    const mobileSort = await page.getByTestId("schedules-sort").boundingBox();
+    expect(mobileSort?.y).toBe((await projectFilter.boundingBox())?.y);
+    await projectFilter.click();
+    await page.getByTestId("schedules-project-option").nth(1).click();
+    await expect(groups).toHaveCount(1);
+
+    await page.getByTestId("schedules-status-filter").click();
+    await page.getByTestId("schedules-filter-paused").click();
+    await expect(page.getByTestId("schedules-filter-empty")).toBeVisible();
+    await page.getByTestId("schedules-filter-reset").click();
+    await expect(groups).toHaveCount(projects.length);
+    await row.click();
+    await expect(page.getByTestId("schedule-form-sheet")).toBeVisible();
   });
 
   test("dismisses the new schedule sheet without reopening", async ({ page }) => {

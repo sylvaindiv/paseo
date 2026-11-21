@@ -8,17 +8,25 @@ import {
 } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
-import { CalendarClock, Plus } from "lucide-react-native";
-import { StyleSheet } from "react-native-unistyles";
+import { CalendarClock, ChevronDown, Plus } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { MenuHeader } from "@/components/headers/menu-header";
 import { ExternalLink } from "@/components/ui/external-link";
 import { HostFilter } from "@/components/hosts/host-filter";
 import { ALL_HOSTS_OPTION_ID } from "@/components/hosts/host-picker";
 import { ScheduleFormSheet } from "@/components/schedules/schedule-form-sheet";
-import { SchedulesTable, type ScheduleRowView } from "@/components/schedules/schedules-table";
+import { SchedulesTable } from "@/components/schedules/schedules-table";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { SegmentedControl } from "@/components/ui/segmented-control";
+import { createControlGeometry } from "@/components/ui/control-geometry";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { mutedIconColorMapping } from "@/components/ui/icon-color";
 import { useAggregatedAgents } from "@/hooks/use-aggregated-agents";
 import { useProjects } from "@/hooks/use-projects";
 import {
@@ -28,15 +36,22 @@ import {
   type ScheduleHostError,
 } from "@/hooks/use-schedules";
 import { getHostRuntimeStore, useHosts } from "@/runtime/host-runtime";
+import { resolveSchedule } from "@/schedules/schedule-derivation";
 import {
-  resolveSchedule,
-  type ScheduleBucket,
-  type ScheduleTargetAgent,
-} from "@/schedules/schedule-derivation";
+  ALL_SCHEDULE_PROJECTS,
+  buildScheduleGroups,
+  listScheduleProjects,
+  type ScheduleGroup,
+  type ScheduleRowView,
+  type ScheduleSort,
+  type ScheduleStatusFilter,
+} from "@/schedules/schedule-list";
 import { resolveSchedulesScreenBodyState } from "./schedules-screen-state";
 import {
   buildProjectNameByCwd,
+  buildScheduleProjectLookup,
   buildScheduleProjectTargets,
+  resolveScheduleProject,
 } from "@/schedules/schedule-project-targets";
 import type { ScheduleSummary } from "@getpaseo/protocol/schedule/types";
 
@@ -45,10 +60,13 @@ type FormState =
   | { mode: "create" }
   | { mode: "edit"; serverId: string; schedule: ScheduleSummary };
 
-const STATUS_FILTER_OPTIONS: { value: ScheduleBucket; label: string; testID: string }[] = [
-  { value: "runnable", label: "Active", testID: "schedules-filter-active" },
-  { value: "ended", label: "Ended", testID: "schedules-filter-ended" },
-];
+const ThemedChevronDown = withUnistyles(ChevronDown);
+
+interface ScheduleMenuOption<T extends string> {
+  id: T;
+  label: string;
+  testID?: string;
+}
 
 const EMPTY_SCHEDULES: AggregatedSchedule[] = [];
 
@@ -63,6 +81,8 @@ export function SchedulesScreen(): ReactElement {
 }
 
 function SchedulesScreenContent(): ReactElement {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en";
   const { loadState, hostErrors, isError, refetch } = useSchedules();
   const schedules = loadState.status === "loaded" ? loadState.data : EMPTY_SCHEDULES;
   const { agents } = useAggregatedAgents({ includeArchived: true });
@@ -93,7 +113,24 @@ function SchedulesScreenContent(): ReactElement {
 
   const [form, setForm] = useState<FormState>({ mode: "closed" });
   const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
-  const [statusFilter, setStatusFilter] = useState<ScheduleBucket>("runnable");
+  const [statusFilter, setStatusFilter] = useState<ScheduleStatusFilter>("all");
+  const [selectedProject, setSelectedProject] = useState<ScheduleMenuOption<string> | null>(null);
+  const [sort, setSort] = useState<ScheduleSort>("next");
+  const [collapsed, setCollapsed] = useState(() => new Set<string>());
+  const toggleGroup = useCallback((id: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const resetFilters = useCallback(() => {
+    setSelectedHost(ALL_HOSTS_OPTION_ID);
+    setStatusFilter("all");
+    setSelectedProject(null);
+  }, []);
 
   useEffect(() => {
     if (
@@ -110,69 +147,137 @@ function SchedulesScreenContent(): ReactElement {
   }, []);
   const closeForm = useCallback(() => setForm({ mode: "closed" }), []);
 
-  const agentsByKey = useMemo(() => {
-    const map = new Map<string, ScheduleTargetAgent>();
-    for (const agent of agents) {
-      map.set(`${agent.serverId}:${agent.id}`, { title: agent.title, provider: agent.provider });
-    }
-    return map;
-  }, [agents]);
-
+  const agentsByKey = useMemo(
+    () => new Map(agents.map((agent) => [`${agent.serverId}:${agent.id}`, agent])),
+    [agents],
+  );
+  const projectLookup = useMemo(() => buildScheduleProjectLookup(projects), [projects]);
   const projectNameByCwd = useMemo(
     () => buildProjectNameByCwd(buildScheduleProjectTargets(projects)),
     [projects],
   );
 
-  // Resolve every schedule's derived state and target line once, then partition
-  // by the host and status filters. Sorted newest-first for a stable order
-  // across hosts.
-  const resolvedRows = useMemo(() => {
+  const showHost = hosts.length > 1 && selectedHost === ALL_HOSTS_OPTION_ID;
+  const rows = useMemo<ScheduleRowView[]>(() => {
     const now = Date.now();
-    return schedules.map((schedule) => ({
-      schedule,
-      resolved: resolveSchedule({
+    return schedules.map((schedule) => {
+      const { serverId, target } = schedule;
+      const resolved = resolveSchedule({
         schedule,
-        serverId: schedule.serverId,
+        serverId,
         now,
         agentsByKey,
         projectNameByCwd,
-        agentDataLoaded: agentDirReadyHosts.has(schedule.serverId),
-      }),
-    }));
-  }, [schedules, agentsByKey, projectNameByCwd, agentDirReadyHosts]);
-
-  const visibleRows = useMemo<ScheduleRowView[]>(() => {
-    const singleHost = hosts.length <= 1;
-    return resolvedRows
-      .filter(
-        ({ schedule, resolved }) =>
-          (selectedHost === ALL_HOSTS_OPTION_ID || schedule.serverId === selectedHost) &&
-          resolved.bucket === statusFilter,
-      )
-      .sort((a, b) => Date.parse(b.schedule.createdAt) - Date.parse(a.schedule.createdAt))
-      .map(({ schedule, resolved }) => ({
+        agentDataLoaded: agentDirReadyHosts.has(serverId),
+      });
+      const agent =
+        target.type === "agent" ? agentsByKey.get(`${serverId}:${target.agentId}`) : undefined;
+      return {
         schedule,
+        project: resolveScheduleProject(
+          projectLookup,
+          serverId,
+          target,
+          agent && {
+            workspaceId: agent.workspaceId,
+            cwd: agent.cwd,
+            projectRoot: agent.projectPlacement?.checkout.mainRepoRoot,
+          },
+        ),
         targetLabel: resolved.target.label,
         provider: resolved.target.provider,
         state: resolved.state,
-        serverName: schedule.serverName,
-        singleHost,
-      }));
-  }, [resolvedRows, selectedHost, statusFilter, hosts.length]);
+        showHost,
+      };
+    });
+  }, [schedules, agentsByKey, projectNameByCwd, projectLookup, agentDirReadyHosts, showHost]);
+
+  const projectId = selectedProject?.id ?? ALL_SCHEDULE_PROJECTS;
+  const unassignedLabel = t("schedules.unassigned");
+  const groups = useMemo(
+    () =>
+      buildScheduleGroups(rows, {
+        host: selectedHost === ALL_HOSTS_OPTION_ID ? null : selectedHost,
+        status: statusFilter,
+        project: projectId,
+        sort,
+        locale,
+        unassignedLabel,
+      }),
+    [rows, selectedHost, statusFilter, projectId, sort, locale, unassignedLabel],
+  );
+  const projectOptions = useMemo(
+    () => listScheduleProjects(rows, locale, unassignedLabel),
+    [rows, locale, unassignedLabel],
+  );
+  const statusOptions: ScheduleMenuOption<ScheduleStatusFilter>[] = [
+    { id: "all", label: t("schedules.allStatuses") },
+    { id: "active", label: t("schedules.active"), testID: "schedules-filter-active" },
+    { id: "paused", label: t("schedules.paused"), testID: "schedules-filter-paused" },
+    { id: "ended", label: t("schedules.ended"), testID: "schedules-filter-ended" },
+  ];
+  const sortOptions: ScheduleMenuOption<ScheduleSort>[] = [
+    { id: "next", label: t("schedules.nextRun") },
+    { id: "name", label: t("schedules.nameOrder") },
+    { id: "recent", label: t("schedules.recent") },
+  ];
+  const projectMenuOptions = [
+    { id: ALL_SCHEDULE_PROJECTS, label: t("schedules.allProjects") },
+    ...projectOptions,
+  ];
+  if (selectedProject && !projectOptions.some((option) => option.id === projectId)) {
+    projectMenuOptions.push(selectedProject);
+  }
+  const onProjectSelect = useCallback((option: ScheduleMenuOption<string>) => {
+    setSelectedProject(option.id === ALL_SCHEDULE_PROJECTS ? null : option);
+  }, []);
+  const onStatusSelect = useCallback((option: ScheduleMenuOption<ScheduleStatusFilter>) => {
+    setStatusFilter(option.id);
+  }, []);
+  const onSortSelect = useCallback((option: ScheduleMenuOption<ScheduleSort>) => {
+    setSort(option.id);
+  }, []);
 
   const showLoadError = isError && loadState.status !== "loaded";
   const showHostFilter = hosts.length > 1;
 
   return (
     <View style={styles.container}>
-      <MenuHeader title="Schedules" />
+      <MenuHeader title={t("sidebar.sections.schedules")} />
       <SchedulesScreenBody
-        rows={visibleRows}
+        groups={groups}
+        collapsed={collapsed}
+        onToggleGroup={toggleGroup}
+        onResetFilters={resetFilters}
+        listControls={
+          <>
+            <SchedulesMenu
+              title={t("schedules.projectFilter")}
+              testID="schedules-project-filter"
+              options={projectMenuOptions}
+              optionTestID="schedules-project-option"
+              value={projectId}
+              onSelect={onProjectSelect}
+            />
+            <SchedulesMenu
+              title={t("schedules.statusFilter")}
+              testID="schedules-status-filter"
+              options={statusOptions}
+              value={statusFilter}
+              onSelect={onStatusSelect}
+            />
+            <SchedulesMenu
+              title={t("schedules.sort")}
+              testID="schedules-sort"
+              options={sortOptions}
+              value={sort}
+              onSelect={onSortSelect}
+            />
+          </>
+        }
         loadState={loadState}
         hostErrors={hostErrors}
         showLoadError={showLoadError}
-        statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
         showHostFilter={showHostFilter}
         hosts={hosts}
         selectedHost={selectedHost}
@@ -193,12 +298,14 @@ function SchedulesScreenContent(): ReactElement {
 }
 
 function SchedulesScreenBody({
-  rows,
+  groups,
+  collapsed,
+  onToggleGroup,
+  onResetFilters,
+  listControls,
   loadState,
   hostErrors,
   showLoadError,
-  statusFilter,
-  onStatusFilterChange,
   showHostFilter,
   hosts,
   selectedHost,
@@ -207,12 +314,14 @@ function SchedulesScreenBody({
   onCreate,
   onEdit,
 }: {
-  rows: ScheduleRowView[];
+  groups: ScheduleGroup[];
+  collapsed: ReadonlySet<string>;
+  onToggleGroup: (id: string) => void;
+  onResetFilters: () => void;
+  listControls: ReactElement;
   loadState: AggregateLoadState<AggregatedSchedule>;
   hostErrors: ScheduleHostError[];
   showLoadError: boolean;
-  statusFilter: ScheduleBucket;
-  onStatusFilterChange: (value: ScheduleBucket) => void;
   showHostFilter: boolean;
   hosts: ReturnType<typeof useHosts>;
   selectedHost: string;
@@ -221,6 +330,7 @@ function SchedulesScreenBody({
   onCreate: () => void;
   onEdit: (schedule: AggregatedSchedule) => void;
 }): ReactElement {
+  const { t } = useTranslation();
   const bodyState = resolveSchedulesScreenBodyState({ loadState, showLoadError });
 
   if (bodyState.kind === "loading") {
@@ -251,44 +361,24 @@ function SchedulesScreenBody({
     );
   }
 
-  let schedulesContent: ReactElement;
-  if (rows.length > 0) {
-    schedulesContent = <SchedulesTable rows={rows} onEditSchedule={onEdit} />;
-  } else if (statusFilter === "ended") {
-    schedulesContent = <SchedulesEndedEmptyState />;
-  } else {
-    schedulesContent = (
-      <View style={styles.filterEmpty}>
-        <SchedulesEmptyState onCreate={onCreate} testID="schedules-empty" />
-      </View>
-    );
-  }
-
   return (
     <View style={styles.body}>
       <View style={styles.filterRow}>
-        <View style={styles.filterRowControls}>
-          {showHostFilter ? (
-            <HostFilter
-              hosts={hosts}
-              selectedHost={selectedHost}
-              onSelectHost={onSelectHost}
-              triggerTestID="schedules-host-filter-trigger"
-            />
-          ) : null}
-          <SegmentedControl
-            size="sm"
-            value={statusFilter}
-            onValueChange={onStatusFilterChange}
-            options={STATUS_FILTER_OPTIONS}
-            testID="schedules-status-filter"
+        {showHostFilter ? (
+          <HostFilter
+            hosts={hosts}
+            selectedHost={selectedHost}
+            onSelectHost={onSelectHost}
+            triggerTestID="schedules-host-filter-trigger"
           />
-        </View>
+        ) : null}
+        {listControls}
         <Button
           variant="outline"
           leftIcon={Plus}
           onPress={onCreate}
           size="sm"
+          style={styles.newButton}
           testID="schedules-new"
         >
           New schedule
@@ -302,7 +392,26 @@ function SchedulesScreenBody({
         testID="schedules-list"
       >
         {hostErrors.length > 0 ? <ScheduleHostErrorsBanner errors={hostErrors} /> : null}
-        {schedulesContent}
+        {groups.length ? (
+          <SchedulesTable
+            groups={groups}
+            collapsed={collapsed}
+            onToggleGroup={onToggleGroup}
+            onEditSchedule={onEdit}
+          />
+        ) : (
+          <View style={styles.filterEmpty} testID="schedules-filter-empty">
+            <Text style={styles.emptyTitle}>{t("schedules.noResults")}</Text>
+            <Button
+              size="sm"
+              variant="ghost"
+              onPress={onResetFilters}
+              testID="schedules-filter-reset"
+            >
+              {t("schedules.reset")}
+            </Button>
+          </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -315,11 +424,12 @@ function SchedulesEmptyState({
   onCreate: () => void;
   testID?: string;
 }): ReactElement {
+  const { t } = useTranslation();
   return (
     <View style={styles.emptyState} testID={testID}>
       <CalendarClock size={styles.emptyIcon.width} color={styles.emptyIcon.color} />
       <View style={styles.emptyTextStack}>
-        <Text style={styles.emptyTitle}>No active schedules</Text>
+        <Text style={styles.emptyTitle}>{t("schedules.empty")}</Text>
         <Text style={styles.emptyDescription}>Schedules run agents on a cadence.</Text>
         <ExternalLink href="https://paseo.sh/docs/schedules" label="See docs" />
       </View>
@@ -330,15 +440,79 @@ function SchedulesEmptyState({
   );
 }
 
-function SchedulesEndedEmptyState(): ReactElement {
+function SchedulesMenu<T extends string>({
+  title,
+  testID,
+  options,
+  optionTestID,
+  value,
+  onSelect,
+}: {
+  title: string;
+  testID: string;
+  options: readonly ScheduleMenuOption<T>[];
+  optionTestID?: string;
+  value: T;
+  onSelect: (option: ScheduleMenuOption<T>) => void;
+}): ReactElement {
+  const selectedLabel = options.find((option) => option.id === value)?.label ?? title;
   return (
-    <View style={styles.filterEmpty}>
-      <View style={styles.endedEmptyState}>
-        <CalendarClock size={styles.emptyIcon.width} color={styles.emptyIcon.color} />
-        <Text style={styles.emptyTitle}>No ended schedules</Text>
-      </View>
-    </View>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        accessibilityRole="button"
+        accessibilityLabel={`${title}. ${selectedLabel}`}
+        testID={testID}
+        style={filterTriggerStyle}
+      >
+        <Text style={styles.filterTriggerText} numberOfLines={1}>
+          {selectedLabel}
+        </Text>
+        <ThemedChevronDown size={14} uniProps={mutedIconColorMapping} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" sheetTitle={title} scrollable>
+        {options.map((option) => (
+          <ScheduleMenuEntry
+            key={option.id}
+            option={option}
+            selected={option.id === value}
+            onSelect={onSelect}
+            testID={option.testID ?? optionTestID}
+          />
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
+}
+
+function ScheduleMenuEntry<T extends string>({
+  option,
+  selected,
+  onSelect,
+  testID,
+}: {
+  option: ScheduleMenuOption<T>;
+  selected: boolean;
+  onSelect: (option: ScheduleMenuOption<T>) => void;
+  testID?: string;
+}): ReactElement {
+  const select = useCallback(() => onSelect(option), [onSelect, option]);
+  return (
+    <DropdownMenuItem selected={selected} showSelectedCheck onSelect={select} testID={testID}>
+      {option.label}
+    </DropdownMenuItem>
+  );
+}
+
+function filterTriggerStyle({
+  hovered,
+  pressed,
+  open,
+}: {
+  hovered: boolean;
+  pressed: boolean;
+  open: boolean;
+}) {
+  return [styles.filterTrigger, (hovered || pressed || open) && styles.filterTriggerActive];
 }
 
 function ScheduleHostErrorsBanner({ errors }: { errors: ScheduleHostError[] }): ReactElement {
@@ -372,19 +546,36 @@ const styles = StyleSheet.create((theme) => ({
     padding: theme.spacing[6],
   },
   filterRow: {
+    alignSelf: "center",
+    width: "100%",
+    maxWidth: 908,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: theme.spacing[3],
+    flexWrap: "wrap",
+    gap: theme.spacing[2],
     paddingHorizontal: { xs: theme.spacing[3], md: theme.spacing[6] },
     paddingTop: theme.spacing[4],
   },
-  filterRowControls: {
+  newButton: {
+    marginLeft: "auto",
+  },
+  filterTrigger: {
+    ...createControlGeometry(theme).buttonSm,
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[3],
+    gap: theme.spacing[1.5],
+    maxWidth: 220,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+  },
+  filterTriggerActive: {
+    backgroundColor: theme.colors.surface2,
+  },
+  filterTriggerText: {
     flexShrink: 1,
-    flexWrap: "wrap",
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
   },
   scroll: {
     flex: 1,
@@ -422,10 +613,6 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[4],
     maxWidth: 420,
     width: "100%",
-  },
-  endedEmptyState: {
-    alignItems: "center",
-    gap: theme.spacing[3],
   },
   emptyTextStack: {
     alignItems: "center",
