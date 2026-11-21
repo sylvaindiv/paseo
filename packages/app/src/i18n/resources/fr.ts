@@ -36,7 +36,7 @@ export const fr: TranslationResources = {
       "Ce visuel contient du JavaScript. Son exécution reste bloquée sans environnement isolé hors réseau.",
     artifact: "Visuel HTML",
     send: "Envoyer à l’agent",
-    expand: "Agrandir",
+    proposal: "Proposition {{number}}",
     close: "Fermer",
     retry: "Réessayer",
     reload: "Recharger",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamItem } from "@/types/stream";
 import { projectResponseFolding } from "./response-folding";
+import { groupInteractiveResponses } from "@/interactive-response/tool-result";
 
 const timestamp = new Date("2026-10-03T10:00:00Z");
 function message(
@@ -9,6 +10,47 @@ function message(
 ): Extract<StreamItem, { kind: "user_message" | "assistant_message" }> {
   return { kind, id, text: id, timestamp };
 }
+
+it("groups interactive proposals in emission order within canonical and legacy turns", () => {
+  const proposal = (id: string, turnId?: string): Extract<StreamItem, { kind: "tool_call" }> => ({
+    kind: "tool_call",
+    id,
+    turnId,
+    timestamp,
+    payload: {
+      source: "orchestrator",
+      data: {
+        toolCallId: id,
+        toolName: "mcp__paseo__render_interactive_response",
+        arguments: {},
+        status: "completed",
+      },
+    },
+  });
+  const a = proposal("a", "turn-1");
+  const b = proposal("b", "turn-1");
+  const c = proposal("c", "turn-2");
+  const d = proposal("d");
+  const e = proposal("e");
+  const f = proposal("f");
+  const rows = [a, message("explanation"), b, c, message("user", "user_message"), d, e];
+  const previous = groupInteractiveResponses(rows);
+  expect([...previous.byHostId]).toEqual([
+    [a.id, [a, b]],
+    [c.id, [c]],
+    [d.id, [d, e]],
+  ]);
+  expect([...previous.followingIds]).toEqual([b.id, e.id]);
+  expect(groupInteractiveResponses([...rows, message("live")], previous)).toBe(previous);
+  expect([
+    ...groupInteractiveResponses([...rows, message("next", "user_message"), f]).byHostId,
+  ]).toEqual([
+    [a.id, [a, b]],
+    [c.id, [c]],
+    [d.id, [d, e]],
+    [f.id, [f]],
+  ]);
+});
 
 describe("completed response folding", () => {
   it("retains history projection while only the active response text changes", () => {

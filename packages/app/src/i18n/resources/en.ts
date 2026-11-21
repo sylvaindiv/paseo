@@ -33,7 +33,7 @@ export const en = {
       "This visual contains JavaScript. Execution is blocked until an offline sandbox is available.",
     artifact: "HTML visual",
     send: "Send to agent",
-    expand: "Expand",
+    proposal: "Proposal {{number}}",
     close: "Close",
     retry: "Retry",
     reload: "Reload",

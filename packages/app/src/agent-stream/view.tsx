@@ -3,7 +3,7 @@ import { planTimelinePromptJump } from "@/timeline/timeline-sync-plan";
 import { styles as interactiveStyles } from "@/interactive-response/styles";
 import { Suspense, lazy } from "react";
 import { InteractiveConversationProvider } from "@/interactive-response/context";
-import { isInteractiveTool } from "@/interactive-response/tool-result";
+import { groupInteractiveResponses, isInteractiveTool } from "@/interactive-response/tool-result";
 import { describeToolCall } from "@/tool-calls/detail-level/grouping";
 import { chatStyles } from "@/styles/chat";
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
@@ -27,6 +27,7 @@ import {
   Text,
   Pressable,
   Platform,
+  type LayoutChangeEvent,
   type PressableStateCallbackType,
   type StyleProp,
   type ViewStyle,
@@ -216,10 +217,7 @@ function renderStreamItemWithTurnFooter(input: {
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
 }): ReactNode {
-  if (!input.content) {
-    return null;
-  }
-
+  if (!input.content && !input.wide) return null;
   const footerHost = input.layoutItem.completedFooter;
   const footer = footerHost ? (
     <CompletedTurnFooterRow
@@ -231,11 +229,11 @@ function renderStreamItemWithTurnFooter(input: {
       onForkAssistantTurn={input.onForkAssistantTurn}
     />
   ) : null;
-  const content = (
+  const content = input.content ? (
     <StreamItemWrapper gapBelow={input.layoutItem.gapBelow} wide={input.wide}>
       {input.content}
     </StreamItemWrapper>
-  );
+  ) : null;
 
   if (input.layoutItem.frameOrder === "footer-then-content") {
     return (
@@ -421,6 +419,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const toolCallDetailLevel = useSettings((settings) => settings.toolCallDetailLevel);
     const chatOutlineEnabled = useSettings((settings) => settings.chatOutlineEnabled);
     const contentMaxWidth = useSettings(resolveContentMaxWidth);
+    const [conversationHeight, setConversationHeight] = useState(0);
+    const handleConversationLayout = useCallback((event: LayoutChangeEvent) => {
+      setConversationHeight(event.nativeEvent.layout.height);
+    }, []);
     const viewportRef = useRef<StreamViewportHandle | null>(null);
     const pendingClientMessageIds = useMemo(
       () => new Set(pendingMessageSubmissions.map((submission) => submission.clientMessageId)),
@@ -689,9 +691,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const hasOlder = hasLocalHistory || remoteHasOlder;
     const progressKey = `${remoteProgressKey ?? "local"}:${historyWindowStart}`;
     const previousResponseFolding = useRef<ResponseFolding | undefined>(undefined);
+    const chronologicalRows = useMemo(
+      () => [...presentation.tail.slice(historyWindowStart), ...presentation.head],
+      [presentation.tail, presentation.head, historyWindowStart],
+    );
     const responseFolding = useMemo(() => {
       const projection = projectResponseFolding({
-        items: [...presentation.tail.slice(historyWindowStart), ...presentation.head],
+        items: chronologicalRows,
         isTurnActive,
         activeTurnId: effectiveTurnPresentation.turnId,
         expandedResponseIds,
@@ -702,11 +708,21 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       return projection;
     }, [
       presentation,
-      historyWindowStart,
+      chronologicalRows,
       isTurnActive,
       effectiveTurnPresentation.turnId,
       expandedResponseIds,
     ]);
+    const previousInteractiveGroups =
+      useRef<ReturnType<typeof groupInteractiveResponses>>(undefined);
+    const interactiveGroups = useMemo(() => {
+      const groups = groupInteractiveResponses(
+        chronologicalRows,
+        previousInteractiveGroups.current,
+      );
+      previousInteractiveGroups.current = groups;
+      return groups;
+    }, [chronologicalRows]);
 
     const revealFindMessage = useStableEvent((messageId: string) => {
       const responseId = responseFolding.hiddenMessageResponseIds.get(messageId);
@@ -752,6 +768,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         streamRenderStrategy,
       ],
     );
+    const hiddenDisplayRowIds = useMemo(() => {
+      const { followingIds } = interactiveGroups;
+      if (followingIds.size === 0) return responseFolding.hiddenItemIds;
+      const hidden = new Set(responseFolding.hiddenItemIds);
+      for (const row of [...streamLayout.history, ...streamLayout.liveHead]) {
+        if (!row.completedFooter && followingIds.has(row.item.id)) hidden.add(row.item.id);
+      }
+      return hidden;
+    }, [interactiveGroups, responseFolding.hiddenItemIds, streamLayout]);
     const handleTimelineHistoryLoadError = useCallback(() => {
       toast?.error(t("agentStream.historyLoadFailed"));
     }, [t, toast]);
@@ -1196,11 +1221,12 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           item.kind === "tool_call" && isInteractiveTool(describeToolCall(item).name);
         let content: ReactNode;
         if (isInteractiveResponse) {
-          content = (
+          const proposals = interactiveGroups.byHostId.get(item.id);
+          content = proposals ? (
             <Suspense fallback={interactiveLoading}>
-              <InteractiveResponseCard item={item} />
+              <InteractiveResponseCard items={proposals} height={conversationHeight * 0.7} />
             </Suspense>
-          );
+          ) : null;
         } else if (header) {
           content = (
             <>
@@ -1221,7 +1247,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         });
       },
       [
+        conversationHeight,
         handleForkAssistantTurn,
+        interactiveGroups,
         interactiveLoading,
         readOnly,
         renderStreamItemContent,
@@ -1271,16 +1299,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     );
     const historyVirtualized = useVisibleStreamItems(
       baseRenderModel.segments.historyVirtualized,
-      responseFolding.hiddenItemIds,
+      hiddenDisplayRowIds,
     );
     const historyMounted = useVisibleStreamItems(
       baseRenderModel.segments.historyMounted,
-      responseFolding.hiddenItemIds,
+      hiddenDisplayRowIds,
     );
-    const liveHead = useVisibleStreamItems(
-      baseRenderModel.segments.liveHead,
-      responseFolding.hiddenItemIds,
-    );
+    const liveHead = useVisibleStreamItems(baseRenderModel.segments.liveHead, hiddenDisplayRowIds);
     const renderModel = useMemo<AgentStreamRenderModel>(() => {
       // Only the displayed rows are filtered. Layout/footer sources retain the full
       // response so copy, fork, timing and history pagination keep their context.
@@ -1458,7 +1483,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         visibleMessageIds={visibleMessageIds}
       >
         <ToolCallSheetProvider>
-          <AssistantSelectionCopySurface style={stylesheet.container}>
+          <AssistantSelectionCopySurface
+            style={stylesheet.container}
+            onLayout={handleConversationLayout}
+          >
             <MessageOuterSpacingProvider disableOuterSpacing>
               {streamRenderStrategy.render({
                 agentId,
@@ -2002,7 +2030,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[2],
   },
   interactiveRail: {
-    maxWidth: 1200,
+    width: "100%",
   },
   listContentContainer: {
     paddingVertical: 0,
@@ -2173,7 +2201,7 @@ interface StreamItemWrapperProps {
 
 function StreamItemWrapper({ gapBelow, wide, children }: StreamItemWrapperProps) {
   const wrapperStyle = useMemo(
-    () => [chatStyles.rail, wide && stylesheet.interactiveRail, { marginBottom: gapBelow }],
+    () => [wide ? stylesheet.interactiveRail : chatStyles.rail, { marginBottom: gapBelow }],
     [gapBelow, wide],
   );
   return <View style={wrapperStyle}>{children}</View>;

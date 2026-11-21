@@ -36,7 +36,7 @@ export const ru: TranslationResources = {
       "This visual contains JavaScript. Execution is blocked until an offline sandbox is available.",
     artifact: "HTML visual",
     send: "Send to agent",
-    expand: "Expand",
+    proposal: "Вариант {{number}}",
     close: "Close",
     retry: "Retry",
     reload: "Reload",

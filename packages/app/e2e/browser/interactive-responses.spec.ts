@@ -1,3 +1,4 @@
+import type { Locator } from "@playwright/test";
 import { scrollTimelineToOldestLoadedEdge } from "../support/helpers/timeline-pagination";
 import { gateNextAgentMessage } from "../support/helpers/agent-message-gate";
 import { extractInteractiveDocumentId } from "@getpaseo/protocol/interactive-response-reference";
@@ -5,6 +6,7 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { expect, test as base } from "../support/fixtures";
 import { seedMockAgentWorkspace, openAgentRoute } from "../support/helpers/mock-agent";
 import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
+import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 
 const test = base.extend({
   e2eInjectPaseoTools: [true, { scope: "worker" }],
@@ -52,13 +54,7 @@ test("interactive responses persist selections and send snapshots before deepeni
     await card.getByRole("button", { name: "Reload", exact: true }).click();
     await card.getByRole("button", { name: "Pro", exact: true }).click();
     await card.getByRole("textbox", { name: "Notes" }).fill("For the team");
-    await card.getByRole("button", { name: "Expand", exact: true }).click();
-    await expect(page.getByText("Monthly price", { exact: true })).toBeVisible();
-    await page.screenshot({
-      path: info.outputPath("interactive-expanded.png"),
-      animations: "disabled",
-    });
-    await page.getByRole("button", { name: "Close", exact: true }).last().click();
+    await expect(card.getByText("Monthly price", { exact: true })).toBeVisible();
     await card.getByRole("button", { name: "Send to agent", exact: true }).click();
     await gate.waitForRequest();
     await expect(card.getByRole("button", { name: "Sent", exact: true })).toHaveCount(0);
@@ -195,69 +191,26 @@ if([typeof fetch,typeof parent,typeof document,typeof WebSocket,typeof process].
     const message = page.getByTestId("assistant-message").first();
     await expect(message).toBeVisible();
     const chat = page.getByTestId("agent-chat-scroll");
-    const inlineCard = (await card.boundingBox())!;
-    const inlineFrame = (await frame.boundingBox())!;
-    const chatBounds = (await chat.boundingBox())!;
-    expect(inlineCard.width).toBeGreaterThan((await message.boundingBox())!.width + 200);
-    expect(inlineCard.width).toBeLessThanOrEqual(1200);
-    expect(inlineCard.x + inlineCard.width / 2).toBeCloseTo(chatBounds.x + chatBounds.width / 2, 0);
-    await card.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath("interactive-script-desktop.png") });
-
-    const expand = card.getByRole("button", { name: "Expand", exact: true });
-    await expand.click();
-    const dialog = page.getByTestId("interactive-expanded").getByRole("dialog");
-    await expect(dialog).toBeVisible();
-    await expect(visual.getByRole("button", { name: "Add: 3", exact: true })).toBeVisible();
-    const expandedDialog = (await dialog.boundingBox())!;
-    const expandedFrame = (await frame.boundingBox())!;
-    expect(expandedDialog.width).toBeCloseTo(2400, 0);
-    expect(expandedDialog.height).toBeGreaterThan(880);
-    expect(expandedFrame.width).toBeGreaterThan(inlineFrame.width + 600);
-    expect(expandedFrame.height).toBeCloseTo(715, 0);
-    expect(expandedFrame.height).toBeGreaterThan(inlineFrame.height + 300);
-    await page.screenshot({ path: info.outputPath("interactive-script-expanded.png") });
+    const rail = page.getByTestId("interactive-response-rail");
+    await expectRailSize(rail, chat);
+    expect((await rail.boundingBox())!.width).toBeGreaterThan((await message.boundingBox())!.width);
+    await expect(rail.getByRole("button", { name: "Project calculator", exact: true })).toHaveCount(
+      0,
+    );
+    await rail.scrollIntoViewIfNeeded();
+    await rail.screenshot({ path: info.outputPath("interactive-single-wide.png") });
 
     await visual.getByRole("button", { name: "Add: 3", exact: true }).click();
-    await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await expect(visual.getByRole("button", { name: "Add: 4", exact: true })).toBeVisible();
     await expect(card.getByText("Choose 4", { exact: true })).toBeVisible();
     await expect(page.getByText("Selection received:", { exact: false })).toHaveCount(0);
     await page.getByTestId("workspace-todos-close").click();
-
-    await page.setViewportSize({ width: 850, height: 760 });
-    await expand.click();
-    await expect(dialog).toBeVisible();
-    const narrowDialog = (await dialog.boundingBox())!;
-    expect(narrowDialog.x).toBeGreaterThanOrEqual(0);
-    expect(narrowDialog.x + narrowDialog.width).toBeLessThanOrEqual(850);
-    const narrowReload = dialog.getByRole("button", { name: "Reload", exact: true });
-    await narrowReload.scrollIntoViewIfNeeded();
-    await expect(narrowReload).toBeInViewport({ ratio: 1 });
-    await page.screenshot({ path: info.outputPath("interactive-script-narrow.png") });
-    await page.keyboard.press("Escape");
-    await expect(dialog).toBeHidden();
+    await expectRailSize(rail, chat);
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await scrollTimelineToOldestLoadedEdge(page);
-    await expect(card.getByText("Choose 4", { exact: true })).toBeVisible();
-    await expand.scrollIntoViewIfNeeded();
-    const compactCard = (await card.boundingBox())!;
-    expect(compactCard.x).toBeGreaterThanOrEqual(0);
-    expect(compactCard.x + compactCard.width).toBeLessThanOrEqual(390);
-    await page.screenshot({ path: info.outputPath("interactive-script-compact.png") });
-    await expand.click();
-    await expect(visual.getByRole("button", { name: "Add: 4", exact: true })).toBeVisible();
-    const compactFrame = (await frame.boundingBox())!;
-    expect(compactFrame.x + compactFrame.width).toBeLessThanOrEqual(390);
-    expect(compactFrame.height).toBeCloseTo(844 * 0.65, 0);
-    const compactClose = page
-      .getByTestId("interactive-expanded")
-      .getByRole("button", { name: "Close", exact: true });
-    await expect(compactClose).toBeInViewport();
-    await expect(page.getByRole("button", { name: "Reload", exact: true })).toBeInViewport();
-    await page.screenshot({ path: info.outputPath("interactive-script-compact-expanded.png") });
-    await compactClose.click();
+    await expectRailSize(rail, chat);
+    await rail.scrollIntoViewIfNeeded();
+    await rail.screenshot({ path: info.outputPath("interactive-single-compact.png") });
     await expect(card.getByText("Choose 4", { exact: true })).toBeVisible();
 
     await card.getByRole("button", { name: "Send to agent", exact: true }).click();
@@ -271,41 +224,154 @@ if([typeof fetch,typeof parent,typeof document,typeof WebSocket,typeof process].
   }
 });
 
-base("keeps unfinished interactive actions hidden and rejects their RPCs", async ({ page }) => {
+async function expectRailSize(rail: Locator, chat: Locator) {
+  await expect
+    .poll(async () => {
+      const [panel, viewport] = await Promise.all([rail.boundingBox(), chat.boundingBox()]);
+      if (!panel || !viewport) return null;
+      return {
+        fullWidth:
+          Math.abs(panel.width - viewport.width) <= 2 && Math.abs(panel.x - viewport.x) <= 2,
+        height: Math.abs(panel.height - viewport.height * 0.7) <= 2,
+      };
+    })
+    .toEqual({ fullWidth: true, height: true });
+}
+
+test("proposal titles navigate a full-width rail and preserve independent choices", async ({
+  page,
+}, info) => {
+  const html = `<script>
+let count=paseo.getState()?.count??1;
+function draw(){paseo.render('<button id="add">Atlas '+count+'</button>')}
+draw();paseo.on('add','click',()=>{count++;paseo.setState({count});draw()});
+</script>`;
+  const proposals = [
+    {
+      title: "Atlas · Vue express",
+      summary: "Les prochaines actions par projet.",
+      source: `root = Layout([Input("atlasNote","Note Atlas"), HtmlArtifact(${JSON.stringify(html)})])`,
+    },
+    {
+      title: "Boreal · Projet prioritaire",
+      summary: "Les priorités de Boreal.",
+      source: 'root = Layout([Text("Projet Boreal"), Input("borealNote","Note Boreal")])',
+    },
+    {
+      title: "Cygnus · Toutes les tâches",
+      summary: "Les tâches de Cygnus.",
+      source: 'root = Layout([Text("Projet Cygnus"), Input("cygnusNote","Note Cygnus")])',
+    },
+  ];
   const session = await seedMockAgentWorkspace({
-    repoPrefix: "interactive-disabled-",
-    title: "Ordinary conversation",
-    initialPrompt: "Hello",
-    featureValues: { mockAssistantResponse: "A normal answer." },
+    repoPrefix: "interactive-proposals-",
+    title: "Proposals",
+    initialPrompt: `Render synthetic interactive response: ${JSON.stringify(input)}`,
   });
   const client = await connectDaemonClient<DaemonClient>({
-    clientIdPrefix: "interactive-disabled",
+    clientIdPrefix: "interactive-proposals",
   });
   try {
     await client.waitForFinish(session.agentId, 15000);
-    expect(client.getLastServerInfoMessage()?.features?.interactiveResponses).toBe(false);
-    const documentId = "a4965c0c-63e2-4b95-8c4f-574482312432";
-    expect((await client.getInteractiveResponse(session.agentId, documentId)).error).toContain(
-      "disabled",
+    await client.sendAgentMessage(
+      session.agentId,
+      `Render synthetic interactive response: ${JSON.stringify(proposals)}`,
     );
-    expect(
-      (await client.updateInteractiveResponse(session.agentId, documentId, 0, {})).error,
-    ).toContain("disabled");
-    await expect(
-      client.sendAgentMessage(session.agentId, "Selection", {
-        interactiveReference: { documentId, revision: 0 },
-      }),
-    ).rejects.toThrow("disabled");
-    await expect(
-      client.sendAgentMessage(session.agentId, "Explain", {
-        deepenReference: { messageId: "unavailable" },
-      }),
-    ).rejects.toThrow("disabled");
+    await client.waitForFinish(session.agentId, 15000);
+    await page.setViewportSize({ width: 1450, height: 1000 });
     await openAgentRoute(page, session);
-    await expect(page.getByText("A normal answer.", { exact: false }).first()).toBeVisible();
-    await expect(page.getByRole("button", { name: "Explore further", exact: true })).toHaveCount(0);
+    const chat = page.getByTestId("agent-chat-scroll");
+    const rails = page.getByTestId("interactive-response-rail");
+    const rail = rails.filter({
+      has: page.getByRole("button", { name: proposals[0]!.title, exact: true }),
+    });
+    const atlas = rail.getByRole("button", { name: proposals[0]!.title, exact: true });
+    const boreal = rail.getByRole("button", { name: proposals[1]!.title, exact: true });
+    const cygnus = rail.getByRole("button", { name: proposals[2]!.title, exact: true });
+    await expect(rails).toHaveCount(2);
+    await expect(rails.filter({ hasText: input.title })).toHaveCount(1);
+    await expect(atlas).toHaveAttribute("aria-pressed", "true");
+    await expectRailSize(rail, chat);
+    const note = rail.getByRole("textbox", { name: "Note Atlas" });
+    const visual = rail.frameLocator('iframe[title="HTML visual"]');
+    await note.fill("Garder cette note");
+    await visual.getByRole("button", { name: "Atlas 1", exact: true }).click();
+    await expect(visual.getByRole("button", { name: "Atlas 2", exact: true })).toBeVisible();
+    await rail.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath("interactive-proposals-atlas.png") });
+
+    await cygnus.click();
+    await expect(cygnus).toHaveAttribute("aria-pressed", "true");
+    await expect(note).toHaveCount(0);
+    await rail.getByRole("textbox", { name: "Note Cygnus" }).fill("Choix Cygnus");
+    await expect(rail.getByText("Projet Cygnus", { exact: true })).toBeInViewport();
+
+    await atlas.press("Enter");
+    await expect(note).toHaveValue("Garder cette note");
+    await expect(visual.getByRole("button", { name: "Atlas 2", exact: true })).toBeVisible();
+    await page.getByTestId("workspace-todos-toggle").filter({ visible: true }).click();
+    await expect(page.getByTestId("workspace-todos-panel").filter({ visible: true })).toBeVisible();
+    await expectRailSize(rail, chat);
+    await boreal.click();
+    await expect(boreal).toHaveAttribute("aria-pressed", "true");
+    await expect(rail.getByRole("textbox", { name: "Note Boreal" })).toBeInViewport();
+    await rail.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath("interactive-proposals-sidebar.png") });
+
+    await page.getByTestId("workspace-todos-close").click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectRailSize(rail, chat);
+    await cygnus.click();
+    await expect(rail.getByRole("textbox", { name: "Note Cygnus" })).toHaveValue("Choix Cygnus");
+    await rail.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath("interactive-proposals-compact.png") });
+    await expect(page.getByText("Selection received:", { exact: false })).toHaveCount(0);
+    await rail.getByRole("button", { name: "Send to agent", exact: true }).click();
+    await expect(rail.getByRole("button", { name: "Sent", exact: true })).toBeVisible();
+    await expect(
+      page.getByText('Selection received: {"cygnusNote":"Choix Cygnus"}', { exact: true }),
+    ).toBeVisible();
   } finally {
     await client.close();
+    await session.cleanup();
+  }
+});
+
+test("shows the update message when a host lacks interactive responses", async ({ page }) => {
+  await page.routeWebSocket(daemonWsRoutePattern(), (socket) => {
+    const server = socket.connectToServer();
+    server.onMessage((message) => {
+      if (typeof message === "string") {
+        const { type, message: event } = JSON.parse(message);
+        if (
+          type === "session" &&
+          event?.type === "status" &&
+          event.payload.status === "server_info"
+        ) {
+          const { interactiveResponses: _unsupported, ...features } = event.payload.features;
+          socket.send(
+            JSON.stringify({
+              type,
+              message: { ...event, payload: { ...event.payload, features } },
+            }),
+          );
+          return;
+        }
+      }
+      socket.send(message);
+    });
+  });
+  const session = await seedMockAgentWorkspace({
+    repoPrefix: "interactive-older-host-",
+    title: "Interactive response on an older host",
+    initialPrompt: `Render synthetic interactive response: ${JSON.stringify(input)}`,
+  });
+  try {
+    await openAgentRoute(page, session);
+    await expect(page.getByText("Update this host to use interactive responses.")).toBeVisible();
+    await expect(page.getByTestId("interactive-response-rail")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Explore further", exact: true })).toHaveCount(0);
+  } finally {
     await session.cleanup();
   }
 });

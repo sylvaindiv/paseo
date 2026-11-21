@@ -36,7 +36,7 @@ export const zhCN: TranslationResources = {
       "This visual contains JavaScript. Execution is blocked until an offline sandbox is available.",
     artifact: "HTML visual",
     send: "Send to agent",
-    expand: "Expand",
+    proposal: "方案 {{number}}",
     close: "Close",
     retry: "Retry",
     reload: "Reload",

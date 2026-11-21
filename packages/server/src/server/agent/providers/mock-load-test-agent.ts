@@ -1342,32 +1342,37 @@ export class MockLoadTestAgentSession implements AgentSession {
   private async renderInteractiveTurn(turn: ActiveTurn): Promise<void> {
     if (this.activeTurn !== turn) return;
     const name = "render_interactive_response";
-    const callId = randomUUID();
-    const input = promptToText(turn.prompt).slice("Render synthetic interactive response: ".length);
+    let callId = randomUUID();
+    let input = promptToText(turn.prompt).slice("Render synthetic interactive response: ".length);
     this.emitTurnStarted(turn);
-    this.emitTimeline(
-      turn.turnId,
-      createToolCall({
-        callId,
-        name,
-        status: "running",
-        detail: { type: "unknown", input, output: null },
-      }),
-    );
     try {
       if (!this.paseoTools) throw new Error("Paseo tools are unavailable");
-      const result = await this.paseoTools.executeTool(name, JSON.parse(input));
-      if (this.activeTurn !== turn) return;
-      if (result.isError) throw new Error(JSON.stringify(result));
-      this.emitTimeline(
-        turn.turnId,
-        createToolCall({
-          callId,
-          name,
-          status: "completed",
-          detail: { type: "unknown", input, output: JSON.stringify(result) },
-        }),
-      );
+      const parsed = JSON.parse(input);
+      for (const proposal of Array.isArray(parsed) ? parsed : [parsed]) {
+        callId = randomUUID();
+        input = JSON.stringify(proposal);
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId,
+            name,
+            status: "running",
+            detail: { type: "unknown", input, output: null },
+          }),
+        );
+        const result = await this.paseoTools.executeTool(name, proposal);
+        if (this.activeTurn !== turn) return;
+        if (result.isError) throw new Error(JSON.stringify(result));
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId,
+            name,
+            status: "completed",
+            detail: { type: "unknown", input, output: JSON.stringify(result) },
+          }),
+        );
+      }
       this.emitSettledAssistantTurn(turn, "Choose an option in the interactive response.");
     } catch (error) {
       if (this.activeTurn !== turn) return;

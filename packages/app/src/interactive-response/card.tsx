@@ -8,11 +8,11 @@ import {
   Component,
   type ReactNode,
 } from "react";
-import { Text, View, useWindowDimensions } from "react-native";
-import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
+import { ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
 import { InteractiveRenderer, getArtifactNames } from "./renderer";
 import { useTranslation } from "react-i18next";
-import { useFetchQuery } from "@/data/query";
+import { useFetchQueries } from "@/data/query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import {
   InteractiveDocumentSchema,
   validateInteractiveSource,
@@ -42,33 +42,146 @@ class RenderBoundary extends Component<
     return this.state.failed ? this.props.fallback : this.props.children;
   }
 }
-export function InteractiveResponseCard({ item }: { item: ToolCallItem }) {
+export function InteractiveResponseCard({
+  items,
+  height,
+}: {
+  items: ToolCallItem[];
+  height: number;
+}) {
   const context = useInteractiveConversation();
   const { t } = useTranslation();
-  const descriptor = describeToolCall(item);
-  const id = interactiveToolDocumentId(item);
-  const query = useFetchQuery({
-    dataShape: "value",
-    staleTimeMs: 0,
-    queryKey: ["interactive-response", context?.serverId, context?.agentId, id],
-    enabled: !!id && !!context?.client && context.supported && descriptor.status === "completed",
-    queryFn: async () => {
-      const result = await context!.client!.getInteractiveResponse(context!.agentId, id!);
-      if (result.error || !result.document)
-        throw new Error(result.error ?? t("interactive.loadError"));
-      const document = InteractiveDocumentSchema.parse(result.document);
-      validateInteractiveSource(document.source);
-      return document;
-    },
-  });
+  const [selectedId, setSelectedId] = useState<string>();
+  const [width, setWidth] = useState(0);
+  const measure = useCallback((event: LayoutChangeEvent) => {
+    setWidth(event.nativeEvent.layout.width);
+  }, []);
+  const proposals = items.map((item) => ({
+    id: item.id,
+    documentId: interactiveToolDocumentId(item),
+    status: describeToolCall(item).status,
+  }));
+  const queries = useFetchQueries<InteractiveDocument>(
+    proposals.map(({ id, documentId, status }) => ({
+      dataShape: "value",
+      staleTimeMs: 0,
+      queryKey: ["interactive-response", context?.serverId, context?.agentId, documentId ?? id],
+      enabled: !!documentId && !!context?.client && context.supported && status === "completed",
+      queryFn: async () => {
+        const result = await context!.client!.getInteractiveResponse(context!.agentId, documentId!);
+        if (result.error || !result.document)
+          throw new Error(result.error ?? t("interactive.loadError"));
+        const document = InteractiveDocumentSchema.parse(result.document);
+        validateInteractiveSource(document.source);
+        return document;
+      },
+    })),
+  );
+  const activeIndex = Math.max(
+    0,
+    proposals.findIndex(({ id }) => id === selectedId),
+  );
+  const multiple = proposals.length > 1;
+  if (!context?.supported) return <Text style={styles.error}>{t("interactive.updateHost")}</Text>;
+
+  return (
+    <View style={[styles.card, { height }]} testID="interactive-response-rail">
+      {multiple ? (
+        <ScrollView
+          horizontal
+          style={styles.navigation}
+          contentContainerStyle={styles.tabs}
+          keyboardShouldPersistTaps="handled"
+        >
+          {proposals.map(({ id }, index) => (
+            <ProposalButton
+              key={id}
+              id={id}
+              active={index === activeIndex}
+              title={
+                queries[index]?.data?.title ?? t("interactive.proposal", { number: index + 1 })
+              }
+              onSelect={setSelectedId}
+            />
+          ))}
+        </ScrollView>
+      ) : null}
+      <View style={styles.viewport} onLayout={measure}>
+        <View style={[styles.pages, { transform: [{ translateX: -activeIndex * width }] }]}>
+          {proposals.map(({ id, documentId, status }, index) => (
+            <View key={id} style={[styles.page, { width: width || "100%" }]}>
+              <ScrollView
+                style={[styles.pageScroll, index !== activeIndex && styles.hidden]}
+                contentContainerStyle={styles.pageContent}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                testID="interactive-response"
+              >
+                <Proposal
+                  documentId={documentId}
+                  status={status}
+                  query={queries[index]!}
+                  artifactHeight={height > 0 ? Math.round(height * 0.78) : undefined}
+                  showTitle={!multiple}
+                />
+              </ScrollView>
+            </View>
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const SELECTED = { selected: true };
+const UNSELECTED = { selected: false };
+
+function ProposalButton({
+  id,
+  active,
+  title,
+  onSelect,
+}: {
+  id: string;
+  active: boolean;
+  title: string;
+  onSelect: (id: string) => void;
+}) {
+  const onPress = useCallback(() => onSelect(id), [id, onSelect]);
+  return (
+    <Button
+      size="sm"
+      variant={active ? "secondary" : "ghost"}
+      accessibilityState={active ? SELECTED : UNSELECTED}
+      aria-pressed={active}
+      onPress={onPress}
+    >
+      {title}
+    </Button>
+  );
+}
+
+function Proposal({
+  documentId,
+  status,
+  query,
+  artifactHeight,
+  showTitle,
+}: {
+  documentId: string | null;
+  status: ReturnType<typeof describeToolCall>["status"];
+  query: UseQueryResult<InteractiveDocument, Error>;
+  artifactHeight?: number;
+  showTitle: boolean;
+}) {
+  const { t } = useTranslation();
   const { refetch } = query;
   const reload = useCallback(() => {
     void refetch();
   }, [refetch]);
-  if (!context?.supported) return <Text style={styles.error}>{t("interactive.updateHost")}</Text>;
-  if (descriptor.status === "running" || descriptor.status === "executing")
+  if (status === "running" || status === "executing")
     return <Text style={styles.muted}>{t("interactive.generating")}</Text>;
-  if (descriptor.status !== "completed" || !id)
+  if (status !== "completed" || !documentId)
     return (
       <Text accessibilityRole="alert" style={styles.error}>
         {t("interactive.generationError")}
@@ -87,15 +200,25 @@ export function InteractiveResponseCard({ item }: { item: ToolCallItem }) {
     );
   if (!query.data) return <Text style={styles.muted}>{t("interactive.loading")}</Text>;
   return (
-    <DocumentView key={`${id}:${query.dataUpdatedAt}`} document={query.data} reload={reload} />
+    <DocumentView
+      key={`${documentId}:${query.dataUpdatedAt}`}
+      document={query.data}
+      reload={reload}
+      artifactHeight={artifactHeight}
+      showTitle={showTitle}
+    />
   );
 }
 function DocumentView({
   document,
   reload,
+  artifactHeight,
+  showTitle,
 }: {
   document: InteractiveDocument;
   reload: () => unknown;
+  artifactHeight?: number;
+  showTitle: boolean;
 }) {
   const context = useInteractiveConversation()!;
   const { t } = useTranslation();
@@ -105,9 +228,6 @@ function DocumentView({
   const blocked = useRef(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const { height: windowHeight } = useWindowDimensions();
-  const artifactHeight = expanded ? Math.round(windowHeight * 0.65) : undefined;
   const [status, setStatus] = useState<"idle" | "sent" | "queued">("idle");
   const request = useRef<{
     id: string;
@@ -166,7 +286,9 @@ function DocumentView({
     setPending(true);
     setError("");
     try {
-      await Promise.all(Array.from(runtimes.current, (flush) => flush()));
+      const results = await Promise.allSettled(Array.from(runtimes.current, (flush) => flush()));
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure) throw failure.reason;
       await writer.flush();
       if (blocked.current) throw new Error(t("interactive.reloadConflict"));
       request.current ??= {
@@ -186,34 +308,6 @@ function DocumentView({
       setPending(false);
     }
   }, [context, document, t, writer, artifactNames]);
-  const header = useMemo(
-    () => ({ title: document.title, subtitle: document.summary }),
-    [document.title, document.summary],
-  );
-  const resize = useCallback(async (next: boolean) => {
-    if (sending.current) return;
-    sending.current = true;
-    setPending(true);
-    try {
-      // A failed visual must not discard another visual's final state on close.
-      const results = await Promise.allSettled(Array.from(runtimes.current, (flush) => flush()));
-      const failure = results.find((result) => result.status === "rejected");
-      if (failure) throw failure.reason;
-      setExpanded(next);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-      if (!next) setExpanded(false);
-    } finally {
-      sending.current = false;
-      setPending(false);
-    }
-  }, []);
-  const open = useCallback(() => {
-    void resize(true);
-  }, [resize]);
-  const close = useCallback(() => {
-    void resize(false);
-  }, [resize]);
   const retry = useCallback(() => {
     if (blocked.current) reload();
     else void send();
@@ -238,23 +332,17 @@ function DocumentView({
   );
   const proposal = artifactProposal(state, artifactNames);
   const label = status === "idle" ? "interactive.send" : (`interactive.${status}` as const);
-  const content = (
-    <RenderBoundary fallback={fallback}>
-      <InteractiveFields.Provider value={fields}>
-        <InteractiveRenderer source={document.source} library={library} />
-      </InteractiveFields.Provider>
-    </RenderBoundary>
-  );
   return (
-    <View style={styles.card} testID="interactive-response">
-      <Text style={styles.title}>{document.title}</Text>
+    <View style={styles.content}>
+      {showTitle ? <Text style={styles.title}>{document.title}</Text> : null}
       <Text style={styles.muted}>{document.summary}</Text>
-      {!expanded ? content : null}
+      <RenderBoundary fallback={fallback}>
+        <InteractiveFields.Provider value={fields}>
+          <InteractiveRenderer source={document.source} library={library} />
+        </InteractiveFields.Provider>
+      </RenderBoundary>
       {proposal ? <Text style={styles.text}>{proposal}</Text> : null}
       <View style={styles.row}>
-        <Button size="sm" variant="ghost" onPress={open}>
-          {t("interactive.expand")}
-        </Button>
         {!context.readOnly ? (
           <Button
             size="sm"
@@ -281,19 +369,6 @@ function DocumentView({
           ) : null}
         </View>
       ) : null}
-      <AdaptiveModalSheet
-        header={header}
-        visible={expanded}
-        onClose={close}
-        desktopMaxWidth={2400}
-        desktopHeight="85%"
-        snapPoints={EXPANDED_SNAP_POINTS}
-        testID="interactive-expanded"
-      >
-        {expanded ? content : null}
-      </AdaptiveModalSheet>
     </View>
   );
 }
-
-const EXPANDED_SNAP_POINTS = ["92%"];

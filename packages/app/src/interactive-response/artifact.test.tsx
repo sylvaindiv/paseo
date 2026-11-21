@@ -166,7 +166,7 @@ it("uses prepared text while keeping saved JSON and ordinary form values out of 
   expect(artifactProposal({ notes: '{"state":null,"proposal":"Ordinary note"}' }, [])).toBe("");
 });
 
-it("closes an expanded visual after a failed flush, retains the latest state and still blocks sending", async () => {
+it("waits for pending visual state when another visual fails and blocks sending", async () => {
   const { render, fireEvent, waitFor } = await import("@testing-library/react");
   let fields!: React.ContextType<typeof InteractiveFields>;
   let rejectFlush = false;
@@ -188,7 +188,7 @@ it("closes an expanded visual after a failed flush, retains the latest state and
     state: {},
   };
   vi.doMock("@/data/query", () => ({
-    useFetchQuery: () => ({ data: document, dataUpdatedAt: 1, refetch: vi.fn() }),
+    useFetchQueries: () => [{ data: document, dataUpdatedAt: 1, refetch: vi.fn() }],
   }));
   vi.doMock("@/tool-calls/detail-level/grouping", () => ({
     describeToolCall: () => ({ status: "completed" }),
@@ -205,28 +205,10 @@ it("closes an expanded visual after a failed flush, retains the latest state and
   }));
   vi.doMock("./send", () => ({ sendConversationAction: send }));
   vi.doMock("./library", () => ({ library: {} }));
+  vi.doMock("./styles", () => ({ styles: {} }));
   vi.doMock("@/components/ui/button", () => ({
     Button: ({ onPress, children }: { onPress: () => void; children: React.ReactNode }) =>
       createElement("button", { type: "button", onClick: onPress }, children),
-  }));
-  vi.doMock("@/components/adaptive-modal-sheet", () => ({
-    AdaptiveModalSheet: ({
-      visible,
-      onClose,
-      children,
-    }: {
-      visible: boolean;
-      onClose: () => void;
-      children: React.ReactNode;
-    }) =>
-      visible
-        ? createElement(
-            "section",
-            { "aria-label": "Expanded" },
-            createElement("button", { type: "button", onClick: onClose }, "Close"),
-            children,
-          )
-        : null,
   }));
   vi.doMock("./renderer", async (original) => {
     const actual = await original<typeof import("./renderer")>();
@@ -252,29 +234,28 @@ it("closes an expanded visual after a failed flush, retains the latest state and
   vi.stubGlobal("React", React);
   const view = render(
     createElement(InteractiveResponseCard, {
-      item: {} as React.ComponentProps<typeof InteractiveResponseCard>["item"],
+      items: [
+        { id: "tool" } as React.ComponentProps<typeof InteractiveResponseCard>["items"][number],
+      ],
+      height: 420,
     }),
   );
   try {
-    fireEvent.click(view.getByText("interactive.expand"));
-    await waitFor(() => expect(view.getByRole("region", { name: "Expanded" })).toBeTruthy());
     rejectFlush = true;
     fireEvent.click(view.getByText("interactive.send"));
-    await waitFor(() => expect(view.getByRole("alert").textContent).toBe("Visual failed"));
-    expect(send).not.toHaveBeenCalled();
-    fireEvent.click(view.getByText("Close"));
     // Another visual still has a final state in transit when the first one rejects.
     await act(async () => {
       await Promise.resolve();
     });
-    expect(view.queryByRole("region", { name: "Expanded" })).not.toBeNull();
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(send).not.toHaveBeenCalled();
     const latest = '{"state":{"count":12},"proposal":"Choose 12"}';
     await act(async () => {
       fields.change("visual", latest);
       release();
       await waiting;
     });
-    await waitFor(() => expect(view.queryByRole("region", { name: "Expanded" })).toBeNull());
+    await waitFor(() => expect(view.getByRole("alert").textContent).toBe("Visual failed"));
     expect(view.getByRole("status").textContent).toBe(latest);
     expect(view.getByRole("alert").textContent).toBe("Visual failed");
     expect(save).toHaveBeenLastCalledWith("agent", document.id, 0, { visual: latest });
@@ -294,8 +275,8 @@ it("closes an expanded visual after a failed flush, retains the latest state and
       "./context",
       "./send",
       "./library",
+      "./styles",
       "@/components/ui/button",
-      "@/components/adaptive-modal-sheet",
       "./renderer",
     ])
       vi.doUnmock(name);
