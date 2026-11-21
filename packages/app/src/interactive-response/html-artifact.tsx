@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { useArtifact, type ArtifactCommand } from "./use-artifact";
 import { styles } from "./styles";
-const FRAME_STYLE = { height: 360 };
 const ORIGINS = ["about:blank"];
 function allowNavigation(request: { url: string }) {
   return request.url === "about:blank";
@@ -21,7 +20,8 @@ export function HtmlArtifact({ html, name, colorScheme = "light" }: HtmlArtifact
   }, []);
   const runtime = useArtifact({ html, name, post, colorScheme });
   const source = useMemo(() => ({ html: runtime.source }), [runtime.source]);
-  const { receive, fail } = runtime;
+  const { receive, fail, height } = runtime;
+  const frameStyle = useMemo(() => ({ height }), [height]);
   const message = useCallback(
     (event: { nativeEvent: { data: string } }) => {
       try {
@@ -48,7 +48,7 @@ export function HtmlArtifact({ html, name, colorScheme = "light" }: HtmlArtifact
           key={runtime.revision}
           ref={frame}
           source={source}
-          style={FRAME_STYLE}
+          style={frameStyle}
           javaScriptEnabled
           domStorageEnabled={false}
           allowFileAccess={false}
