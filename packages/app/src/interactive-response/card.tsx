@@ -8,7 +8,7 @@ import {
   Component,
   type ReactNode,
 } from "react";
-import { Text, View } from "react-native";
+import { Text, View, useWindowDimensions } from "react-native";
 import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
 import { InteractiveRenderer, getArtifactNames } from "./renderer";
 import { useTranslation } from "react-i18next";
@@ -106,6 +106,8 @@ function DocumentView({
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const { height: windowHeight } = useWindowDimensions();
+  const artifactHeight = expanded ? Math.round(windowHeight * 0.65) : undefined;
   const [status, setStatus] = useState<"idle" | "sent" | "queued">("idle");
   const request = useRef<{
     id: string;
@@ -221,9 +223,10 @@ function DocumentView({
       state,
       change,
       registerRuntime,
+      artifactHeight,
       disabled: context.readOnly || pending || status !== "idle" || Boolean(error),
     }),
-    [state, change, registerRuntime, context.readOnly, pending, status, error],
+    [state, change, registerRuntime, artifactHeight, context.readOnly, pending, status, error],
   );
   const fallback = useMemo(
     () => (
@@ -282,7 +285,8 @@ function DocumentView({
         header={header}
         visible={expanded}
         onClose={close}
-        desktopMaxWidth={1000}
+        desktopMaxWidth={2400}
+        desktopHeight="85%"
         snapPoints={EXPANDED_SNAP_POINTS}
         testID="interactive-expanded"
       >

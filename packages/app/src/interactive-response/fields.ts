@@ -3,6 +3,7 @@ import type { InteractiveState } from "@getpaseo/protocol/interactive-response-s
 export const InteractiveFields = createContext<{
   state: InteractiveState;
   disabled: boolean;
+  artifactHeight?: number;
   change: (name: string, value: string | number) => void;
   registerRuntime: (flush: () => Promise<void>) => () => void;
 }>({ state: {}, disabled: true, change: () => {}, registerRuntime: () => () => {} });

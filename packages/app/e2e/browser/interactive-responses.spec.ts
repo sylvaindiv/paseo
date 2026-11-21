@@ -129,10 +129,11 @@ if([typeof fetch,typeof parent,typeof document,typeof WebSocket,typeof process].
     if (request.url().includes("paseo-artifact-exfil")) requests.push(request.url());
   });
   try {
-    await page.setViewportSize({ width: 1200, height: 1100 });
+    await page.setViewportSize({ width: 2560, height: 1100 });
     await openAgentRoute(page, session);
     const card = page.getByTestId("interactive-response");
-    const visual = page.frameLocator('iframe[title="HTML visual"]');
+    const frame = page.getByTitle("HTML visual", { exact: true });
+    const visual = frame.contentFrame();
     await visual.getByRole("button", { name: "Add: 2", exact: true }).click();
     await expect(visual.getByRole("button", { name: "Add: 3", exact: true })).toBeVisible();
     await expect(card.getByText("Choose 3", { exact: true })).toBeVisible();
@@ -187,21 +188,83 @@ if([typeof fetch,typeof parent,typeof document,typeof WebSocket,typeof process].
     await expect(card.getByText("Choose 3", { exact: true })).toBeVisible();
     await page.evaluate(() => window.postMessage({ type: "state", value: "forged" }, "*"));
     await expect(card).not.toContainText("forged");
-    await card.getByRole("button", { name: "Expand", exact: true }).click();
+
+    const todos = page.getByTestId("workspace-todos-panel").filter({ visible: true });
+    await page.getByTestId("workspace-todos-toggle").filter({ visible: true }).click();
+    await expect(todos).toBeVisible();
+    const message = page.getByTestId("assistant-message").first();
+    await expect(message).toBeVisible();
+    const chat = page.getByTestId("agent-chat-scroll");
+    const inlineCard = (await card.boundingBox())!;
+    const inlineFrame = (await frame.boundingBox())!;
+    const chatBounds = (await chat.boundingBox())!;
+    expect(inlineCard.width).toBeGreaterThan((await message.boundingBox())!.width + 200);
+    expect(inlineCard.width).toBeLessThanOrEqual(1200);
+    expect(inlineCard.x + inlineCard.width / 2).toBeCloseTo(chatBounds.x + chatBounds.width / 2, 0);
+    await card.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath("interactive-script-desktop.png") });
+
+    const expand = card.getByRole("button", { name: "Expand", exact: true });
+    await expand.click();
+    const dialog = page.getByTestId("interactive-expanded").getByRole("dialog");
+    await expect(dialog).toBeVisible();
     await expect(visual.getByRole("button", { name: "Add: 3", exact: true })).toBeVisible();
+    const expandedDialog = (await dialog.boundingBox())!;
+    const expandedFrame = (await frame.boundingBox())!;
+    expect(expandedDialog.width).toBeCloseTo(2400, 0);
+    expect(expandedDialog.height).toBeGreaterThan(880);
+    expect(expandedFrame.width).toBeGreaterThan(inlineFrame.width + 600);
+    expect(expandedFrame.height).toBeCloseTo(715, 0);
+    expect(expandedFrame.height).toBeGreaterThan(inlineFrame.height + 300);
     await page.screenshot({ path: info.outputPath("interactive-script-expanded.png") });
-    await page.getByRole("button", { name: "Close", exact: true }).last().click();
-    await expect(visual.getByRole("button", { name: "Add: 3", exact: true })).toBeVisible();
+
+    await visual.getByRole("button", { name: "Add: 3", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(visual.getByRole("button", { name: "Add: 4", exact: true })).toBeVisible();
+    await expect(card.getByText("Choose 4", { exact: true })).toBeVisible();
+    await expect(page.getByText("Selection received:", { exact: false })).toHaveCount(0);
+    await page.getByTestId("workspace-todos-close").click();
+
+    await page.setViewportSize({ width: 850, height: 760 });
+    await expand.click();
+    await expect(dialog).toBeVisible();
+    const narrowDialog = (await dialog.boundingBox())!;
+    expect(narrowDialog.x).toBeGreaterThanOrEqual(0);
+    expect(narrowDialog.x + narrowDialog.width).toBeLessThanOrEqual(850);
+    const narrowReload = dialog.getByRole("button", { name: "Reload", exact: true });
+    await narrowReload.scrollIntoViewIfNeeded();
+    await expect(narrowReload).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: info.outputPath("interactive-script-narrow.png") });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scrollTimelineToOldestLoadedEdge(page);
+    await expect(card.getByText("Choose 4", { exact: true })).toBeVisible();
+    await expand.scrollIntoViewIfNeeded();
+    const compactCard = (await card.boundingBox())!;
+    expect(compactCard.x).toBeGreaterThanOrEqual(0);
+    expect(compactCard.x + compactCard.width).toBeLessThanOrEqual(390);
+    await page.screenshot({ path: info.outputPath("interactive-script-compact.png") });
+    await expand.click();
+    await expect(visual.getByRole("button", { name: "Add: 4", exact: true })).toBeVisible();
+    const compactFrame = (await frame.boundingBox())!;
+    expect(compactFrame.x + compactFrame.width).toBeLessThanOrEqual(390);
+    expect(compactFrame.height).toBeCloseTo(844 * 0.65, 0);
+    const compactClose = page
+      .getByTestId("interactive-expanded")
+      .getByRole("button", { name: "Close", exact: true });
+    await expect(compactClose).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Reload", exact: true })).toBeInViewport();
+    await page.screenshot({ path: info.outputPath("interactive-script-compact-expanded.png") });
+    await compactClose.click();
+    await expect(card.getByText("Choose 4", { exact: true })).toBeVisible();
+
     await card.getByRole("button", { name: "Send to agent", exact: true }).click();
     await expect(card.getByRole("button", { name: "Sent", exact: true })).toBeVisible();
     const timeline = await client.fetchAgentTimeline(session.agentId, { limit: 200 });
-    expect(JSON.stringify(timeline)).toContain("Choose 3");
+    expect(JSON.stringify(timeline)).toContain("Choose 4");
     expect(requests).toEqual([]);
-    await scrollTimelineToOldestLoadedEdge(page);
-    await card.screenshot({ path: info.outputPath("interactive-script-desktop.png") });
-    await page.setViewportSize({ width: 390, height: 1000 });
-    await scrollTimelineToOldestLoadedEdge(page);
-    await card.screenshot({ path: info.outputPath("interactive-script-compact.png") });
   } finally {
     await client.close();
     await session.cleanup();

@@ -1,12 +1,10 @@
 import type { HtmlArtifactProps } from "./artifact";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Text, View } from "react-native";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { useArtifact, type ArtifactCommand } from "./use-artifact";
 import { styles } from "./styles";
-import { useEffect } from "react";
-const FRAME_STYLE = { width: "100%", height: 360, border: 0 } as const;
 export function HtmlArtifact({ html, name, colorScheme = "light" }: HtmlArtifactProps) {
   const { t } = useTranslation();
   const frame = useRef<HTMLIFrameElement>(null);
@@ -15,7 +13,8 @@ export function HtmlArtifact({ html, name, colorScheme = "light" }: HtmlArtifact
     [],
   );
   const runtime = useArtifact({ html, name, post, colorScheme });
-  const { receive } = runtime;
+  const { receive, height } = runtime;
+  const frameStyle = useMemo(() => ({ width: "100%", height, border: 0 }), [height]);
   useEffect(() => {
     function message(event: MessageEvent<unknown>) {
       if (event.source === frame.current?.contentWindow) receive(event.data);
@@ -42,7 +41,7 @@ export function HtmlArtifact({ html, name, colorScheme = "light" }: HtmlArtifact
           sandbox="allow-scripts"
           referrerPolicy="no-referrer"
           srcDoc={runtime.source}
-          style={FRAME_STYLE}
+          style={frameStyle}
         />
       ) : null}
       <Button size="sm" variant="ghost" onPress={runtime.reload}>

@@ -187,5 +187,14 @@ export function useArtifact({ html, name, post, colorScheme }: ArtifactOptions) 
         }
       });
   }, [active, flush, reload]);
-  return { source: source.current, status, revision, receive, fail, reload, mounted };
+  return {
+    source: source.current,
+    height: fields.artifactHeight ?? 360,
+    status,
+    revision,
+    receive,
+    fail,
+    reload,
+    mounted,
+  };
 }

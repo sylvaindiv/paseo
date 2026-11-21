@@ -211,6 +211,7 @@ function renderPendingPermissionsNode(input: {
 function renderStreamItemWithTurnFooter(input: {
   content: ReactNode;
   layoutItem: StreamLayoutItem;
+  wide: boolean;
   strategy: TurnContentStrategy;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
@@ -231,7 +232,7 @@ function renderStreamItemWithTurnFooter(input: {
     />
   ) : null;
   const content = (
-    <StreamItemWrapper itemId={input.layoutItem.item.id} gapBelow={input.layoutItem.gapBelow}>
+    <StreamItemWrapper gapBelow={input.layoutItem.gapBelow} wide={input.wide}>
       {input.content}
     </StreamItemWrapper>
   );
@@ -1042,12 +1043,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         isLastInSequence: boolean,
         maxDetailHeight?: number,
       ) => {
-        if (isInteractiveTool(describeToolCall(item).name))
-          return (
-            <Suspense fallback={interactiveLoading}>
-              <InteractiveResponseCard item={item} />
-            </Suspense>
-          );
         const { payload } = item;
 
         if (payload.source === "agent") {
@@ -1097,13 +1092,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [
-        context.cwd,
-        setInlineDetailsExpanded,
-        handleToolCallOpenFile,
-        planFootersByRowId,
-        interactiveLoading,
-      ],
+      [context.cwd, setInlineDetailsExpanded, handleToolCallOpenFile, planFootersByRowId],
     );
 
     // Read through a stable event so live group updates do not change the renderer identity
@@ -1201,18 +1190,31 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const renderStreamItem = useCallback(
       (layoutItem: StreamLayoutItem) => {
-        const header = responseFolding.headersByHostId.get(layoutItem.item.id);
-        const content = header ? (
-          <>
-            <ResponseFoldToggle header={header} onToggle={toggleResponse} />
-            {header.expanded ? renderStreamItemContent(layoutItem) : null}
-          </>
-        ) : (
-          renderStreamItemContent(layoutItem)
-        );
+        const { item } = layoutItem;
+        const header = responseFolding.headersByHostId.get(item.id);
+        const isInteractiveResponse =
+          item.kind === "tool_call" && isInteractiveTool(describeToolCall(item).name);
+        let content: ReactNode;
+        if (isInteractiveResponse) {
+          content = (
+            <Suspense fallback={interactiveLoading}>
+              <InteractiveResponseCard item={item} />
+            </Suspense>
+          );
+        } else if (header) {
+          content = (
+            <>
+              <ResponseFoldToggle header={header} onToggle={toggleResponse} />
+              {header.expanded ? renderStreamItemContent(layoutItem) : null}
+            </>
+          );
+        } else {
+          content = renderStreamItemContent(layoutItem);
+        }
         return renderStreamItemWithTurnFooter({
           content,
           layoutItem,
+          wide: isInteractiveResponse,
           strategy: streamRenderStrategy,
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
@@ -1220,6 +1222,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       },
       [
         handleForkAssistantTurn,
+        interactiveLoading,
         readOnly,
         renderStreamItemContent,
         streamRenderStrategy,
@@ -1998,6 +2001,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     alignSelf: "center",
     paddingHorizontal: theme.spacing[2],
   },
+  interactiveRail: {
+    maxWidth: 1200,
+  },
   listContentContainer: {
     paddingVertical: 0,
     flexGrow: 1,
@@ -2160,12 +2166,15 @@ const permissionStyles = StyleSheet.create((theme) => ({
 }));
 
 interface StreamItemWrapperProps {
-  itemId: string;
   gapBelow: number;
+  wide: boolean;
   children: ReactNode;
 }
 
-function StreamItemWrapper({ gapBelow, children }: StreamItemWrapperProps) {
-  const wrapperStyle = useMemo(() => [chatStyles.rail, { marginBottom: gapBelow }], [gapBelow]);
+function StreamItemWrapper({ gapBelow, wide, children }: StreamItemWrapperProps) {
+  const wrapperStyle = useMemo(
+    () => [chatStyles.rail, wide && stylesheet.interactiveRail, { marginBottom: gapBelow }],
+    [gapBelow, wide],
+  );
   return <View style={wrapperStyle}>{children}</View>;
 }
