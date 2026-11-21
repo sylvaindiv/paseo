@@ -2,6 +2,23 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const zhCN: TranslationResources = {
+  schedules: {
+    allProjects: "所有项目",
+    unassigned: "无项目",
+    allStatuses: "所有状态",
+    active: "活跃",
+    paused: "已暂停",
+    ended: "已结束",
+    nextRun: "下次运行",
+    nameOrder: "按名称",
+    recent: "最新创建",
+    projectFilter: "按项目筛选",
+    statusFilter: "按状态筛选",
+    sort: "对计划排序",
+    noResults: "没有匹配的计划",
+    reset: "重置筛选",
+    empty: "暂无计划",
+  },
   interactive: {
     deepenPrompt:
       "Explore this response: explain the assumptions, compare alternatives and ask a focused question if needed.",

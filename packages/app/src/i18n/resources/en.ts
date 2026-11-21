@@ -1,4 +1,21 @@
 export const en = {
+  schedules: {
+    allProjects: "All projects",
+    unassigned: "No project",
+    allStatuses: "All statuses",
+    active: "Active",
+    paused: "Paused",
+    ended: "Ended",
+    nextRun: "Next run",
+    nameOrder: "Name (A–Z)",
+    recent: "Newest first",
+    projectFilter: "Filter by project",
+    statusFilter: "Filter by status",
+    sort: "Sort schedules",
+    noResults: "No matching schedules",
+    reset: "Reset filters",
+    empty: "No schedules",
+  },
   interactive: {
     deepenPrompt:
       "Explore this response: explain the assumptions, compare alternatives and ask a focused question if needed.",

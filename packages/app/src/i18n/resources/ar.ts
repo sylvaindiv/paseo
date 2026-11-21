@@ -2,6 +2,23 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ar: TranslationResources = {
+  schedules: {
+    allProjects: "كل المشاريع",
+    unassigned: "بلا مشروع",
+    allStatuses: "كل الحالات",
+    active: "نشطة",
+    paused: "متوقفة مؤقتًا",
+    ended: "منتهية",
+    nextRun: "التشغيل التالي",
+    nameOrder: "الاسم",
+    recent: "الأحدث أولًا",
+    projectFilter: "تصفية حسب المشروع",
+    statusFilter: "تصفية حسب الحالة",
+    sort: "ترتيب الجدولة",
+    noResults: "لا توجد جدولة مطابقة",
+    reset: "إعادة ضبط عوامل التصفية",
+    empty: "لا توجد جدولة",
+  },
   interactive: {
     deepenPrompt:
       "Explore this response: explain the assumptions, compare alternatives and ask a focused question if needed.",
