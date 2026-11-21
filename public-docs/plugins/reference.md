@@ -917,13 +917,13 @@ export default function contribute(client: PluginClientContext) {
 
 `PluginScreenProps` contains:
 
-| Field        | Meaning                                                                                                                                                                                                                                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `theme`      | Typed `PluginTheme` color tokens for the active Paseo theme.                                                                                                                                                                                                                                                                      |
-| `host`       | Selected host `id` and display `label`.                                                                                                                                                                                                                                                                                           |
-| `layout`     | `compact` and the `ios`, `android`, or `web` platform.                                                                                                                                                                                                                                                                            |
-| `params`     | The params the screen was opened with, as string keys and values. `{}` when none.                                                                                                                                                                                                                                                 |
-| `navigation` | Optional client navigation. `openAgent({ agentId, serverId? })` and `openWorkspace({ workspaceId, serverId? })` open targets on `serverId`, or on the selected host when omitted. `openBrowser({ url, workspaceId, serverId? })` is available only on Electron; see [links and browsers](#external-links-and-workspace-browsers). |
+| Field        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `theme`      | Typed `PluginTheme` color tokens for the active Paseo theme.                                                                                                                                                                                                                                                                                                                                                    |
+| `host`       | Selected host `id` and display `label`.                                                                                                                                                                                                                                                                                                                                                                         |
+| `layout`     | `compact` and the `ios`, `android`, or `web` platform.                                                                                                                                                                                                                                                                                                                                                          |
+| `params`     | The params the screen was opened with, as string keys and values. `{}` when none.                                                                                                                                                                                                                                                                                                                               |
+| `navigation` | Optional client navigation. `openAgent({ agentId, serverId? })` and `openWorkspace({ workspaceId, serverId? })` open targets on `serverId`, or on the selected host when omitted. `openProjectSettings?.({ projectId, serverId? })` opens the project settings. `openBrowser({ url, workspaceId, serverId? })` is available only on Electron; see [links and browsers](#external-links-and-workspace-browsers). |
 
 Paseo owns the route, header, close action, host picker, error boundary, and query client. The plugin owns the screen body.
 
@@ -946,6 +946,9 @@ plugins can't add to it. Both take `{ id, title, Component }`. `title` labels th
 Settings > Sidebar, where users reorder and hide items, and is the default label and accessibility
 label of `SidebarRow`. Settings shows a generic plugin icon for these items; a row from the
 deprecated `addSidebarItem` keeps its registered icon.
+
+A footer item can set `placement: "before-opendesign"` to appear before the Mac OpenDesign row.
+When OpenDesign is unavailable, the item follows the normal footer order.
 
 With the plugin on several hosts, an item renders from the host of the screen the app shows. Off a
 host's screens, it uses the host last picked in one of the plugin's screens or last opened from one
@@ -1545,6 +1548,10 @@ can sit beside or inside these components.
 
 ### Persisted values
 
+Use `client.localStorage.getItem(key)` and `client.localStorage.setItem(key, string)` for device-local
+preferences. Installations with the same plugin ID share the values on that device. Paseo isolates
+keys by plugin ID. Values survive plugin reload and client restart.
+
 Define a settings document in `shared/`:
 
 ```ts
@@ -1747,6 +1754,20 @@ Agent snapshot fields:
 | `labels`            | `Record<string, string>`                                       |
 
 Paseo owns tab focus, splitting, closing, persistence, query state, the API/RPC providers, and the render error boundary. A restored tab whose plugin, panel, context, workspace, or agent is unavailable stays open with an unavailable message instead of crashing the workspace.
+
+### Workspace To-do view
+
+Render `WorkspaceTodoList` from `@getpaseo/plugin/client/ui` to embed the existing editor for one
+workspace's open tasks. Pass `serverId`, `workspaceId`, `emptyLabel`, and `unavailableLabel`.
+Named milestones group the open tasks. Reordering affects the visible tasks in the same milestone
+and keeps completed tasks in their slots.
+
+Call `client.addWorkspaceTodosView({ Component })` to replace the content opened by the existing
+To-do button on that plugin's host. The component receives `workspaceId`, `host`, `layout`, `theme`,
+`connected`, `supported`, `list`, and `loadError`. `list` is the live, revisioned list and is `null`
+until Paseo has loaded it. Use `usePaseo().workspaces.todos.mutate` to apply edits with that revision.
+Paseo owns the panel and returns to its standard editor when the contribution is unavailable or throws.
+When several plugins supply a view on the same host, the first plugin ID in alphabetical order wins.
 
 ## Command Center items
 
@@ -2061,6 +2082,17 @@ function PullRequestAction({ theme }: PluginSurfaceProps) {
 ```
 
 The returned API covers projects, workspaces, agents, terminals, providers, and daemon config. See the [SDK API reference](/docs/sdk/reference) for its methods. Connection lifecycle methods are intentionally absent because Paseo owns the connection.
+
+Use `useProjects()` in client components to read the app's live, cross-host project directory, with
+workspace identities, connection state, loading state, and per-host errors. Plugin screen components
+receive `isFocused` so they can release screen-owned observations when their page is hidden.
+
+`paseo.workspaces.todos` reads and edits existing lists. `get(workspaceId)` returns a snapshot,
+`observe(workspaceId)` gives the snapshot and live changes, and `mutate(workspaceId, revision, mutation)`
+applies an edit with the host's existing workspace write permissions and revision checks.
+When `supportsSubtasks()` is true, an `update` can also replace the parent task's `subtasks`
+checklist. Each entry has a stable `id`, `title`, and `done` state. Use the list revision to
+guard edits against concurrent changes.
 
 ### Discover hosts and target another host
 

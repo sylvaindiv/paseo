@@ -981,6 +981,16 @@ export const ProjectRenameRequestSchema = z.object({
   requestId: z.string(),
 });
 
+export const ProjectWorkspaceIsolationSchema = z.enum(["both", "local", "worktree"]);
+export type ProjectWorkspaceIsolation = z.infer<typeof ProjectWorkspaceIsolationSchema>;
+
+export const ProjectWorkspaceIsolationSetRequestSchema = z.object({
+  type: z.literal("project.workspace_isolation.set.request"),
+  projectId: z.string(),
+  workspaceIsolation: ProjectWorkspaceIsolationSchema,
+  requestId: z.string(),
+});
+
 export const ProjectIconSetRequestSchema = z.object({
   type: z.literal("project.icon.set.request"),
   projectId: z.string(),
@@ -2198,6 +2208,15 @@ export const ProjectRenameResponsePayloadSchema = z.object({
 export const ProjectRenameResponseSchema = z.object({
   type: z.literal("project.rename.response"),
   payload: ProjectRenameResponsePayloadSchema,
+});
+
+export const ProjectWorkspaceIsolationSetResponseSchema = z.object({
+  type: z.literal("project.workspace_isolation.set.response"),
+  payload: z.object({
+    requestId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+  }),
 });
 
 export const ProjectIconSetResponseSchema = z.object({
@@ -3442,6 +3461,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   CloseItemsRequestMessageSchema,
   UpdateAgentRequestMessageSchema,
   ProjectRenameRequestSchema,
+  ProjectWorkspaceIsolationSetRequestSchema,
   ProjectIconSetRequestSchema,
   ProjectRemoveRequestSchema,
   WorkspaceTitleSetRequestSchema,
@@ -3837,6 +3857,7 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceLabels: z.boolean().optional(),
         workspaceTodos: z.boolean().optional(),
         workspaceTodoMilestones: z.boolean().optional(),
+        workspaceTodoSubtasks: z.boolean().optional(),
         interactiveResponses: z.boolean().optional(),
         // COMPAT(workspaceSetupRun): added in v0.8.0, remove gate after 2027-09-02.
         workspaceSetupRun: z.boolean().optional(),
@@ -3994,6 +4015,8 @@ export const ServerInfoStatusPayloadSchema = z
         projectCustomIcon: z.boolean().optional(),
         // COMPAT(projectEmojiIcon): added in v0.8.1, remove after 2027-03-14.
         projectEmojiIcon: z.boolean().optional(),
+        // COMPAT(projectWorkspaceIsolation): optional through 2027-05-21.
+        projectWorkspaceIsolation: z.boolean().optional(),
         // COMPAT(fsEntryOps): added in v0.3.0, remove gate after 2027-02-08.
         fsEntryOps: z.boolean().optional(),
         // COMPAT(fsEntryDuplicate): added in v0.3.0, remove gate after 2027-02-09.
@@ -4293,6 +4316,8 @@ export const WorkspaceDescriptorPayloadSchema = z
     // Identifies the project's stored custom icon; null means automatic.
     // COMPAT(projectCustomIcon): added in v0.2.0, remove after 2027-01-20.
     projectCustomIconRevision: z.string().nullable().optional(),
+    // COMPAT(projectWorkspaceIsolation): optional through 2027-05-21.
+    workspaceIsolation: ProjectWorkspaceIsolationSchema.optional(),
     projectRootPath: z.string(),
     workspaceDirectory: z.string().optional(),
     // COMPAT(worktreeSlug): added in v0.2.6, remove optional after 2027-01-31.
@@ -4485,6 +4510,8 @@ export const WorkspaceProjectDescriptorPayloadSchema = z.object({
   projectCustomName: z.string().nullable().optional(),
   // COMPAT(projectCustomIcon): added in v0.2.0, remove after 2027-01-20.
   projectCustomIconRevision: z.string().nullable().optional(),
+  // COMPAT(projectWorkspaceIsolation): optional through 2027-05-21.
+  workspaceIsolation: ProjectWorkspaceIsolationSchema.optional(),
   // Fingerprints the effective icon, including automatic discovery and the
   // absence of an icon. Clients may persist icon results against this value.
   // COMPAT(projectIconCache): added in v0.2.7, remove optional after 2027-02-12.
@@ -7266,6 +7293,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentRewindResponseMessageSchema,
   UpdateAgentResponseMessageSchema,
   ProjectRenameResponseSchema,
+  ProjectWorkspaceIsolationSetResponseSchema,
   ProjectIconSetResponseSchema,
   ProjectRemoveResponseSchema,
   WorkspaceTitleSetResponseSchema,

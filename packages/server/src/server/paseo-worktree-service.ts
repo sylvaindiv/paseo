@@ -60,7 +60,10 @@ export interface AttemptFirstAgentBranchAutoNameResult {
 
 export interface CreatePaseoWorktreeDeps extends CreateWorktreeCoreDeps {
   workspaceGitService: WorkspaceGitService;
-  workspaceProvisioning: Pick<WorkspaceProvisioningService, "createWorkspaceForWorktree">;
+  workspaceProvisioning: Pick<
+    WorkspaceProvisioningService,
+    "assertWorktreeCreationAllowed" | "createWorkspaceForWorktree"
+  >;
 }
 
 export async function createPaseoWorktree(
@@ -75,7 +78,13 @@ async function createPaseoWorktreeWithPriority(
   deps: CreatePaseoWorktreeDeps,
 ): Promise<CreatePaseoWorktreeResult> {
   const workspaceCwdPlan = await planWorkspaceCwdForWorktree(input.cwd, deps.workspaceGitService);
-  const createdWorktree = await createWorktreeCore(input, deps);
+  const repoRoot = await deps.workspaceGitService.resolveRepoRoot(input.cwd);
+  await deps.workspaceProvisioning.assertWorktreeCreationAllowed({
+    sourceCwd: workspaceCwdPlan.inputCwd,
+    projectId: input.projectId,
+    repoRoot,
+  });
+  const createdWorktree = await createWorktreeCore(input, deps, repoRoot);
   try {
     if (!input.branchName?.trim()) maybeMarkFirstAgentBranchAutoNameEligible({ createdWorktree });
     const workspaceCwd = mapWorkspaceRelativeCwdToWorktree({

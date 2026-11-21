@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   AgentStatusSchema,
   AgentTimelineItemPayloadSchema,
+  ProjectWorkspaceIsolationSchema,
   WorkspaceGitHubRuntimePayloadSchema,
 } from "@getpaseo/protocol/messages";
 import { AgentProviderSchema } from "@getpaseo/protocol/provider-manifest";
@@ -302,6 +303,7 @@ const StoredWorkspaceSchema = z.strictObject({
   projectDisplayName: z.string(),
   projectCustomName: z.string().nullable(),
   projectCustomIconRevision: z.string().nullable(),
+  workspaceIsolation: ProjectWorkspaceIsolationSchema.optional(),
   projectRootPath: z.string(),
   workspaceDirectory: z.string(),
   worktreeSlug: z.string().optional(),
@@ -331,6 +333,7 @@ const StoredProjectSchema = z.strictObject({
   projectDisplayName: z.string(),
   projectCustomName: z.string().nullable(),
   projectCustomIconRevision: z.string().nullable(),
+  workspaceIsolation: ProjectWorkspaceIsolationSchema.optional(),
   projectIconRevision: z.string().optional(),
   projectRootPath: z.string(),
   projectKind: z.enum(["git", "non_git", "directory"]),
@@ -693,6 +696,7 @@ function serializeWorkspace(workspace: WorkspaceDescriptor): StoredWorkspace {
     projectDisplayName: workspace.projectDisplayName,
     projectCustomName: workspace.projectCustomName ?? null,
     projectCustomIconRevision: workspace.projectCustomIconRevision ?? null,
+    workspaceIsolation: workspace.workspaceIsolation,
     projectRootPath: workspace.projectRootPath,
     workspaceDirectory: workspace.workspaceDirectory,
     worktreeSlug: workspace.worktreeSlug,
@@ -733,6 +737,7 @@ function serializeProject(project: ProjectDescriptor): StoredProject {
     projectDisplayName: project.projectDisplayName,
     projectCustomName: project.projectCustomName,
     projectCustomIconRevision: project.projectCustomIconRevision ?? null,
+    workspaceIsolation: project.workspaceIsolation,
     projectIconRevision: project.projectIconRevision,
     projectRootPath: project.projectRootPath,
     projectKind: project.projectKind,

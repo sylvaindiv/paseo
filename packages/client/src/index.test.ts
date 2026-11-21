@@ -278,6 +278,112 @@ test("createPaseoApi borrows daemon capabilities without exposing connection own
   expect("skills" in paseo.agents).toBe(false);
 });
 
+test("workspace To-do SDK reads, observes, and writes the existing revisioned list", async () => {
+  const { client, ws } = await connectClient({
+    workspaceTodoMilestones: true,
+    ownedSubscriptions: true,
+  });
+  const workspaceId = "workspace_sdk";
+  const list = { revision: 0, initialized: false, tasks: [] };
+  const get = client.workspaces.todos.get(workspaceId);
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({ type: "workspace.todos.get.request", workspaceId });
+  ws.message(
+    sessionMessage({
+      type: "workspace.todos.get.response",
+      payload: { requestId: request.requestId, workspaceId, list },
+    }),
+  );
+  await expect(get).resolves.toMatchObject({ list });
+
+  const observation = client.workspaces.todos.observe(workspaceId);
+  const subscription = parseSentSessionMessage(ws.sent.at(-1));
+  expect(subscription).toMatchObject({
+    type: "workspace.todos.get.request",
+    workspaceId,
+    subscribe: {},
+  });
+  const update = vi.fn();
+  observation.subscribe({ snapshot() {}, update });
+  const subscriptionId = "todo-observation";
+  ws.message(
+    sessionMessage({
+      type: "workspace.todos.get.response",
+      payload: { requestId: subscription.requestId, workspaceId, list, subscriptionId },
+    }),
+  );
+  await expect(observation.ready).resolves.toMatchObject({ list });
+
+  const mutation = { operation: "initialize", tasks: [{ title: "SDK task", notes: "" }] } as const;
+  const next = {
+    revision: 1,
+    initialized: true,
+    tasks: [
+      {
+        ...mutation.tasks[0],
+        id: "todo-sdk",
+        status: "todo",
+        titleProtected: true,
+        notesProtected: true,
+      },
+    ],
+  };
+  const write = client.workspaces.todos.mutate(workspaceId, list.revision, {
+    operation: "initialize",
+    tasks: [...mutation.tasks],
+  });
+  const change = parseSentSessionMessage(ws.sent.at(-1));
+  expect(change).toMatchObject({
+    type: "workspace.todos.mutate.request",
+    workspaceId,
+    revision: list.revision,
+    mutation,
+  });
+  ws.message(
+    sessionMessage({
+      type: "workspace.todos.mutate.response",
+      payload: { requestId: change.requestId, workspaceId, list: next, error: null },
+    }),
+  );
+  const event = {
+    type: "workspace.todos.changed",
+    payload: { workspaceId, subscriptionId, list: next },
+  };
+  ws.message(sessionMessage(event));
+  await expect(write).resolves.toEqual(next);
+  expect(update).toHaveBeenCalledExactlyOnceWith(event);
+
+  await client.dispose();
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "subscription.release.request",
+    subscriptionId,
+  });
+  await client.close();
+});
+
+test("workspace To-do SDK reports an unsupported host before requesting a list", async () => {
+  const { client, ws } = await connectClient({});
+  const sent = ws.sent.length;
+  await expect(client.workspaces.todos.get("workspace_sdk")).rejects.toThrow("Update the host");
+  expect(ws.sent).toHaveLength(sent);
+  await client.close();
+});
+
+test("an older host never receives a subtask mutation it would ignore", async () => {
+  const { client, ws } = await connectClient({ workspaceTodoMilestones: true });
+  const sent = ws.sent.length;
+  expect(client.workspaces.todos.supportsSubtasks()).toBe(false);
+  await expect(
+    client.workspaces.todos.mutate("workspace_sdk", 1, {
+      operation: "update",
+      id: "task",
+      subtasks: [{ id: "check", title: "Check", done: false }],
+    }),
+  ).rejects.toThrow("Update the host");
+  expect(ws.sent).toHaveLength(sent);
+  await client.close();
+});
+
 test("agent handles await their correlated permission acknowledgement", async () => {
   const { client, ws } = await connectClient();
 

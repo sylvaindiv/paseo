@@ -120,6 +120,30 @@ describe("workspace project todos", () => {
     expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
     expect((await store.read("a")).tasks).toHaveLength(1);
   });
+  test("subtasks are saved with the parent and survive independent task changes", async () => {
+    const seeded = await initialize();
+    const id = seeded.tasks[0]!.id;
+    const subtasks = [{ id: "review", title: "Review the plan", done: true }];
+    const updated = await store.mutate(
+      "a",
+      seeded.revision,
+      { operation: "update", id, subtasks },
+      "user",
+    );
+    await expect(
+      store.mutate("a", updated.revision, { operation: "update", id, subtasks: [] }, "agent"),
+    ).rejects.toThrow("protected");
+    await expect(
+      store.mutate("a", updated.revision, { operation: "delete", id }, "agent"),
+    ).rejects.toThrow("cannot be deleted");
+    await store.mutate("a", updated.revision, { operation: "update", id, status: "done" }, "agent");
+    expect((await new WorkspaceTodosStore(directory).read("a")).tasks[0]).toMatchObject({
+      subtasks,
+      title: "Plan",
+      notes: "First step",
+      status: "done",
+    });
+  });
   test("deliberately empty lists cannot be initialized again", async () => {
     const list = await initialize();
     await store.mutate("a", 1, { operation: "delete", id: list.tasks[0]!.id }, "user");

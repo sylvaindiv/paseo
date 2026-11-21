@@ -37,12 +37,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScreenHeader } from "@/components/headers/screen-header";
+import { ScrollView } from "@/components/ui/scroll-view";
+import { DraggableList } from "@/components/draggable-list";
 import { MilestoneSection } from "./milestone-section";
 import { groupTodoMilestones, mergeTodoOrder } from "./grouping";
 import type { DraggableRenderItemInfo } from "@/components/draggable-list.types";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { isWeb } from "@/constants/platform";
+import { PluginWorkspaceTodosView } from "@/plugins/workspace-todos-view";
 import { useTodoViews } from "./view-store";
 
 const ThemedListTodo = withUnistyles(ListTodo);
@@ -123,14 +126,142 @@ function TodoHost({
   const { t } = useTranslation();
   const compact = useIsCompactFormFactor();
   const size = compact ? "md" : "sm";
-  const client = useHostRuntimeClient(serverId);
-  const connected = useHostRuntimeIsConnected(serverId);
   const view = useTodoViews((state) => state.views[viewKey]);
   const setView = useTodoViews((state) => state.setView);
   const open = view?.open ?? false;
   const close = useCallback(() => setView(viewKey, { open: false }), [setView, viewKey]);
   const toggle = useCallback(() => setView(viewKey, { open: !open }), [setView, viewKey, open]);
   const contextValue = useMemo(() => ({ open, toggle }), [open, toggle]);
+  const editor = useTodoEditor({ viewKey, serverId, workspaceId, enabled: active && open });
+  const { connected, capability, list, loadError } = editor;
+  const content = <TodoContent {...editor} />;
+  const panelContent =
+    active && open ? (
+      <PluginWorkspaceTodosView
+        serverId={serverId}
+        workspaceId={workspaceId}
+        connected={connected}
+        supported={capability}
+        list={list}
+        loadError={loadError}
+      >
+        {content}
+      </PluginWorkspaceTodosView>
+    ) : (
+      content
+    );
+  const counter = list
+    ? `${list.tasks.filter((task) => task.status === "done").length}/${list.tasks.length}`
+    : "";
+  const header = useMemo(
+    () => ({ title: t("workspaceTodos.title"), subtitle: counter }),
+    [t, counter],
+  );
+  const headerLeft = useMemo(
+    () => (
+      <>
+        <ThemedListTodo size={16} uniProps={todoIconColor} />
+        <Text style={styles.heading}>{t("workspaceTodos.title")}</Text>
+        <Text style={styles.text} testID="workspace-todos-counter">
+          {counter}
+        </Text>
+      </>
+    ),
+    [t, counter],
+  );
+  const headerRight = useMemo(
+    () => (
+      <Button
+        variant="ghost"
+        size={size}
+        leftIcon={X}
+        onPress={close}
+        accessibilityLabel={t("workspaceTodos.close")}
+        testID="workspace-todos-close"
+      />
+    ),
+    [size, close, t],
+  );
+  return (
+    <TodoContext.Provider value={contextValue}>
+      <View style={styles.host}>
+        {!compact && active && open && (
+          <View style={styles.panel} testID="workspace-todos-panel">
+            <ScreenHeader left={headerLeft} right={headerRight} />
+            {panelContent}
+          </View>
+        )}
+        <View style={styles.workspace}>{children}</View>
+        {compact && (
+          <AdaptiveModalSheet
+            visible={active && open}
+            onClose={close}
+            header={header}
+            testID="workspace-todos-sheet"
+          >
+            {panelContent}
+          </AdaptiveModalSheet>
+        )}
+      </View>
+    </TodoContext.Provider>
+  );
+}
+
+interface InlineLabels {
+  emptyLabel: string;
+  unavailableLabel: string;
+}
+
+export function WorkspaceTodoList({
+  serverId,
+  workspaceId,
+  emptyLabel,
+  unavailableLabel,
+}: InlineLabels & { serverId: string; workspaceId: string }) {
+  const viewKey = JSON.stringify(["inline", serverId, workspaceId]);
+  const labels = useMemo(() => ({ emptyLabel, unavailableLabel }), [emptyLabel, unavailableLabel]);
+  return (
+    <InlineTodoList
+      key={viewKey}
+      viewKey={viewKey}
+      serverId={serverId}
+      workspaceId={workspaceId}
+      labels={labels}
+    />
+  );
+}
+
+function InlineTodoList({
+  viewKey,
+  serverId,
+  workspaceId,
+  labels,
+}: {
+  viewKey: string;
+  serverId: string;
+  workspaceId: string;
+  labels: InlineLabels;
+}) {
+  const editor = useTodoEditor({ viewKey, serverId, workspaceId, enabled: true, inline: true });
+  return <TodoContent {...editor} inline={labels} />;
+}
+
+function useTodoEditor({
+  viewKey,
+  serverId,
+  workspaceId,
+  enabled,
+  inline = false,
+}: {
+  viewKey: string;
+  serverId: string;
+  workspaceId: string;
+  enabled: boolean;
+  inline?: boolean;
+}): ContentProps {
+  const { t } = useTranslation();
+  const client = useHostRuntimeClient(serverId);
+  const connected = useHostRuntimeIsConnected(serverId);
   const [list, setList] = useState<WorkspaceTodos | null>(null);
   const [draft, setDraft] = useState<Drafts>(() => draftsByWorkspace.get(viewKey) ?? EMPTY_DRAFT);
   const [pending, setPending] = useState(false);
@@ -142,7 +273,7 @@ function TodoHost({
     draftsByWorkspace.set(viewKey, draft);
   }, [draft, viewKey]);
   useEffect(() => {
-    if (!active || !open || !client || !capability) return;
+    if (!enabled || !client || !capability) return;
     const subscription = client.observeWorkspaceTodos(workspaceId);
     const accept = (next: WorkspaceTodos) => {
       setList((current) => (!current || next.revision >= current.revision ? next : current));
@@ -160,7 +291,7 @@ function TodoHost({
       stop();
       void subscription.release().catch(() => {});
     };
-  }, [active, capability, client, open, t, workspaceId]);
+  }, [capability, client, enabled, t, workspaceId]);
   const mutate = useCallback(
     async (mutation: WorkspaceTodoMutation, revision = list?.revision) => {
       if (pending || revision === undefined) return;
@@ -241,11 +372,23 @@ function TodoHost({
       }),
     [],
   );
+  const openTasks = useMemo(
+    () => list?.tasks.filter((task) => task.status !== "done" || draft.edits[task.id]) ?? [],
+    [list, draft.edits],
+  );
+  const openTasksByMilestone = useMemo(
+    () =>
+      inline
+        ? new Map(groupTodoMilestones(openTasks).map(({ name, tasks }) => [name, tasks]))
+        : null,
+    [inline, openTasks],
+  );
   const renderTask = useCallback(
     (info: DraggableRenderItemInfo<WorkspaceTodo>) => (
       <TodoRow
         info={info}
         list={list!}
+        order={openTasksByMilestone?.get(info.item.milestone ?? "") ?? list!.tasks}
         draft={draft.edits[info.item.id]}
         expanded={expanded.has(info.item.id) || Boolean(draft.edits[info.item.id])}
         pending={pending}
@@ -256,7 +399,18 @@ function TodoHost({
         onReorder={reorder}
       />
     ),
-    [list, draft.edits, expanded, pending, inputEpoch, changeEdit, mutate, toggleNotes, reorder],
+    [
+      list,
+      draft.edits,
+      expanded,
+      pending,
+      inputEpoch,
+      changeEdit,
+      mutate,
+      toggleNotes,
+      reorder,
+      openTasksByMilestone,
+    ],
   );
   const onNewTitle = useCallback(
     (title: string) =>
@@ -287,85 +441,26 @@ function TodoHost({
     () => ({ draft, expanded, pending, inputEpoch }),
     [draft, expanded, pending, inputEpoch],
   );
-  const empty = useMemo(() => <Text style={styles.text}>{t("workspaceTodos.empty")}</Text>, [t]);
-  const content = (
-    <TodoContent
-      connected={connected}
-      capability={capability}
-      list={list}
-      draft={draft}
-      pending={pending}
-      loadError={loadError}
-      epoch={inputEpoch}
-      extraData={extraData}
-      empty={empty}
-      onRetry={retry}
-      renderTask={renderTask}
-      onReorder={reorder}
-      onNewTitle={onNewTitle}
-      onNewMilestone={onNewMilestone}
-      onNewNotes={onNewNotes}
-      onAdd={add}
-    />
-  );
-  const counter = list
-    ? `${list.tasks.filter((task) => task.status === "done").length}/${list.tasks.length}`
-    : "";
-  const header = useMemo(
-    () => ({ title: t("workspaceTodos.title"), subtitle: counter }),
-    [t, counter],
-  );
-  const headerLeft = useMemo(
-    () => (
-      <>
-        <ThemedListTodo size={16} uniProps={todoIconColor} />
-        <Text style={styles.heading}>{t("workspaceTodos.title")}</Text>
-        <Text style={styles.text} testID="workspace-todos-counter">
-          {counter}
-        </Text>
-      </>
-    ),
-    [t, counter],
-  );
-  const headerRight = useMemo(
-    () => (
-      <Button
-        variant="ghost"
-        size={size}
-        leftIcon={X}
-        onPress={close}
-        accessibilityLabel={t("workspaceTodos.close")}
-        testID="workspace-todos-close"
-      />
-    ),
-    [size, close, t],
-  );
-  return (
-    <TodoContext.Provider value={contextValue}>
-      <View style={styles.host}>
-        {!compact && active && open && (
-          <View style={styles.panel} testID="workspace-todos-panel">
-            <ScreenHeader left={headerLeft} right={headerRight} />
-            {content}
-          </View>
-        )}
-        <View style={styles.workspace}>{children}</View>
-        {compact && (
-          <AdaptiveModalSheet
-            visible={active && open}
-            onClose={close}
-            header={header}
-            testID="workspace-todos-sheet"
-          >
-            {content}
-          </AdaptiveModalSheet>
-        )}
-      </View>
-    </TodoContext.Provider>
-  );
+  return {
+    connected,
+    capability,
+    list,
+    draft,
+    pending,
+    loadError,
+    epoch: inputEpoch,
+    extraData,
+    openTasks,
+    onRetry: retry,
+    renderTask,
+    onReorder: reorder,
+    onNewTitle,
+    onNewNotes,
+    onNewMilestone,
+    onAdd: add,
+  };
 }
 
-import { ScrollView } from "@/components/ui/scroll-view";
 interface ContentProps {
   connected: boolean;
   capability: boolean;
@@ -375,7 +470,8 @@ interface ContentProps {
   loadError?: string;
   epoch: number;
   extraData: unknown;
-  empty: import("react").ReactElement;
+  openTasks: WorkspaceTodo[];
+  inline?: InlineLabels;
   onRetry(): Promise<void>;
   onReorder(tasks: WorkspaceTodo[]): void;
   renderTask(info: DraggableRenderItemInfo<WorkspaceTodo>): import("react").ReactElement;
@@ -393,7 +489,8 @@ function TodoContent({
   loadError,
   epoch,
   extraData,
-  empty,
+  openTasks,
+  inline,
   onRetry,
   renderTask,
   onReorder,
@@ -405,9 +502,13 @@ function TodoContent({
   const { t } = useTranslation();
   const compact = useIsCompactFormFactor();
   const size = compact ? "md" : "sm";
-  const groups = useMemo(() => groupTodoMilestones(list?.tasks ?? []), [list]);
-  const editingIds = useMemo(() => new Set(Object.keys(draft.edits)), [draft.edits]);
-  const completed = list?.tasks.filter((task) => task.status === "done").length ?? 0;
+  if (inline && !list && (!connected || !capability || loadError)) {
+    return (
+      <Text style={styles.status} accessibilityRole="alert">
+        {inline.unavailableLabel}
+      </Text>
+    );
+  }
   if (!connected && !list)
     return <Text style={styles.error}>{t("workspace.terminal.hostDisconnected")}</Text>;
   if (!capability && !list)
@@ -417,7 +518,7 @@ function TodoContent({
       </Text>
     );
   const body = (
-    <View style={styles.body}>
+    <View style={[styles.body, inline && styles.inlineBody]}>
       {!connected ? (
         <Text style={styles.error} accessibilityRole="alert">
           {t("workspace.terminal.hostDisconnected")}
@@ -438,42 +539,15 @@ function TodoContent({
           </Button>
         </View>
       ) : null}
-      {!list ? (
-        <Text style={styles.text}>{t("common.loading")}</Text>
-      ) : (
-        <>
-          <View style={styles.progressBlock}>
-            <View style={styles.row}>
-              <Text style={styles.status}>{t("workspaceTodos.progress")}</Text>
-              <Text style={styles.text}>
-                {completed}/{list.tasks.length}
-              </Text>
-            </View>
-            <View style={styles.progressTrack}>
-              <View
-                style={styles.progressFill(list.tasks.length ? completed / list.tasks.length : 0)}
-              />
-            </View>
-          </View>
-          <View style={styles.intro}>
-            <Text style={styles.introTitle}>{t("workspaceTodos.headline")}</Text>
-            <Text style={styles.status}>{t("workspaceTodos.subtitle")}</Text>
-          </View>
-          {groups.length === 0
-            ? empty
-            : groups.map((group, index) => (
-                <MilestoneSection
-                  key={group.name}
-                  group={group}
-                  index={index}
-                  editingIds={editingIds}
-                  extraData={extraData}
-                  renderTask={renderTask}
-                  onReorder={onReorder}
-                />
-              ))}
-        </>
-      )}
+      <TodoTasks
+        list={list}
+        inline={inline}
+        openTasks={openTasks}
+        draft={draft}
+        extraData={extraData}
+        onReorder={onReorder}
+        renderTask={renderTask}
+      />
     </View>
   );
   const addForm = list ? (
@@ -482,13 +556,14 @@ function TodoContent({
       draft={draft}
       pending={pending}
       epoch={epoch}
+      inline={inline !== undefined}
       onNewTitle={onNewTitle}
       onNewNotes={onNewNotes}
       onNewMilestone={onNewMilestone}
       onAdd={onAdd}
     />
   ) : null;
-  if (compact)
+  if (compact || inline)
     return (
       <View>
         {body}
@@ -503,7 +578,93 @@ function TodoContent({
   );
 }
 
+const todoKey = (task: WorkspaceTodo) => task.id;
+
+function TodoTasks({
+  list,
+  inline,
+  openTasks,
+  draft,
+  extraData,
+  onReorder,
+  renderTask,
+}: Pick<
+  ContentProps,
+  "list" | "inline" | "openTasks" | "draft" | "extraData" | "onReorder" | "renderTask"
+>) {
+  const { t } = useTranslation();
+  const editingIds = useMemo(() => new Set(Object.keys(draft.edits)), [draft.edits]);
+  const groups = useMemo(() => {
+    const milestones = groupTodoMilestones(list?.tasks ?? []);
+    return inline
+      ? milestones.filter(({ tasks }) =>
+          tasks.some((task) => task.status !== "done" || editingIds.has(task.id)),
+        )
+      : milestones;
+  }, [editingIds, inline, list]);
+  const completed = list?.tasks.filter((task) => task.status === "done").length ?? 0;
+  if (!list) return <Text style={styles.text}>{t("common.loading")}</Text>;
+  if (inline && groups.length === 0) {
+    return <Text style={styles.status}>{inline.emptyLabel}</Text>;
+  }
+  if (inline && groups.length === 1 && groups[0]?.name === "") {
+    return (
+      <DraggableList
+        data={openTasks}
+        keyExtractor={todoKey}
+        useDragHandle
+        scrollEnabled={false}
+        extraData={extraData}
+        onDragEnd={onReorder}
+        renderItem={renderTask}
+      />
+    );
+  }
+
+  const sections = groups.map((group, index) => (
+    <MilestoneSection
+      key={group.name}
+      group={group}
+      index={index}
+      hideCompleted={Boolean(inline)}
+      editingIds={editingIds}
+      extraData={extraData}
+      renderTask={renderTask}
+      onReorder={onReorder}
+    />
+  ));
+  if (inline) return <View style={styles.inlineMilestones}>{sections}</View>;
+
+  return (
+    <>
+      <View style={styles.progressBlock}>
+        <View style={styles.row}>
+          <Text style={styles.status}>{t("workspaceTodos.progress")}</Text>
+          <Text style={styles.text}>
+            {completed}/{list.tasks.length}
+          </Text>
+        </View>
+        <View style={styles.progressTrack}>
+          <View
+            style={styles.progressFill(list.tasks.length ? completed / list.tasks.length : 0)}
+          />
+        </View>
+      </View>
+      <View style={styles.intro}>
+        <Text style={styles.introTitle}>{t("workspaceTodos.headline")}</Text>
+        <Text style={styles.status}>{t("workspaceTodos.subtitle")}</Text>
+      </View>
+      {groups.length === 0 ? (
+        <Text style={styles.text}>{t("workspaceTodos.empty")}</Text>
+      ) : (
+        sections
+      )}
+    </>
+  );
+}
+
 function TodoAddForm({
+  inline,
   connected,
   draft,
   pending,
@@ -522,13 +683,13 @@ function TodoAddForm({
   | "onNewNotes"
   | "onNewMilestone"
   | "onAdd"
->) {
+> & { inline: boolean }) {
   const { t } = useTranslation();
   const size = useIsCompactFormFactor() ? "md" : "sm";
   const [addDetails, setAddDetails] = useState(false);
   const toggleDetails = useCallback(() => setAddDetails((value) => !value), []);
   return (
-    <View style={styles.add}>
+    <View style={[styles.add, inline && styles.inlineAdd]}>
       <View style={styles.row}>
         <View style={styles.titleInput}>
           <FormTextInput
@@ -597,6 +758,7 @@ function TodoAddForm({
 interface RowProps {
   info: DraggableRenderItemInfo<WorkspaceTodo>;
   list: WorkspaceTodos;
+  order: WorkspaceTodo[];
   draft?: EditDraft;
   expanded: boolean;
   pending: boolean;
@@ -609,6 +771,7 @@ interface RowProps {
 function TodoRow({
   info: { item: task, drag, dragHandleProps },
   list,
+  order,
   draft,
   expanded,
   pending,
@@ -619,7 +782,7 @@ function TodoRow({
   onReorder,
 }: RowProps) {
   const { t } = useTranslation();
-  const index = list.tasks.findIndex((item) => item.id === task.id);
+  const index = order.findIndex((item) => item.id === task.id);
   const size = useIsCompactFormFactor() ? "md" : "sm";
   const checked = useMemo(
     () => ({ checked: task.status === "done", disabled: pending }),
@@ -667,13 +830,13 @@ function TodoRow({
   );
   const move = useCallback(
     (offset: number) => {
-      const tasks = [...list.tasks];
+      const tasks = [...order];
       const [item] = tasks.splice(index, 1);
       if (!item) return;
       tasks.splice(index + offset, 0, item);
       onReorder(tasks);
     },
-    [list.tasks, index, onReorder],
+    [order, index, onReorder],
   );
   const moveUp = useCallback(() => move(-1), [move]);
   const moveDown = useCallback(() => move(1), [move]);
@@ -700,7 +863,7 @@ function TodoRow({
         <DropdownMenuItem disabled={pending || index === 0} onSelect={moveUp}>
           {t("workspaceTodos.moveUp")}
         </DropdownMenuItem>
-        <DropdownMenuItem disabled={pending || index === list.tasks.length - 1} onSelect={moveDown}>
+        <DropdownMenuItem disabled={pending || index === order.length - 1} onSelect={moveDown}>
           {t("workspaceTodos.moveDown")}
         </DropdownMenuItem>
         <DropdownMenuItem disabled={pending} onSelect={remove}>
@@ -891,6 +1054,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   scroll: { flex: 1, minHeight: 0 },
   body: { padding: theme.spacing[4], gap: theme.spacing[4] },
+  inlineBody: { padding: 0, gap: theme.spacing[2] },
+  inlineMilestones: { gap: theme.spacing[2] },
   row: { flexDirection: "row", alignItems: "center", gap: theme.spacing[2] },
   task: {
     gap: theme.spacing[2],
@@ -915,6 +1080,7 @@ const styles = StyleSheet.create((theme) => ({
     borderTopWidth: 1,
     borderColor: theme.colors.border,
   },
+  inlineAdd: { paddingHorizontal: 0, paddingVertical: theme.spacing[2] },
   details: { gap: theme.spacing[3], paddingVertical: theme.spacing[2] },
   taskTitle: { fontSize: theme.fontSize.base, lineHeight: 22, color: theme.colors.foreground },
   doneTitle: { color: theme.colors.foregroundMuted },

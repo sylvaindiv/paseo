@@ -40,6 +40,7 @@ function installation(
     timelineTransformers: [],
     timelineRenderers: [],
     planActions: [],
+    workspaceTodosViews: [],
   };
 }
 

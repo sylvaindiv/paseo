@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, onTestFinished, test } from "vitest";
@@ -31,6 +31,64 @@ function createGitRepoWithBranch(): { repoDir: string; tempRoot: string } {
   execFileSync("git", ["branch", "feature/existing-branch"], { cwd: repoDir, stdio: "pipe" });
   return { repoDir, tempRoot };
 }
+
+test("project isolation restricts new workspaces and can be reset", async () => {
+  const daemon = await createTestPaseoDaemon();
+  const { repoDir, tempRoot } = createGitRepoWithBranch();
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  try {
+    await client.connect();
+    const { project } = await client.addProject(repoDir);
+    const projectId = project!.projectId;
+    const alias = path.join(tempRoot, "alias");
+    symlinkSync(repoDir, alias, process.platform === "win32" ? "junction" : "dir");
+    const local = { source: { kind: "directory" as const, path: repoDir } };
+    const worktree = {
+      source: {
+        kind: "worktree" as const,
+        cwd: alias,
+        worktreeSlug: "isolated",
+        baseBranch: "main",
+      },
+    };
+    const gitState = () =>
+      [
+        ["branch", "--list"],
+        ["worktree", "list"],
+      ].map((args) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }));
+    const before = gitState();
+
+    await client.setProjectWorkspaceIsolation(projectId, "local");
+    expect(
+      (await client.listProjects()).projects.find((entry) => entry.projectId === projectId)
+        ?.workspaceIsolation,
+    ).toBe("local");
+    expect((await client.createWorkspace(worktree)).error).toMatch(/local workspaces only/i);
+    expect(gitState()).toEqual(before);
+    const existing = (await client.createWorkspace(local)).workspace;
+    expect(existing).not.toBeNull();
+
+    await client.setProjectWorkspaceIsolation(projectId, "worktree");
+    expect((await client.createWorkspace(local)).error).toMatch(/worktree workspaces only/i);
+    expect(
+      (await client.createWorkspace({ source: { kind: "directory", path: alias } })).error,
+    ).toMatch(/worktree workspaces only/i);
+    expect((await client.openProject(repoDir)).workspace?.id).toBe(existing?.id);
+    expect((await client.createWorkspace(worktree)).workspace?.workspaceKind).toBe("worktree");
+
+    await client.setProjectWorkspaceIsolation(projectId, "both");
+    expect((await client.createWorkspace(local)).error).toBeNull();
+
+    const { project: plainProject } = await client.addProject(tempRoot);
+    await expect(
+      client.setProjectWorkspaceIsolation(plainProject!.projectId, "worktree"),
+    ).rejects.toThrow(/requires a Git repository/);
+  } finally {
+    await client.close().catch(() => undefined);
+    await daemon.close();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}, 180000);
 
 test("workspace.create worktree source forwards action=checkout + refName into the real worktree", async () => {
   const daemon = await createTestPaseoDaemon();

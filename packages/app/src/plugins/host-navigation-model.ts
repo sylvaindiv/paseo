@@ -11,6 +11,7 @@ interface HostNavigationOwner {
   browserAvailable: boolean;
   openAgent(input: { serverId: string; agentId: string }): void;
   openWorkspace(input: NavigateToWorkspaceInput): void;
+  openProjectSettings?(serverId: string, projectId: string): void;
   resolveWorkspace(input: { serverId: string; workspaceId: string }): string | null;
   openBrowser(input: OpenWorkspaceBrowserInput): OpenWorkspaceBrowserResult;
 }
@@ -20,6 +21,10 @@ export function createPluginHostNavigation(
   owner: HostNavigationOwner,
 ): NonNullable<PluginSurfaceProps["navigation"]> {
   return {
+    openProjectSettings: owner.openProjectSettings
+      ? ({ projectId, serverId: targetServerId }) =>
+          owner.openProjectSettings?.(targetServerId ?? serverId, projectId)
+      : undefined,
     openAgent: ({ agentId, serverId: targetServerId }) =>
       owner.openAgent({ serverId: targetServerId ?? serverId, agentId }),
     openWorkspace: ({ workspaceId, serverId: targetServerId }) =>

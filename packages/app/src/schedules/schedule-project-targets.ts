@@ -12,6 +12,7 @@ export interface ScheduleProjectTarget {
   projectName: string;
   cwd: string;
   isGit: boolean;
+  workspaceIsolation?: ProjectSummary["hosts"][number]["workspaceIsolation"];
 }
 
 export function buildProjectOptionId(serverId: string, projectViewKey: string): string {
@@ -40,7 +41,11 @@ export function buildScheduleProjectTargets(
         projectViewKey: project.viewKey,
         projectName: host.projectName,
         cwd,
-        isGit: Boolean(host.gitRuntime),
+        isGit:
+          host.worktreeSupport === undefined
+            ? Boolean(host.gitRuntime)
+            : host.worktreeSupport === "supported",
+        workspaceIsolation: host.workspaceIsolation,
       });
     }
   }

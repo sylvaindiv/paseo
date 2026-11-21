@@ -2983,6 +2983,13 @@ export const ja: TranslationResources = {
     project: {
       noEditableTarget: "このホストではこのプロジェクトを編集できません。",
       backToProjects: "プロジェクトに戻る",
+      workspaceIsolation: {
+        title: "ワークスペースの作成",
+        both: "ローカルまたは Worktree",
+        local: "ローカルのみ",
+        worktree: "Worktree のみ",
+        failed: "設定を保存できませんでした",
+      },
       edit: {
         title: "プロジェクトを編集",
         name: "名前",

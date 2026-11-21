@@ -94,6 +94,7 @@ export class PluginRegistry {
           sidebarItems: { header: [], footer: [] },
           legacySidebarItems: [],
           workspacePanels: [],
+          workspaceTodosViews: [],
           commandCenterItems: [],
           clientSlashCommands: [],
           attachmentSources: [],

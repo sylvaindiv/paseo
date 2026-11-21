@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import type { PaseoApi } from "@getpaseo/client";
+import type { PaseoApi, WorkspaceTodos } from "@getpaseo/client";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type { ZodType, input as ZodInput, output as ZodOutput } from "zod";
 import type { PluginRpcContract } from "../rpc.js";
@@ -45,6 +45,11 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly agentId: string;
       readonly serverId?: string;
     }) => void;
+    /** Open the selected project's settings on its host. */
+    readonly openProjectSettings?: (input: {
+      readonly projectId: string;
+      readonly serverId?: string;
+    }) => void;
     readonly openWorkspace: (input: {
       readonly workspaceId: string;
       readonly serverId?: string;
@@ -70,6 +75,8 @@ export interface PluginSurfaceProps extends PluginNavigableHostProps {}
 export interface PluginScreenProps extends PluginSurfaceProps {
   /** The params the screen was opened with; `{}` when none. */
   params: PluginScreenParams;
+  /** Whether this screen is the current navigation destination. */
+  isFocused: boolean;
 }
 
 export interface PluginPopoverProps extends PluginHostProps {
@@ -90,6 +97,29 @@ export interface PluginSidebarItemContribution {
   /** Settings row label, accessibility label, and default label for SidebarRow. */
   title: string;
   Component: ComponentType<PluginSidebarItemProps>;
+  /** Footer only. Places the row before OpenDesign where that row is available. */
+  placement?: "before-opendesign";
+}
+
+export interface PluginWorkspaceTodosViewProps extends PluginHostProps {
+  workspaceId: string;
+  connected: boolean;
+  supported: boolean;
+  list:
+    | (Readonly<Omit<WorkspaceTodos, "tasks">> & {
+        readonly tasks: readonly Readonly<WorkspaceTodos["tasks"][number]>[];
+      })
+    | null;
+  loadError?: string;
+}
+
+export interface PluginWorkspaceTodosViewContribution {
+  Component: ComponentType<PluginWorkspaceTodosViewProps>;
+}
+
+export interface PluginLocalStorage {
+  getItem(key: string): Promise<string | null>;
+  setItem(key: string, value: string): Promise<void>;
 }
 
 export interface PluginIconProps {
@@ -136,6 +166,8 @@ interface PluginClientContextAliases {
 }
 
 export interface PluginClientContext extends PluginCommandCapabilities, PluginClientContextAliases {
+  /** Storage on the current device, shared by installations of this plugin ID. */
+  readonly localStorage: PluginLocalStorage;
   /** Play a base64-encoded audio file on this client; resolves when playback ends. */
   playAudio(source: { base64: string; mimeType: string }): Promise<void>;
   addSettingsScreen(contribution: PluginSettingsScreenContribution): PluginCleanup;
@@ -143,6 +175,7 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   addSidebarHeaderItem(contribution: PluginSidebarItemContribution): PluginCleanup;
   addSidebarFooterItem(contribution: PluginSidebarItemContribution): PluginCleanup;
   addWorkspacePanel(contribution: PluginWorkspacePanelContribution): PluginCleanup;
+  addWorkspaceTodosView(contribution: PluginWorkspaceTodosViewContribution): PluginCleanup;
   addCommandCenterItem(contribution: PluginCommandCenterItemContribution): PluginCleanup;
   addSlashCommand(contribution: PluginClientSlashCommandContribution): PluginCleanup;
   addHeaderButton(contribution: PluginHeaderButtonContribution): PluginButtonRegistration;

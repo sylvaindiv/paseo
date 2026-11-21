@@ -32,3 +32,19 @@ test("dragging one milestone's visible subset preserves hidden and unrelated tas
   expect(mergeTodoOrder(tasks, [tasks[3]!, tasks[0]!])).toEqual(["d", "b", "c", "a"]);
   expect(mergeTodoOrder(tasks, [])).toEqual(["a", "b", "c", "d"]);
 });
+
+test("reordering a workspace's open tasks keeps completed positions and milestone assignments", () => {
+  const build = task("build", "Build");
+  const completed = { ...task("completed", "Review"), status: "done" as const };
+  const review = task("review", "Review");
+  expect(mergeTodoOrder([build, completed, review], [review, build])).toEqual([
+    "review",
+    "completed",
+    "build",
+  ]);
+  expect([build.milestone, completed.milestone, review.milestone]).toEqual([
+    "Build",
+    "Review",
+    "Review",
+  ]);
+});

@@ -29,6 +29,25 @@ function bundle(body: string): string {
 }
 
 describe("evaluatePluginClientBundle", () => {
+  it("keeps the footer placement and removes the To-do view on unload", async () => {
+    const plugin = evaluatePluginClientBundle(
+      "projets",
+      bundle(`
+        function Component() { return null; }
+        plugin.addSidebarFooterItem({ id: "main", title: "Projets", Component, placement: "before-opendesign" });
+        plugin.addWorkspaceTodosView({ Component });
+      `),
+    );
+
+    expect(plugin.sidebarItems.footer.map((item) => item.placement)).toEqual(["before-opendesign"]);
+    expect(plugin.workspaceTodosViews.map(({ Component }) => Component.name)).toEqual([
+      "Component",
+    ]);
+    await plugin.cleanup();
+    expect(plugin.workspaceTodosViews).toEqual([]);
+    expect(plugin.sidebarItems.footer).toEqual([]);
+  });
+
   it("collects plan actions and removes them when the plugin stops", async () => {
     const plugin = evaluatePluginClientBundle(
       "workflow",

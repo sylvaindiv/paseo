@@ -653,6 +653,20 @@ describe("ReplicaCache", () => {
     ]);
   });
 
+  it("restores project isolation from both cached projections", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    const snapshot = directory();
+    snapshot.projects.get("project-1")!.workspaceIsolation = "local";
+    snapshot.workspaces.get("workspace-1")!.workspaceIsolation = "local";
+    commitDirectory(writer, SERVER_ID, snapshot);
+    await writer.flush();
+
+    const restored = await createCache(storage).readWorkspace(SERVER_ID, "workspace-1");
+    expect(restored?.project?.workspaceIsolation).toBe("local");
+    expect(restored?.workspace.workspaceIsolation).toBe("local");
+  });
+
   it("treats a corrupt row as a scoped miss", async () => {
     const storage = new MemoryStorage();
     storage.rows.set(`${SERVER_ID}:agent:agent-1`, {

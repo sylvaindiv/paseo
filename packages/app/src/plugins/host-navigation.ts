@@ -7,6 +7,7 @@ import { navigateToAgent } from "@/utils/navigate-to-agent";
 
 import { getIsElectron } from "@/constants/platform";
 import { openWorkspaceBrowser } from "@/workspace-tabs/browser";
+import { openProjectSettings } from "@/navigation/settings-navigation";
 import { createPluginHostNavigation } from "./host-navigation-model";
 
 export function usePluginHostNavigation(
@@ -18,6 +19,7 @@ export function usePluginHostNavigation(
         browserAvailable: getIsElectron(),
         openAgent: navigateToAgent,
         openWorkspace: navigateToWorkspace,
+        openProjectSettings,
         openBrowser: openWorkspaceBrowser,
         resolveWorkspace: ({ serverId: targetServerId, workspaceId }) =>
           resolveWorkspaceMapKeyByIdentity({

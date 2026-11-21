@@ -8,6 +8,7 @@ export {
   getHostProjectSourceDirectory,
   getHostProjectId,
   getWorktreeSupportForHostProject,
+  getHostProjectPlacement,
   hostProjectFromRoute,
   hostProjectFromWorkspace,
   resolveHostProjectCandidate,

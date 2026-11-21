@@ -2998,6 +2998,13 @@ export const ptBR: TranslationResources = {
     project: {
       noEditableTarget: "Este projeto não pode ser editado neste host.",
       backToProjects: "Voltar para projetos",
+      workspaceIsolation: {
+        title: "Criação de espaços",
+        both: "Local ou Worktree",
+        local: "Somente local",
+        worktree: "Somente Worktree",
+        failed: "Não foi possível salvar a configuração",
+      },
       edit: {
         title: "Editar projeto",
         name: "Nome",

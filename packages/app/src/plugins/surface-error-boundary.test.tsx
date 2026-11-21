@@ -29,6 +29,9 @@ function FailingSurface() {
 function CorrectedSurface() {
   return <Text>Corrected surface</Text>;
 }
+function NativeTodoEditor() {
+  return <Text>Workspace To-do editor</Text>;
+}
 const oldInstallation = {};
 const correctedInstallation = {};
 
@@ -42,6 +45,32 @@ describe("SurfaceErrorBoundary", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     oldSurfaceCleanups = 0;
+  });
+
+  it("shows the host editor when a contributed To-do view fails", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const container = document.createElement("div");
+    containers.push(container);
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+
+    await act(async () => {
+      root.render(
+        <SurfaceErrorBoundary
+          installation={oldInstallation}
+          Surface={FailingSurface}
+          renderError={NativeTodoEditor}
+        >
+          <FailingSurface />
+        </SurfaceErrorBoundary>,
+      );
+    });
+
+    expect(container.textContent).toBe("Workspace To-do editor");
+    expect(oldSurfaceCleanups).toBe(1);
   });
 
   it("recovers a mounted failed route when its installation and surface are replaced", async () => {

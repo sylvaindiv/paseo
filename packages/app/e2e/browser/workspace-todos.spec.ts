@@ -1,3 +1,4 @@
+import path from "node:path";
 import { installDaemonWebSocketGate } from "../support/helpers/daemon-websocket-gate";
 import { test, expect } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
@@ -5,8 +6,435 @@ import { seedWorkspace } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
 import { switchWorkspaceViaSidebar } from "../support/helpers/workspace-ui";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
+import { connectNewWorkspaceDaemonClient } from "../support/helpers/new-workspace";
 
 test.use({ video: "off", trace: "off" });
+
+test("Projets keeps project lists separate from workspace To-do", async ({ page }, testInfo) => {
+  const workspace = await seedWorkspace({ repoPrefix: "project-todos-", git: false });
+  const client = await connectNewWorkspaceDaemonClient({ ownProjects: false });
+  const { config } = await client.getDaemonConfig();
+  try {
+    await workspace.client.mutateWorkspaceTodos(workspace.workspaceId, 0, {
+      operation: "add",
+      title: "Workspace-only task",
+      notes: "",
+    });
+    await client.patchDaemonConfig({ pluginsEnabled: true });
+    await client.installDirectoryPlugin(path.resolve(__dirname, "../../../../plugins/projets"));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoAppShell(page);
+    await page.getByRole("button", { name: "Projets", exact: true }).click();
+
+    const board = page.getByTestId("projets-page");
+    const list = board.getByTestId("projets-local-list");
+    await expect(list).toBeVisible();
+    await expect(board.getByTestId("projets-project-rank")).toHaveCount(0);
+    await expect(board.getByTestId("projets-project-settings")).toHaveCount(0);
+    await expect(list.getByText("Tâches", { exact: true })).toBeVisible();
+    await expect(board).toHaveCSS("background-color", "rgb(242, 237, 227)");
+    await expect(board.getByText("Workspace-only task")).toBeHidden();
+    await list.getByRole("button", { name: /Ajouter une tâche/ }).click();
+    const input = list.getByRole("textbox", { name: "Nouvelle tâche", exact: true });
+    await input.fill("Project-only task");
+    await input.press("Enter");
+    const title = list.getByRole("button", { name: "Modifier Project-only task", exact: true });
+    await expect(title).toBeVisible();
+    await expect(input).toBeFocused();
+    await input.fill("Next project task");
+    await input.press("Enter");
+    await expect(list.getByText("Next project task", { exact: true })).toBeVisible();
+    await expect(input).toBeFocused();
+    await input.press("Escape");
+
+    await title.click();
+    const editor = list.getByRole("textbox", { name: "Modifier Project-only task", exact: true });
+    await expect(editor).toBeFocused();
+    const notes = list.getByRole("textbox", { name: "Notes", exact: true });
+    await expect(notes).toBeVisible();
+    await editor.press("ArrowDown");
+    await expect(notes).toBeFocused();
+    await notes.fill("Vérifier le parcours avant la livraison.");
+    await notes.press("ArrowDown");
+    const subtask = list.getByRole("textbox", { name: "Nouvelle sous-tâche", exact: true });
+    await expect(subtask).toBeFocused();
+    await subtask.fill("Project subtask");
+    await subtask.press("Enter");
+    await expect(list.getByText("Project subtask", { exact: true })).toBeVisible();
+    await expect(subtask).toBeFocused();
+    await subtask.press("Escape");
+
+    const projectHeader = board.getByTestId("projets-card-header");
+    const projectTitle = projectHeader.getByRole("button", { name: /^project-todos-/ });
+    const addPhase = projectHeader.getByRole("button", { name: /^Ajouter une phase à / });
+    const phaseInput = list.getByPlaceholder("Nouvelle phase");
+    await expect(list.getByRole("button", { name: "+ Phase", exact: true })).toHaveCount(0);
+    await expect(addPhase).toHaveAttribute("data-no-dnd", "");
+    await projectTitle.click();
+    await expect(projectTitle).toHaveAttribute("aria-expanded", "false");
+    await addPhase.click();
+    await expect(projectTitle).toHaveAttribute("aria-expanded", "true");
+    await expect(phaseInput).toBeFocused();
+    await phaseInput.fill("Review");
+    await phaseInput.press("Enter");
+    const phaseActions = list.getByRole("button", {
+      name: "Actions de la phase Review",
+      exact: true,
+    });
+    await phaseActions.click();
+    const phaseMenu = page.getByRole("menu", { name: "Actions de la phase Review", exact: true });
+    await expect(phaseMenu).toBeVisible();
+    await expect(phaseMenu).toHaveCSS("background-color", "rgb(247, 245, 237)");
+    await phaseMenu.getByRole("menuitem", { name: "Supprimer la phase", exact: true }).click();
+    await expect(
+      phaseMenu.getByRole("menuitem", { name: "Confirmer la suppression" }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(phaseMenu).toBeHidden();
+    await phaseActions.click();
+    await phaseMenu.getByRole("menuitem", { name: "Renommer" }).click();
+    const renamePhase = list.getByRole("textbox", {
+      name: "Renommer la phase Review",
+      exact: true,
+    });
+    await expect(renamePhase).toHaveValue("Review");
+    await renamePhase.press("Enter");
+    await expect(renamePhase).toBeHidden();
+
+    const review = list.getByRole("button", { name: "Phase Review", exact: true });
+    await expect(review).toHaveAttribute("aria-expanded", "true");
+    await review.click();
+    await expect(review).toHaveAttribute("aria-expanded", "false");
+    const target = list.locator("[data-projets-drop-phase]").filter({
+      has: page.getByRole("button", { name: "Phase Review", exact: true }),
+    });
+    const from = (await title.boundingBox())!;
+    await page.mouse.move(from.x + 12, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from.x + 32, from.y + from.height / 2, { steps: 4 });
+    const to = (await review.boundingBox())!;
+    await page.mouse.move(to.x + 10, to.y + to.height / 2, { steps: 16 });
+    await expect(target).toHaveCSS("outline-width", "2px");
+    await page.mouse.up();
+
+    await expect(target.getByText("Project-only task", { exact: true })).toBeVisible();
+    await expect(target.getByText("Project subtask", { exact: true })).toBeVisible();
+    await page.reload();
+    await review.click();
+    await expect(target.getByText("Project-only task", { exact: true })).toBeVisible();
+    await expect(target.getByText("Project subtask", { exact: true })).toBeVisible();
+    const menuTrigger = target.getByRole("button", {
+      name: "Actions de Project-only task",
+      exact: true,
+    });
+    await title.hover();
+    await expect(menuTrigger).toHaveCSS("opacity", "1");
+    await menuTrigger.click();
+    const menu = page.getByRole("menu", { name: "Actions", exact: true });
+    await expect(menu.getByRole("menuitem", { name: "Modifier", exact: true })).toBeVisible();
+    await menu.getByRole("menuitem", { name: "Modifier", exact: true }).click();
+    await expect(editor).toBeFocused();
+    await expect(notes).toHaveValue("Vérifier le parcours avant la livraison.");
+    await editor.press("Escape");
+
+    const queue = list.getByTestId("projets-queue");
+    await expect(queue).toContainText("À envoyer");
+    await dragOnBoard(page, title, queue, "y");
+    await expect(queue.getByText("Project-only task", { exact: true })).toBeVisible();
+    await expect(target.getByText("Project-only task", { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(queue.getByText("Project-only task", { exact: true })).toBeVisible();
+    await queue.getByRole("button", { name: "Retirer Project-only task de l’envoi" }).click();
+    await expect(queue.getByText("Project-only task", { exact: true })).toBeHidden();
+    await review.click();
+
+    const begin = target.getByRole("checkbox", {
+      name: "Commencer Project-only task",
+      exact: true,
+    });
+    await begin.click();
+    const finish = target.getByRole("checkbox", {
+      name: "Terminer Project-only task",
+      exact: true,
+    });
+    await expect(finish).toHaveAttribute("aria-checked", "mixed");
+    await finish.click();
+    await target.getByRole("button", { name: "Terminées · 1", exact: true }).click();
+    await expect(
+      target.getByRole("checkbox", { name: "Rouvrir Project-only task", exact: true }),
+    ).toBeChecked();
+
+    const reviewHeader = list.getByRole("group", { name: "Déplacer la phase Review", exact: true });
+    const firstPhaseHeader = list.getByRole("group", {
+      name: "Déplacer la phase Phase 1",
+      exact: true,
+    });
+    await expect(list.getByRole("button", { name: /^Déplacer la phase / })).toHaveCount(0);
+    await dragOnBoard(
+      page,
+      reviewHeader.getByRole("button", { name: "Review", exact: true }),
+      firstPhaseHeader,
+      "y",
+    );
+    await expect(
+      list.locator("[data-projets-drop-phase]").first().getByRole("button", {
+        name: "Phase Review",
+        exact: true,
+      }),
+    ).toBeVisible();
+    const orderedPhases = list.locator("[data-projets-drop-phase]");
+    const activePhaseId = await orderedPhases.first().getAttribute("data-projets-drop-phase");
+    const nextPhaseId = await orderedPhases.last().getAttribute("data-projets-drop-phase");
+    const phaseAnnouncement = (destinationId: string | null) =>
+      "Draggable item phase:" +
+      activePhaseId +
+      " was moved over droppable area phase:" +
+      destinationId +
+      ".";
+    await reviewHeader.focus();
+    await page.keyboard.press("Space");
+    await expect(reviewHeader).toHaveAttribute("data-dragging", "true");
+    await expect(page.getByText(phaseAnnouncement(activePhaseId), { exact: true })).toBeAttached();
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByText(phaseAnnouncement(nextPhaseId), { exact: true })).toBeAttached();
+    await page.keyboard.press("Space");
+    await expect(
+      list.locator("[data-projets-drop-phase]").first().getByRole("button", {
+        name: "Phase Phase 1",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await dragOnBoard(page, reviewHeader, firstPhaseHeader, "y", 0.16);
+    await expect(
+      list.locator("[data-projets-drop-phase]").first().getByRole("button", {
+        name: "Phase Review",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page.reload();
+    await expect(
+      list.locator("[data-projets-drop-phase]").first().getByRole("button", {
+        name: "Phase Review",
+        exact: true,
+      }),
+    ).toBeVisible();
+
+    const another = await seedWorkspace({ repoPrefix: "project-order-", git: false });
+    try {
+      const cards = board.getByTestId("projets-card");
+      await expect(cards).toHaveCount(2);
+      const firstBar = cards.first().getByRole("group", { name: /^Déplacer le projet / });
+      const secondBar = cards.last().getByRole("group", { name: /^Déplacer le projet / });
+      await expect(board.getByRole("button", { name: /^Déplacer le projet / })).toHaveCount(0);
+      const firstProject = (await firstBar.getAttribute("aria-label"))!;
+      const secondProject = (await secondBar.getAttribute("aria-label"))!;
+      const firstName = firstProject.replace("Déplacer le projet ", "");
+      const firstTitle = cards.first().getByRole("button", { name: firstName, exact: true });
+      const firstHeader = cards.first().getByTestId("projets-card-header");
+      await expect(cards.first().getByText(firstName, { exact: true })).toHaveCount(1);
+      await firstTitle.click();
+      await expect(firstTitle).toHaveAttribute("aria-expanded", "false");
+      await firstTitle.click();
+      await expect(firstTitle).toHaveAttribute("aria-expanded", "true");
+
+      await dragOnBoard(
+        page,
+        firstTitle.getByText(firstName, { exact: true }),
+        secondBar,
+        "x",
+        0.05,
+      );
+      await expect(firstBar).toHaveAttribute("aria-label", secondProject);
+      await expect(board.getByRole("button", { name: firstName, exact: true })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      await dragOnBoard(page, firstHeader, secondBar, "x", 0.015);
+      await expect(firstBar).toHaveAttribute("aria-label", firstProject);
+      await dragOnBoard(page, firstHeader, secondBar, "x", 0.75);
+      await expect(firstBar).toHaveAttribute("aria-label", secondProject);
+      await page.reload();
+      await expect(firstBar).toHaveAttribute("aria-label", secondProject);
+      const secondName = secondProject.replace("Déplacer le projet ", "");
+      await cards
+        .first()
+        .getByRole("button", { name: "Actions de " + secondName })
+        .click();
+      await expect(page.getByRole("menuitem", { name: "Réglages du projet" })).toBeVisible();
+      await page.getByRole("menuitem", { name: "Terminer le projet" }).click();
+      await expect(cards).toHaveCount(1);
+      await expect(cards.first().getByText(firstName, { exact: true })).toBeVisible();
+      await board.getByRole("button", { name: "Terminés · 1" }).click();
+      const finished = board.getByTestId("projets-finished");
+      await expect(finished.getByText(secondName, { exact: true })).toBeVisible();
+      await board.screenshot({ path: testInfo.outputPath("projets-termines.png") });
+      await finished.getByRole("button", { name: "Actions de " + secondName }).click();
+      await page.getByRole("menuitem", { name: "Rouvrir" }).click();
+      await expect(firstBar).toHaveAttribute("aria-label", secondProject);
+      await cards
+        .first()
+        .getByRole("button", { name: "Actions de " + secondName })
+        .click();
+      await page.getByRole("menuitem", { name: "Déplacer à droite" }).press("Enter");
+      await expect(secondBar).toHaveAttribute("aria-label", secondProject);
+      await secondBar.focus();
+      await page.keyboard.press("Space");
+      await expect(secondBar).toHaveAttribute("data-dragging", "true");
+      const projectAnnouncement = page.getByText(
+        /^Draggable item (?!phase:).+ was moved over droppable area (?!phase:).+\.$/,
+      );
+      await expect(projectAnnouncement).toBeAttached();
+      const initialAnnouncement = await projectAnnouncement.textContent();
+      await page.keyboard.press("ArrowLeft");
+      await expect(projectAnnouncement).not.toHaveText(initialAnnouncement!);
+      await page.keyboard.press("Space");
+      await expect(firstBar).toHaveAttribute("aria-label", secondProject);
+      await expect(
+        board.getByRole("button", { name: /prioritaire|Déplacer à (droite|gauche)/ }),
+      ).toHaveCount(0);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(board).toBeVisible();
+      const row = board.getByTestId("projets-cards");
+      await expect
+        .poll(async () => {
+          const [first, second] = await Promise.all([
+            cards.first().boundingBox(),
+            cards.last().boundingBox(),
+          ]);
+          const viewport = await row.boundingBox();
+          return Boolean(
+            first &&
+            second &&
+            viewport &&
+            first.y === second.y &&
+            second.x + second.width > viewport.x + viewport.width,
+          );
+        })
+        .toBe(true);
+      await expect(async () => {
+        await cards.last().scrollIntoViewIfNeeded({ timeout: 2_000 });
+        await expect(list.last()).toBeInViewport({ timeout: 2_000 });
+      }).toPass({ timeout: 10_000 });
+      await board.screenshot({ path: testInfo.outputPath("projets-palette-mobile.png") });
+      await page.setViewportSize({ width: 1440, height: 900 });
+    } finally {
+      await another.cleanup();
+    }
+
+    await switchWorkspaceViaSidebar({
+      page,
+      serverId: getServerId(),
+      workspaceId: workspace.workspaceId,
+    });
+    await page.getByTestId("workspace-todos-toggle").filter({ visible: true }).click();
+    await expect(page.getByText("Workspace-only task", { exact: true })).toBeVisible();
+    await expect(page.getByText("Project-only task", { exact: true })).toBeHidden();
+  } finally {
+    await client.removePlugin("projets").catch(() => undefined);
+    await client.patchDaemonConfig({ pluginsEnabled: config.pluginsEnabled ?? false });
+    await client.close();
+    await workspace.cleanup();
+  }
+});
+
+test("Projets sends distinct lots and restores review after reconnecting", async ({
+  page,
+}, testInfo) => {
+  const workspace = await seedWorkspace({ repoPrefix: "project-dispatch-", git: false });
+  const client = await connectNewWorkspaceDaemonClient({ ownProjects: false });
+  const { config } = await client.getDaemonConfig();
+  await page.routeWebSocket(daemonWsRoutePattern(), (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((message) => server.send(message));
+    server.onMessage((message) => {
+      if (typeof message !== "string") {
+        socket.send(message);
+        return;
+      }
+      const parsed = JSON.parse(message);
+      const session = parsed.message ?? parsed;
+      if (session.type === "list_provider_models_response" && session.payload.provider === "mock") {
+        for (const model of session.payload.models ?? []) {
+          model.isDefault = model.id === "ten-second-stream";
+        }
+      }
+      socket.send(JSON.stringify(parsed));
+    });
+  });
+  try {
+    await client.patchDaemonConfig({ pluginsEnabled: true });
+    await client.installDirectoryPlugin(path.resolve(__dirname, "../../../../plugins/projets"));
+    await gotoAppShell(page);
+    await page.getByRole("button", { name: "Projets", exact: true }).click();
+    const list = page.getByTestId("projets-local-list");
+    const queue = list.getByTestId("projets-queue");
+    const names = ["Première tâche", "Deuxième tâche"];
+    await list.getByRole("button", { name: /Ajouter une tâche/ }).click();
+    const input = list.getByRole("textbox", { name: "Nouvelle tâche", exact: true });
+    for (const name of names) {
+      await input.fill(name);
+      await input.press("Enter");
+      await expect(list.getByRole("button", { name: "Modifier " + name })).toBeVisible();
+    }
+    await input.press("Escape");
+
+    for (const name of names) {
+      await list.getByRole("button", { name: "Modifier " + name }).hover();
+      await list.getByRole("button", { name: "Actions de " + name }).click();
+      await page.getByRole("menuitem", { name: "Ajouter à « À envoyer »" }).click();
+      await expect(queue.getByText(name, { exact: true })).toBeVisible();
+      if (name === names[0]) {
+        await list.screenshot({ path: testInfo.outputPath("projets-a-envoyer.png") });
+      }
+      await queue.getByRole("button", { name: "Envoyer · 1" }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("button", { name: "mock", exact: true }).click({ force: true });
+      await dialog.getByRole("button", { name: "Lancer l’agent" }).click();
+      await expect(queue.getByText(name, { exact: true })).toBeHidden();
+    }
+    await expect(list.getByTestId("projets-batch-running")).toHaveCount(2);
+    await list.screenshot({ path: testInfo.outputPath("projets-en-cours.png") });
+    await page.reload();
+    const reviews = list.getByTestId("projets-batch-review");
+    await expect(reviews).toHaveCount(2, { timeout: 25_000 });
+    await list.screenshot({ path: testInfo.outputPath("projets-a-verifier.png") });
+    for (const name of names) {
+      await reviews.getByRole("checkbox", { name: "Valider " + name }).click();
+    }
+    await expect(reviews).toHaveCount(0);
+    expect(
+      (await client.fetchAgents()).entries.filter(
+        ({ agent }) => agent.workspaceId === workspace.workspaceId && agent.provider === "mock",
+      ),
+    ).toHaveLength(2);
+  } finally {
+    await client.removePlugin("projets").catch(() => undefined);
+    await client.patchDaemonConfig({ pluginsEnabled: config.pluginsEnabled ?? false });
+    await client.close();
+    await workspace.cleanup();
+  }
+});
+
+async function dragOnBoard(
+  page: import("@playwright/test").Page,
+  source: import("@playwright/test").Locator,
+  target: import("@playwright/test").Locator,
+  axis: "x" | "y",
+  position = 0.5,
+) {
+  await expect(source).toBeVisible();
+  await expect(target).toBeVisible();
+  const from = (await source.boundingBox())!;
+  const to = (await target.boundingBox())!;
+  const x = from.x + from.width * position;
+  const y = from.y + from.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + (axis === "x" ? 12 : 0), y + (axis === "y" ? 12 : 0), { steps: 4 });
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 16 });
+  await page.mouse.up();
+}
 
 async function addTask(
   page: import("@playwright/test").Page,
@@ -69,8 +497,12 @@ test("Jalons docks beside navigation, edits milestones, reorders tasks and prese
     await expect
       .poll(async () => (await first.client.getWorkspaceTodos(first.workspaceId)).list.tasks[0]?.id)
       .toBe(secondId);
-    const handle = await page.getByTestId(`workspace-todo-drag-${secondId}`).boundingBox();
-    const target = await page.getByTestId(`workspace-todo-drag-${id}`).boundingBox();
+    const dragHandle = page.getByTestId(`workspace-todo-drag-${secondId}`);
+    const dragTarget = page.getByTestId(`workspace-todo-drag-${id}`);
+    await expect(dragHandle).toBeVisible();
+    await expect(dragTarget).toBeVisible();
+    const handle = await dragHandle.boundingBox();
+    const target = await dragTarget.boundingBox();
     await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2);
     await page.mouse.down();
     await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, {

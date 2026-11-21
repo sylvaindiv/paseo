@@ -11,6 +11,7 @@ import type {
   PaseoConfigRaw,
   PaseoConfigRevision,
   ProjectConfigRpcError,
+  ProjectWorkspaceIsolation,
 } from "@getpaseo/protocol/messages";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { ExternalLink } from "@/components/ui/external-link";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Switch } from "@/components/ui/switch";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { ProjectEditSheet } from "@/components/project-edit-sheet";
@@ -232,6 +234,10 @@ function ProjectSettingsBody({
   const data = readQuery.data;
   const supportsCustomIcon = useHostFeature(selectedHost.serverId, "projectCustomIcon");
   const supportsEmojiIcon = useHostFeature(selectedHost.serverId, "projectEmojiIcon");
+  const supportsWorkspaceIsolation = useHostFeature(
+    selectedHost.serverId,
+    "projectWorkspaceIsolation",
+  );
   const customIconRevision = selectedHost.customIconRevision ?? null;
   const projectIconTargets = useMemo(() => {
     const target = createProjectIconTarget({
@@ -304,6 +310,14 @@ function ProjectSettingsBody({
         snapshot={editSnapshot}
       />
 
+      {supportsWorkspaceIsolation ? (
+        <ProjectWorkspaceIsolationSetting
+          key={`${selectedHost.serverId}:${selectedHost.projectId}`}
+          project={selectedHost}
+          client={client}
+        />
+      ) : null}
+
       {renderContent({
         readQuery,
         loadedConfig,
@@ -319,6 +333,45 @@ function ProjectSettingsBody({
         showBackToProjects,
       })}
     </View>
+  );
+}
+
+const PROJECT_WORKSPACE_ISOLATIONS = ["both", "local", "worktree"] as const;
+
+function ProjectWorkspaceIsolationSetting({
+  project,
+  client,
+}: {
+  project: ProjectHostEntry;
+  client: DaemonClient;
+}) {
+  const { t } = useTranslation();
+  const mutation = useMutation({
+    mutationFn: (value: ProjectWorkspaceIsolation) =>
+      client.setProjectWorkspaceIsolation(project.projectId, value),
+  });
+  const options = PROJECT_WORKSPACE_ISOLATIONS.map((value) => ({
+    value,
+    label: t(`settings.project.workspaceIsolation.${value}`),
+    disabled:
+      mutation.isPending || (value === "worktree" && project.worktreeSupport !== "supported"),
+    testID: `project-workspace-isolation-${value}`,
+  }));
+  return (
+    <SettingsGroup
+      title={t("settings.project.workspaceIsolation.title")}
+      testID="project-workspace-isolation"
+    >
+      <SegmentedControl
+        options={options}
+        value={project.workspaceIsolation ?? "both"}
+        onValueChange={mutation.mutate}
+        size="sm"
+      />
+      {mutation.isError ? (
+        <Alert size="sm" variant="error" title={t("settings.project.workspaceIsolation.failed")} />
+      ) : null}
+    </SettingsGroup>
   );
 }
 

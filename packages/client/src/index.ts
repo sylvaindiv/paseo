@@ -49,6 +49,11 @@ export type {
   PaseoWorkspaceTerminalActions,
 } from "./terminals/index.js";
 import type { PluginTimelineItem } from "@getpaseo/protocol/agent-types";
+export type {
+  WorkspaceTodo,
+  WorkspaceTodoMutation,
+  WorkspaceTodos,
+} from "@getpaseo/protocol/workspace-todos";
 import type {
   FetchAgentsEntry,
   FetchAgentsOptions,
@@ -202,6 +207,12 @@ export interface PaseoProjectActions {
 }
 
 export interface PaseoWorkspaceActions {
+  readonly todos: {
+    supportsSubtasks(): boolean;
+    get: DaemonClient["getWorkspaceTodos"];
+    observe: DaemonClient["observeWorkspaceTodos"];
+    mutate: DaemonClient["mutateWorkspaceTodos"];
+  };
   list(options: PaseoWorkspaceListOptions & { subscribe: {} }): Promise<
     PaseoWorkspaceListResult & {
       subscriptionId: string;
@@ -656,6 +667,13 @@ export function createPaseoApi(
   const observeEvents: DaemonClient["observeEvents"] = (events, options) =>
     own(() => daemonClient.observeEvents(events, options));
 
+  function requireWorkspaceTodos(): void {
+    if (lifetime.signal.aborted) throw new Error("Paseo API is disposed");
+    if (daemonClient.getLastServerInfoMessage()?.features?.workspaceTodoMilestones !== true) {
+      throw new Error("Update the host to use workspace To-do lists");
+    }
+  }
+
   const subscribeEvent = (
     event: "project.update" | "providers_snapshot_update",
     update: (message: SessionOutboundMessage) => void,
@@ -728,6 +746,22 @@ export function createPaseoApi(
       },
     },
     workspaces: {
+      todos: {
+        supportsSubtasks: () =>
+          daemonClient.getLastServerInfoMessage()?.features?.workspaceTodoSubtasks === true,
+        async get(workspaceId) {
+          requireWorkspaceTodos();
+          return daemonClient.getWorkspaceTodos(workspaceId);
+        },
+        observe(workspaceId, options) {
+          requireWorkspaceTodos();
+          return own(() => daemonClient.observeWorkspaceTodos(workspaceId, options));
+        },
+        async mutate(workspaceId, revision, mutation) {
+          requireWorkspaceTodos();
+          return daemonClient.mutateWorkspaceTodos(workspaceId, revision, mutation);
+        },
+      },
       list: listWorkspaces,
       ref: (workspace) => createWorkspaceHandle(workspace),
       open: (input, requestId) =>

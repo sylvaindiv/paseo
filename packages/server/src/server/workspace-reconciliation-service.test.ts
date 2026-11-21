@@ -55,6 +55,13 @@ function createTestRegistries() {
       projects.set(record.projectId, record);
       return record;
     },
+    update: async (projectId, updater) => {
+      const project = projects.get(projectId);
+      if (!project) return null;
+      const updated = updater(project);
+      projects.set(projectId, updated);
+      return updated;
+    },
     upsert: async (record: PersistedProjectRecord) => {
       projects.set(record.projectId, record);
     },

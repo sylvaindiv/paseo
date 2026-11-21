@@ -78,6 +78,7 @@ import type {
   PaseoWorktreeListResponse,
   PaseoWorktreeArchiveResponse,
   ProjectIconSource,
+  ProjectWorkspaceIsolation,
   ProjectIconResponse,
   ProjectIconGetResponse,
   ProjectAddResponse,
@@ -2548,6 +2549,13 @@ export class DaemonClient {
     revision: number,
     mutation: WorkspaceTodoMutation,
   ) {
+    if (
+      mutation.operation === "update" &&
+      mutation.subtasks !== undefined &&
+      this.getLastServerInfoMessage()?.features?.workspaceTodoSubtasks !== true
+    ) {
+      throw new Error("Update the host to edit subtasks");
+    }
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"workspace.todos.mutate.response">({
         message: { type: "workspace.todos.mutate.request", workspaceId, revision, mutation },
@@ -3152,6 +3160,23 @@ export class DaemonClient {
       throw new Error(payload.error ?? "renameProject rejected");
     }
     return { customName: payload.customName };
+  }
+
+  async setProjectWorkspaceIsolation(
+    projectId: string,
+    workspaceIsolation: ProjectWorkspaceIsolation,
+  ): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"project.workspace_isolation.set.response">(
+        {
+          message: {
+            type: "project.workspace_isolation.set.request",
+            projectId,
+            workspaceIsolation,
+          },
+        },
+      );
+    if (!payload.accepted) throw new Error(payload.error ?? "Unable to save workspace isolation");
   }
 
   async setProjectIcon(

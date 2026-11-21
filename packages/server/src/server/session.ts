@@ -3083,6 +3083,8 @@ export class Session {
     switch (msg.type) {
       case "fetch_workspaces_request":
         return this.handleFetchWorkspacesRequest(msg);
+      case "project.workspace_isolation.set.request":
+        return this.handleProjectWorkspaceIsolationSetRequest(msg);
       case "project.list.request":
         return this.handleProjectListRequest(msg);
       case "paseo_worktree_list_request":
@@ -3683,12 +3685,12 @@ export class Session {
       const trimmed = customName?.trim() ?? "";
       const nextCustomName = trimmed.length === 0 ? null : trimmed;
 
-      const updated = {
-        ...existing,
+      const updated = await this.projectRegistry.update(projectId, (current) => ({
+        ...current,
         customName: nextCustomName,
         updatedAt: new Date().toISOString(),
-      };
-      await this.projectRegistry.upsert(updated);
+      }));
+      if (!updated) throw new Error("Project not found");
 
       this.emit({
         type: "project.rename.response",
@@ -3739,6 +3741,29 @@ export class Session {
         },
       });
     }
+  }
+
+  private async handleProjectWorkspaceIsolationSetRequest(
+    request: Extract<SessionInboundMessage, { type: "project.workspace_isolation.set.request" }>,
+  ): Promise<void> {
+    const { projectId, requestId, workspaceIsolation } = request;
+    let error: string | null = null;
+    try {
+      const updated = await this.projectRegistry.update(projectId, (project) => {
+        if (project.archivedAt) throw new Error("Project not found");
+        if (workspaceIsolation === "worktree" && project.kind !== "git") {
+          throw new Error("This project requires a Git repository to create worktrees");
+        }
+        return { ...project, workspaceIsolation, updatedAt: new Date().toISOString() };
+      });
+      if (!updated) error = "Project not found";
+    } catch (failure) {
+      error = getErrorMessageOr(failure, "Failed to update workspace isolation");
+    }
+    this.emit({
+      type: "project.workspace_isolation.set.response",
+      payload: { requestId, accepted: error === null, error },
+    });
   }
 
   private async handleProjectIconSetRequest(
@@ -5850,6 +5875,7 @@ export class Session {
         : workspace.projectId,
       projectCustomName: resolvedProjectRecord?.customName ?? null,
       projectCustomIconRevision: resolvedProjectRecord?.customIconRevision ?? null,
+      workspaceIsolation: resolvedProjectRecord?.workspaceIsolation,
       projectRootPath: resolvedProjectRecord?.rootPath ?? workspace.cwd,
       workspaceDirectory: workspace.cwd,
       worktreeSlug,
@@ -5940,6 +5966,7 @@ export class Session {
         : result.workspace.projectId,
       projectCustomName: projectRecord?.customName ?? null,
       projectCustomIconRevision: projectRecord?.customIconRevision ?? null,
+      workspaceIsolation: projectRecord?.workspaceIsolation,
       projectRootPath: projectRecord?.rootPath ?? result.repoRoot,
       workspaceDirectory: result.workspace.cwd,
       worktreeSlug: basename(result.worktree.worktreePath),
@@ -6118,6 +6145,7 @@ export class Session {
       projectDisplayName: resolveProjectDisplayName(project),
       projectCustomName: project.customName ?? null,
       projectCustomIconRevision: project.customIconRevision ?? null,
+      workspaceIsolation: project.workspaceIsolation,
       projectIconRevision: icon.revision,
       projectRootPath: project.rootPath,
       projectKind: project.kind,

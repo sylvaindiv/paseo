@@ -122,6 +122,7 @@ export interface ScheduleFormState {
   effectiveIsolation: "local" | "worktree";
   submitArchiveOnFinish: boolean | undefined;
   submitIsolation: "local" | "worktree" | undefined;
+  forcedIsolation?: "local" | "worktree";
   canUseWorktreeIsolation: boolean;
   providerResolutionByServerId: Record<string, ProviderResolutionStatus>;
   providerSnapshotRequest: ScheduleProviderSnapshotRequest | null;
@@ -546,7 +547,8 @@ function resolveDisclosure(state: ScheduleFormState): ScheduleDisclosureState {
     showThinkingField:
       showModelField && hasSelectedModel && state.availableThinkingOptions.length > 0,
     showModeField: showModelField && hasSelectedProvider && state.modeOptions.length > 0,
-    showIsolationField: hasProject && state.canUseWorktreeIsolation,
+    showIsolationField:
+      hasProject && (state.canUseWorktreeIsolation || Boolean(state.forcedIsolation)),
     showArchiveOnFinishField:
       hasProject &&
       selectedHostSupportsWorkspaceMultiplicity({
@@ -599,17 +601,24 @@ function updateDerivedState(input: {
     hosts: input.hosts,
     selectedServerId: input.state.selectedServerId,
   });
-  const effectiveIsolation = resolveEffectiveIsolation({
-    isolation: input.state.isolation,
-    canUseWorktreeIsolation,
-    selectedServerId: input.state.selectedServerId,
-    providerResolutionByServerId: input.state.providerResolutionByServerId,
-  });
   const projectTarget = resolveProjectTarget({
     targets: input.targets,
     serverId: input.state.selectedServerId,
     cwd: input.state.workingDir,
   });
+  const projectIsolation = projectTarget?.workspaceIsolation;
+  const forcedIsolation = projectIsolation === "both" ? undefined : projectIsolation;
+  const hasStoredIsolationConflict =
+    input.state.mode === "edit" && forcedIsolation && input.state.isolation !== forcedIsolation;
+  const effectiveIsolation = hasStoredIsolationConflict
+    ? input.state.isolation
+    : (forcedIsolation ??
+      resolveEffectiveIsolation({
+        isolation: input.state.isolation,
+        canUseWorktreeIsolation,
+        selectedServerId: input.state.selectedServerId,
+        providerResolutionByServerId: input.state.providerResolutionByServerId,
+      }));
   const nextState: ScheduleFormState = {
     ...input.state,
     hosts: [...input.hosts],
@@ -634,10 +643,14 @@ function updateDerivedState(input: {
     availableThinkingOptions,
     canUseWorktreeIsolation,
     effectiveIsolation,
+    forcedIsolation,
     submitArchiveOnFinish: canSubmitWorkspaceLifecycleOptions
       ? input.state.archiveOnFinish
       : undefined,
-    submitIsolation: canSubmitWorkspaceLifecycleOptions ? effectiveIsolation : undefined,
+    submitIsolation:
+      canSubmitWorkspaceLifecycleOptions && !hasStoredIsolationConflict
+        ? effectiveIsolation
+        : undefined,
   };
   const disclosure = resolveDisclosure(nextState);
   return { ...nextState, disclosure, canSubmit: resolveCanSubmit({ ...nextState, disclosure }) };

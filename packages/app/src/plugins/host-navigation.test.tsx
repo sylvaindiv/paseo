@@ -5,8 +5,11 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
+import { openProjectSettings } from "@/navigation/settings-navigation";
 import { usePluginHostNavigation } from "./host-navigation";
 
+vi.mock("@/navigation/settings-navigation", () => ({ openProjectSettings: vi.fn() }));
+vi.mock("@/workspace-tabs/browser", () => ({ openWorkspaceBrowser: vi.fn() }));
 vi.mock("@/utils/navigate-to-agent", () => ({
   navigateToAgent: vi.fn(),
 }));
@@ -34,6 +37,14 @@ describe("usePluginHostNavigation", () => {
       serverId: "host-1",
       workspaceId: "workspace-1",
     });
+  });
+
+  it("opens project settings on the selected project's host", () => {
+    const { result } = renderHook(() => usePluginHostNavigation("host-1"));
+
+    act(() => result.current.openProjectSettings?.({ projectId: "project-1", serverId: "host-2" }));
+
+    expect(openProjectSettings).toHaveBeenCalledWith("host-2", "project-1");
   });
 
   it("keeps the capability stable until the rendering host changes", () => {

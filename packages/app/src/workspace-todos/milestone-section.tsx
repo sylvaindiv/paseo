@@ -18,6 +18,7 @@ const taskKey = (task: WorkspaceTodo) => task.id;
 interface Props {
   group: TodoMilestone;
   index: number;
+  hideCompleted?: boolean;
   editingIds: Set<string>;
   extraData: unknown;
   renderTask(info: DraggableRenderItemInfo<WorkspaceTodo>): ReactElement;
@@ -26,6 +27,7 @@ interface Props {
 export function MilestoneSection({
   group,
   index,
+  hideCompleted = false,
   editingIds,
   extraData,
   renderTask,
@@ -92,7 +94,7 @@ export function MilestoneSection({
             onDragEnd={onReorder}
             renderItem={renderTask}
           />
-          {history.length > 0 && (
+          {!hideCompleted && history.length > 0 && (
             <>
               <Button
                 variant="ghost"

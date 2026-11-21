@@ -2954,6 +2954,13 @@ export const ar: TranslationResources = {
     project: {
       noEditableTarget: "هذا المشروع غير متاح للتحرير على هذا المضيف.",
       backToProjects: "العودة إلى المشاريع",
+      workspaceIsolation: {
+        title: "إنشاء مساحات العمل",
+        both: "محلي أو Worktree",
+        local: "محلي فقط",
+        worktree: "Worktree فقط",
+        failed: "تعذّر حفظ الإعداد",
+      },
       edit: {
         title: "تعديل المشروع",
         name: "الاسم",

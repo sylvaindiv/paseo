@@ -15,7 +15,6 @@ import {
 } from "./resolve-worktree-creation-intent.js";
 import type { ChangeRequestCheckoutSource, FirstAgentContext } from "@getpaseo/protocol/messages";
 import type { WorkspaceGitService } from "./workspace-git-service.js";
-import { runWithGitCommandPriority } from "../utils/run-git-command.js";
 
 export interface CreateWorktreeCoreInput {
   cwd: string;
@@ -33,10 +32,7 @@ export interface CreateWorktreeCoreInput {
 
 export interface CreateWorktreeCoreDeps {
   github: ForgeService;
-  workspaceGitService?: Pick<
-    WorkspaceGitService,
-    "resolveRepoRoot" | "resolveDefaultBranch" | "resolveForge"
-  >;
+  workspaceGitService?: Pick<WorkspaceGitService, "resolveDefaultBranch" | "resolveForge">;
   resolveDefaultBranch?: (repoRoot: string) => Promise<string>;
 }
 
@@ -50,15 +46,8 @@ export interface CreateWorktreeCoreResult {
 export async function createWorktreeCore(
   input: CreateWorktreeCoreInput,
   deps: CreateWorktreeCoreDeps,
+  repoRoot: string,
 ): Promise<CreateWorktreeCoreResult> {
-  return runWithGitCommandPriority("high", () => createWorktreeCoreWithPriority(input, deps));
-}
-
-async function createWorktreeCoreWithPriority(
-  input: CreateWorktreeCoreInput,
-  deps: CreateWorktreeCoreDeps,
-): Promise<CreateWorktreeCoreResult> {
-  const repoRoot = await resolveWorktreeRepoRoot(input, deps.workspaceGitService);
   const requestedWorktreeSlug = input.worktreeSlug
     ? normalizeWorktreeSlug(input.worktreeSlug)
     : undefined;
@@ -157,17 +146,6 @@ async function resolveDefaultBranch(
     throw new Error("Unable to resolve repository default branch");
   }
   return baseBranch;
-}
-
-export async function resolveWorktreeRepoRoot(
-  input: Pick<CreateWorktreeCoreInput, "cwd" | "paseoHome">,
-  workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">,
-): Promise<string> {
-  if (!workspaceGitService) {
-    throw new Error("Create worktree requires WorkspaceGitService");
-  }
-
-  return workspaceGitService.resolveRepoRoot(input.cwd);
 }
 
 function validateWorktreeSlug(slug: string): string {

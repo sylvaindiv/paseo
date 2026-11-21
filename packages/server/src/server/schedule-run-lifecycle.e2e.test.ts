@@ -360,3 +360,26 @@ test("update_schedule patches thinking, archive behavior, and isolation for the 
   expect(await activeAgentIds()).toContain(agentId);
   expect(existsSync(agent.cwd)).toBe(true);
 });
+
+test("a schedule reports a project isolation conflict and can run once the conflict is cleared", async () => {
+  const repoDir = createGitRepo();
+  const { project } = await ctx.client.addProject(repoDir);
+  const schedule = await createNewAgentSchedule({
+    prompt: "Say done.",
+    cadence: { type: "every", everyMs: 60_000 },
+    target: {
+      type: "new-agent",
+      config: { ...getFullAccessConfig("codex"), cwd: repoDir, isolation: "local" },
+    },
+    runOnCreate: false,
+  });
+  await ctx.client.setProjectWorkspaceIsolation(project!.projectId, "worktree");
+  const failed = await runScheduleOnce(schedule.id);
+  expect(failed.runs[0]).toMatchObject({ status: "failed", agentId: null });
+  expect(failed.runs[0]?.error).toMatch(/worktree workspaces only/i);
+  expect(failed.target).toEqual(schedule.target);
+
+  await ctx.client.setProjectWorkspaceIsolation(project!.projectId, "both");
+  const succeeded = await runScheduleOnce(schedule.id);
+  expect(succeeded.runs.at(-1)).toMatchObject({ status: "succeeded", agentId: expect.any(String) });
+});

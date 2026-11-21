@@ -377,11 +377,11 @@ export class WorkspaceReconciliationService {
 
     if (Object.keys(projectUpdates).length > 0) {
       const timestamp = new Date().toISOString();
-      await this.projectRegistry.upsert({
-        ...project,
+      await this.projectRegistry.update(project.projectId, (current) => ({
+        ...current,
         ...projectUpdates,
         updatedAt: timestamp,
-      });
+      }));
       changes.push({
         kind: "project_updated",
         projectId: project.projectId,

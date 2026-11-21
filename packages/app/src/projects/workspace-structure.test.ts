@@ -44,12 +44,16 @@ describe("buildWorkspaceStructureProjects", () => {
       sessions: [
         {
           serverId: "host-a",
-          projects: [project({ id: "prj_a", key, root: "/a/app" })],
+          projects: [
+            { ...project({ id: "prj_a", key, root: "/a/app" }), workspaceIsolation: "local" },
+          ],
           workspaces: [workspace("ws-a", "prj_a", "/a/app")],
         },
         {
           serverId: "host-b",
-          projects: [project({ id: "prj_b", key, root: "/b/app" })],
+          projects: [
+            { ...project({ id: "prj_b", key, root: "/b/app" }), workspaceIsolation: "worktree" },
+          ],
           workspaces: [workspace("ws-b", "prj_b", "/b/app")],
         },
       ],
@@ -60,8 +64,8 @@ describe("buildWorkspaceStructureProjects", () => {
       viewKey: key,
       projectKey: key,
       hosts: [
-        { serverId: "host-a", projectId: "prj_a" },
-        { serverId: "host-b", projectId: "prj_b" },
+        { serverId: "host-a", projectId: "prj_a", workspaceIsolation: "local" },
+        { serverId: "host-b", projectId: "prj_b", workspaceIsolation: "worktree" },
       ],
       workspaceKeys: ["host-a:ws-a", "host-b:ws-b"],
     });

@@ -1,4 +1,6 @@
 import type { createPluginHosts } from "./hosts";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useProjects } from "@/hooks/use-projects";
 import { openWebUrl as openExternalUrl } from "@/utils/open-web-url";
 import * as pluginUiRuntime from "./react-native/ui";
 import { useSettings } from "./settings/use-settings";
@@ -114,6 +116,7 @@ export function runPluginClientBundle(
     sidebarItems: { header: [], footer: [] },
     legacySidebarItems: [],
     workspacePanels: [],
+    workspaceTodosViews: [],
     commandCenterItems: [],
     clientSlashCommands: [],
     attachmentSources: [],
@@ -187,15 +190,40 @@ export function runPluginClientBundle(
     if (!isComponentType(contribution.Component)) {
       throw new Error(`Sidebar item ${normalizedId} is not a component`);
     }
+    const { placement } = contribution;
+    if (placement !== undefined && (section !== "footer" || placement !== "before-opendesign")) {
+      throw new Error(`Invalid sidebar placement for ${normalizedId}`);
+    }
     ids.add(normalizedId);
     return register(
       collector.sidebarItems[section],
-      { id: normalizedId, title, Component: contribution.Component },
+      {
+        id: normalizedId,
+        title,
+        Component: contribution.Component,
+        ...(placement && { placement }),
+      },
       () => ids.delete(normalizedId),
     );
   }
+  const storageKey = (key: string) => `paseo:plugin-storage:${JSON.stringify([id, key])}`;
   const pluginContext: PluginClientContext = {
     ...runtime,
+    localStorage: {
+      getItem: (key) => AsyncStorage.getItem(storageKey(key)),
+      setItem: (key, value) => AsyncStorage.setItem(storageKey(key), value),
+    },
+    addWorkspaceTodosView(contribution) {
+      if (stopped) throw new Error("Plugin has stopped");
+      if (!isComponentType(contribution?.Component))
+        throw new Error("Invalid To-do view component");
+      if (collector.workspaceTodosViews.length > 0) throw new Error("Duplicate To-do view");
+      return register(
+        collector.workspaceTodosViews,
+        { Component: contribution.Component },
+        () => undefined,
+      );
+    },
     addPlanAction(contribution) {
       if (stopped) throw new Error("Plugin has stopped");
       const actionId = requireId(contribution.id, "plan action id");
@@ -476,6 +504,7 @@ export function runPluginClientBundle(
       return {
         ...pluginClientRuntime,
         useSettings,
+        useProjects,
         openExternalUrl,
         getPaseoClient: (serverId: string) => runtime.hosts.getPaseoClient(serverId),
         useHosts: () =>
@@ -546,6 +575,7 @@ export function runPluginClientBundle(
     sidebarItems: collector.sidebarItems,
     legacySidebarItems: collector.legacySidebarItems,
     workspacePanels: collector.workspacePanels as EvaluatedPlugin["workspacePanels"],
+    workspaceTodosViews: collector.workspaceTodosViews,
     commandCenterItems: collector.commandCenterItems,
     clientSlashCommands: collector.clientSlashCommands,
     attachmentSources: collector.attachmentSources,

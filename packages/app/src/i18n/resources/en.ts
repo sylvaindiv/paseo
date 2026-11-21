@@ -3089,6 +3089,13 @@ export const en = {
     project: {
       noEditableTarget: "This project isn't editable on this host.",
       backToProjects: "Back to projects",
+      workspaceIsolation: {
+        title: "Workspace creation",
+        both: "Local or Worktree",
+        local: "Local only",
+        worktree: "Worktree only",
+        failed: "Couldn’t save workspace creation setting",
+      },
       edit: {
         title: "Edit project",
         name: "Name",

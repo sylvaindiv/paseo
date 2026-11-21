@@ -127,7 +127,10 @@ function applyMutation(
       if (mutation.operation === "delete") {
         if (
           actor === "agent" &&
-          (task.titleProtected || task.notesProtected || task.milestoneProtected)
+          (task.titleProtected ||
+            task.notesProtected ||
+            task.milestoneProtected ||
+            task.subtasks?.length)
         )
           throw new Error("Manually edited task cannot be deleted by an agent");
         list.tasks = list.tasks.filter((item) => item.id !== task.id);
@@ -148,7 +151,8 @@ function updateTask(
     actor === "agent" &&
     ((mutation.title !== undefined && task.titleProtected) ||
       (mutation.notes !== undefined && task.notesProtected) ||
-      (mutation.milestone !== undefined && task.milestoneProtected))
+      (mutation.milestone !== undefined && task.milestoneProtected) ||
+      mutation.subtasks !== undefined)
   )
     throw new Error("Manually edited text is protected");
   if (mutation.title !== undefined) {
@@ -164,4 +168,9 @@ function updateTask(
     task.milestoneProtected ||= actor === "user";
   }
   if (mutation.status !== undefined) task.status = mutation.status;
+  if (mutation.subtasks !== undefined) {
+    if (new Set(mutation.subtasks.map(({ id }) => id)).size !== mutation.subtasks.length)
+      throw new Error("Subtask IDs must be unique");
+    task.subtasks = mutation.subtasks;
+  }
 }

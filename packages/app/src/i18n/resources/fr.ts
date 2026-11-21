@@ -3101,6 +3101,13 @@ export const fr: TranslationResources = {
     project: {
       noEditableTarget: "Ce projet n’est pas modifiable sur cet hôte.",
       backToProjects: "Retour aux projets",
+      workspaceIsolation: {
+        title: "Création d’espaces",
+        both: "Local ou Worktree",
+        local: "Local uniquement",
+        worktree: "Worktree uniquement",
+        failed: "Impossible d’enregistrer le réglage",
+      },
       edit: {
         title: "Modifier le projet",
         name: "Nom",

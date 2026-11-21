@@ -2921,6 +2921,13 @@ export const zhCN: TranslationResources = {
     project: {
       noEditableTarget: "此项目无法在这个 Host 上编辑。",
       backToProjects: "返回 Projects",
+      workspaceIsolation: {
+        title: "创建工作区",
+        both: "本地或 Worktree",
+        local: "仅本地",
+        worktree: "仅 Worktree",
+        failed: "无法保存设置",
+      },
       edit: {
         title: "编辑 Project",
         name: "名称",

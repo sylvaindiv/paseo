@@ -16,7 +16,10 @@ export type {
   PluginClientOpenPanelOptions,
   PluginClientContext,
   PluginClientContribution,
+  PluginLocalStorage,
   PluginWorkspacePanelContribution,
+  PluginWorkspaceTodosViewContribution,
+  PluginWorkspaceTodosViewProps,
   PluginSettingsScreenContribution,
   PluginSurfaceContribution,
   PluginScreenContribution,
@@ -66,6 +69,31 @@ export interface PluginHostSummary {
 }
 /** Live configured hosts. Supplied by the app's client bundle loader. */
 export declare function useHosts(): readonly PluginHostSummary[];
+
+export interface PluginProjectSummary {
+  readonly viewKey: string;
+  readonly projectName: string;
+  readonly hosts: readonly {
+    readonly serverId: string;
+    readonly projectId: string;
+    readonly serverName: string;
+    readonly isOnline: boolean;
+    readonly workspaces: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly archivingAt?: string;
+    }[];
+  }[];
+}
+
+/** Projects from the app's live directory, including known offline projects. */
+export declare function useProjects(options?: { enabled?: boolean }): {
+  readonly projects: readonly PluginProjectSummary[];
+  readonly hostErrors: readonly { serverId: string; serverName: string; message: string }[];
+  readonly isLoading: boolean;
+};
+
+export type { WorkspaceTodo, WorkspaceTodoMutation, WorkspaceTodos } from "@getpaseo/client";
 /** Borrow an online host's API under this installation's lifetime. */
 export declare function getPaseoClient(serverId: string): import("@getpaseo/client").PaseoApi;
 /** Open an HTTP(S) link in the current workspace browser, or the system browser outside a workspace. Pass the click event so Command-click opens the system browser. */

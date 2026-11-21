@@ -186,6 +186,38 @@ function applyPreferences(form: ReturnType<typeof open>, preferences: FormPrefer
 }
 
 describe("schedule form model", () => {
+  it("uses the project's required isolation for a new schedule", () => {
+    const project = { ...PROJECT_TARGETS[0]!, workspaceIsolation: "worktree" as const };
+    const form = open({
+      mode: "create",
+      defaults: { serverId: "host-a", projectTargets: [project] },
+    });
+    form.setProject(project.optionId, { label: project.projectName });
+    expect(form.getState()).toMatchObject({
+      forcedIsolation: "worktree",
+      effectiveIsolation: "worktree",
+      submitIsolation: "worktree",
+    });
+  });
+
+  it("keeps an existing schedule's isolation until the user picks the allowed mode", () => {
+    const project = { ...PROJECT_TARGETS[0]!, workspaceIsolation: "local" as const };
+    const form = open({
+      mode: "edit",
+      schedule: scheduleOnHost({
+        serverId: "host-a",
+        serverName: "Host A",
+        cwd: project.cwd,
+        model: "model-a",
+      }),
+      defaults: { serverId: "host-a", projectTargets: [project] },
+    });
+    expect(form.getState().effectiveIsolation).toBe("worktree");
+    expect(form.getState().submitIsolation).toBeUndefined();
+    form.setIsolation("local");
+    expect(form.getState().submitIsolation).toBe("local");
+  });
+
   it("offers Fast only for the resolved model and submits explicit on and off values", () => {
     const form = open({
       mode: "create",

@@ -104,3 +104,11 @@ export declare const Button: ComponentType<{
   accessibilityLabel?: string;
   testID?: string;
 }>;
+
+/** Paseo's inline editor for the open tasks of one workspace. */
+export declare const WorkspaceTodoList: ComponentType<{
+  serverId: string;
+  workspaceId: string;
+  emptyLabel: string;
+  unavailableLabel: string;
+}>;

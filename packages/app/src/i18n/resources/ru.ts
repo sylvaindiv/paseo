@@ -3007,6 +3007,13 @@ export const ru: TranslationResources = {
     project: {
       noEditableTarget: "Этот проект нельзя редактировать на этом хосте.",
       backToProjects: "Вернуться к проектам",
+      workspaceIsolation: {
+        title: "Создание рабочих пространств",
+        both: "Локально или Worktree",
+        local: "Только локально",
+        worktree: "Только Worktree",
+        failed: "Не удалось сохранить настройку",
+      },
       edit: {
         title: "Изменить проект",
         name: "Название",

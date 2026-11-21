@@ -53,7 +53,14 @@ export interface CreateWorktreeWorkspaceInput {
   untrustedSource?: UntrustedWorkspaceSource;
 }
 
+interface WorktreeProjectSource {
+  sourceCwd: string;
+  projectId?: string;
+  repoRoot: string;
+}
+
 export interface WorkspaceProvisioningService {
+  assertWorktreeCreationAllowed(input: WorktreeProjectSource): Promise<void>;
   runInImportWorkspace<T>(
     input: ImportWorkspaceInput,
     operation: (workspace: PersistedWorkspaceRecord) => Promise<T>,
@@ -88,6 +95,38 @@ export class WorkspaceProvisioningError extends Error {
         : `Archived project: ${projectId}`,
     );
     this.name = "WorkspaceProvisioningError";
+  }
+}
+
+function findActiveProjectByRoot(
+  projects: readonly PersistedProjectRecord[],
+  rootPath: string,
+): PersistedProjectRecord | null {
+  const active = projects
+    .filter((project) => !project.archivedAt)
+    .sort(
+      (left, right) =>
+        Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+        left.projectId.localeCompare(right.projectId),
+    );
+  const exact = active.find((project) => areEquivalentPaths(project.rootPath, rootPath));
+  if (exact) return exact;
+  const matchesRoot = createRealpathAwarePathMatcher(rootPath);
+  return active.find((project) => matchesRoot(project.rootPath)) ?? null;
+}
+
+class WorkspaceIsolationError extends Error {
+  readonly code = "workspace_isolation_conflict";
+}
+
+function assertWorkspaceIsolation(
+  project: PersistedProjectRecord | null,
+  requested: "local" | "worktree",
+): void {
+  const allowed = project?.workspaceIsolation;
+  if (allowed && allowed !== "both" && allowed !== requested) {
+    const mode = allowed === "local" ? "Local" : "Worktree";
+    throw new WorkspaceIsolationError(`This project allows ${mode} workspaces only`);
   }
 }
 
@@ -223,11 +262,18 @@ export function createWorkspaceProvisioningService(deps: {
     context?: { expectsInitialAgent?: boolean; intent?: string; workspaceId?: string },
   ): Promise<PersistedWorkspaceRecord> {
     const normalizedCwd = resolve(cwd);
+    if (!projectId) {
+      assertWorkspaceIsolation(
+        findActiveProjectByRoot(await projectRegistry.list(), normalizedCwd),
+        "local",
+      );
+    }
     const checkout = await workspaceGitService.getCheckout(normalizedCwd);
     const project = projectId
       ? await refreshProjectKind(await requireActiveProject(projectId), normalizedCwd, checkout)
       : // COMPAT(workspaceCreateMissingProjectId): added in v0.1.107, remove after 2027-01-15.
         await findOrCreateProjectForDirectory(normalizedCwd);
+    assertWorkspaceIsolation(project, "local");
     const timestamp = new Date().toISOString();
     const workspace = createPersistedWorkspaceRecord({
       workspaceId: context?.workspaceId ?? generateWorkspaceId(),
@@ -255,6 +301,7 @@ export function createWorkspaceProvisioningService(deps: {
       projectId: input.projectId,
       repoRoot,
     });
+    assertWorkspaceIsolation(project, "worktree");
     const timestamp = new Date().toISOString();
     const workspace = createPersistedWorkspaceRecord({
       workspaceId: input.workspaceId ?? generateWorkspaceId(),
@@ -280,29 +327,39 @@ export function createWorkspaceProvisioningService(deps: {
     return workspace;
   }
 
-  async function resolveSourceProjectForWorktree(input: {
-    sourceCwd: string;
-    projectId?: string;
-    repoRoot: string;
-  }): Promise<PersistedProjectRecord> {
-    if (input.projectId) {
-      return refreshProjectKind(await requireActiveProject(input.projectId));
-    }
+  async function findSourceProjectForWorktree(
+    input: WorktreeProjectSource,
+  ): Promise<PersistedProjectRecord | null> {
+    if (input.projectId) return requireActiveProject(input.projectId);
 
-    const workspaces = await workspaceRegistry.list();
-    const sourceWorkspace =
-      workspaces.find(
-        (workspace) => !workspace.archivedAt && areEquivalentPaths(workspace.cwd, input.sourceCwd),
-      ) ??
-      workspaces.find(
-        (workspace) => !workspace.archivedAt && areEquivalentPaths(workspace.cwd, input.repoRoot),
+    const [workspaces, projects] = await Promise.all([
+      workspaceRegistry.list(),
+      projectRegistry.list(),
+    ]);
+    for (const cwd of new Set([input.sourceCwd, input.repoRoot])) {
+      const matchesCwd = createRealpathAwarePathMatcher(cwd);
+      const workspace = workspaces.find(
+        (candidate) => !candidate.archivedAt && matchesCwd(candidate.cwd),
       );
-    if (sourceWorkspace) {
-      const project = await projectRegistry.get(sourceWorkspace.projectId);
-      if (project) return refreshProjectKind(project);
+      const project =
+        projects.find((candidate) => candidate.projectId === workspace?.projectId) ??
+        findActiveProjectByRoot(projects, cwd);
+      if (project) return project;
       // COMPAT(worktreeMissingSourceProject): added in v0.1.107, remove after 2027-01-15.
-      // Orphaned legacy workspace FKs fall through to exact-root allocation.
+      // Orphaned legacy workspace FKs fall through to the registered root or a new project.
     }
+    return null;
+  }
+
+  async function assertWorktreeCreationAllowed(input: WorktreeProjectSource): Promise<void> {
+    assertWorkspaceIsolation(await findSourceProjectForWorktree(input), "worktree");
+  }
+
+  async function resolveSourceProjectForWorktree(
+    input: WorktreeProjectSource,
+  ): Promise<PersistedProjectRecord> {
+    const existing = await findSourceProjectForWorktree(input);
+    if (existing) return refreshProjectKind(existing);
 
     const checkout = await workspaceGitService.getCheckout(input.repoRoot);
     const project = await projectRegistry.getOrCreateActiveByRoot({
@@ -418,13 +475,13 @@ export function createWorkspaceProvisioningService(deps: {
         serverId,
       });
       if (project.archivedAt || project.kind !== kind || project.projectKey !== projectKey) {
-        await projectRegistry.upsert({
-          ...project,
+        await projectRegistry.update(project.projectId, (current) => ({
+          ...current,
           kind,
           projectKey,
           archivedAt: null,
           updatedAt: timestamp,
-        });
+        }));
       }
     }
     if (!next) return workspace;
@@ -468,17 +525,18 @@ export function createWorkspaceProvisioningService(deps: {
       serverId,
     });
     if (project.kind === kind && project.projectKey === projectKey) return project;
-    const refreshed = {
-      ...project,
-      kind,
-      projectKey,
-      updatedAt: new Date().toISOString(),
-    };
-    await projectRegistry.upsert(refreshed);
-    return refreshed;
+    return (
+      (await projectRegistry.update(project.projectId, (current) => ({
+        ...current,
+        kind,
+        projectKey,
+        updatedAt: new Date().toISOString(),
+      }))) ?? project
+    );
   }
 
   return {
+    assertWorktreeCreationAllowed,
     runInImportWorkspace,
     findOrCreateWorkspaceForDirectory,
     resolveOrCreateWorkspaceIdForCreateAgent,

@@ -2970,6 +2970,13 @@ export const ko: TranslationResources = {
     project: {
       noEditableTarget: "이 호스트에서는 이 프로젝트를 편집할 수 없습니다.",
       backToProjects: "프로젝트로 돌아가기",
+      workspaceIsolation: {
+        title: "작업 공간 만들기",
+        both: "로컬 또는 Worktree",
+        local: "로컬만",
+        worktree: "Worktree만",
+        failed: "설정을 저장하지 못했습니다",
+      },
       edit: {
         title: "프로젝트 편집",
         name: "이름",

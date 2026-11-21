@@ -19,6 +19,7 @@ import type {
   PluginPanelLocation,
   PluginPlanActionContribution,
   PluginWorkspacePanelContribution,
+  PluginWorkspaceTodosViewContribution,
 } from "@getpaseo/plugin/client";
 
 export type PluginSidebarSection = "header" | "footer";
@@ -37,6 +38,7 @@ export interface EvaluatedPlugin {
   /** `addSidebarItem` registrations, so `/plugin/<id>/sidebar/<item>` routes keep resolving. */
   legacySidebarItems: PluginSidebarContribution[];
   workspacePanels: EvaluatedPluginWorkspacePanelContribution[];
+  workspaceTodosViews: PluginWorkspaceTodosViewContribution[];
   commandCenterItems: PluginCommandCenterItemContribution[];
   clientSlashCommands: PluginClientSlashCommandContribution[];
   attachmentSources: PluginAttachmentSourceContribution[];

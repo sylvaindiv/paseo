@@ -6,12 +6,23 @@ const TodoTextSchema = z.object({
   notes: z.string().max(100000),
   milestone: z.string().max(160).optional(),
 });
+const SubtasksSchema = z
+  .array(
+    z.object({
+      id: z.string().min(1).max(100),
+      title: TodoTextSchema.shape.title,
+      done: z.boolean(),
+    }),
+  )
+  .max(100)
+  .optional();
 export const WorkspaceTodoSchema = TodoTextSchema.extend({
   id: z.string().min(1),
   status: WorkspaceTodoStatusSchema,
   titleProtected: z.boolean(),
   notesProtected: z.boolean(),
   milestoneProtected: z.boolean().optional(),
+  subtasks: SubtasksSchema,
 });
 export const WorkspaceTodosSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -29,6 +40,7 @@ export const WorkspaceTodoMutationSchema = z.discriminatedUnion("operation", [
     notes: TodoTextSchema.shape.notes.optional(),
     milestone: TodoTextSchema.shape.milestone,
     status: WorkspaceTodoStatusSchema.optional(),
+    subtasks: SubtasksSchema,
   }),
   z.object({ operation: z.literal("delete"), id: z.string() }),
   z.object({ operation: z.literal("reorder"), ids: z.array(z.string()).max(1000) }),

@@ -76,6 +76,7 @@ import {
   createPersistedWorkspaceRecord,
   type PersistedProjectRecord,
   type PersistedWorkspaceRecord,
+  type ProjectRegistry,
   type WorkspaceMutation,
 } from "./workspace-registry.js";
 
@@ -112,6 +113,7 @@ interface SessionTestAccess {
     archive(projectId: string, archivedAt: string): Promise<void>;
     get(id: string): Promise<unknown>;
     upsert(record: unknown): Promise<unknown>;
+    update: ProjectRegistry["update"];
     remove(projectId: string): Promise<void>;
   };
   agentStorage: {
@@ -8031,9 +8033,12 @@ test("project.rename.request stores customName and emits an updated workspace de
   const projects = new Map([[project.projectId, project]]);
   session.projectRegistry.get = async (id: string) => projects.get(id) ?? null;
   session.projectRegistry.list = async () => Array.from(projects.values());
-  session.projectRegistry.upsert = async (record: unknown) => {
-    const parsed = record as typeof project;
-    projects.set(parsed.projectId, parsed);
+  session.projectRegistry.update = async (id, updater) => {
+    const current = projects.get(id);
+    if (!current) return null;
+    const updated = updater(current);
+    projects.set(id, updated);
+    return updated;
   };
   session.workspaceRegistry.list = async () => [workspace];
   session.workspaceRegistry.get = async (id: string) =>
@@ -8090,7 +8095,7 @@ test("project.rename.request updates a project with no workspaces", async () => 
     updatedAt: "2026-07-20T12:00:00.000Z",
   });
   session.projectRegistry.get = async () => project;
-  session.projectRegistry.upsert = async () => project;
+  session.projectRegistry.update = async (_id, updater) => updater(project);
   session.workspaceRegistry.list = async () => [];
 
   await session.handleMessage({
@@ -8129,9 +8134,12 @@ test("project.rename.request with whitespace-only customName clears the override
   const projects = new Map([[project.projectId, project]]);
   session.projectRegistry.get = async (id: string) => projects.get(id) ?? null;
   session.projectRegistry.list = async () => Array.from(projects.values());
-  session.projectRegistry.upsert = async (record: unknown) => {
-    const parsed = record as typeof project;
-    projects.set(parsed.projectId, parsed);
+  session.projectRegistry.update = async (id, updater) => {
+    const current = projects.get(id);
+    if (!current) return null;
+    const updated = updater(current);
+    projects.set(id, updated);
+    return updated;
   };
   session.workspaceRegistry.list = async () => [];
 
@@ -9586,6 +9594,13 @@ test("workspace.create.request attaches a directory workspace to its explicit ac
   const workspaces = new Map<string, PersistedWorkspaceRecord>();
   const session = createSessionForWorkspaceTests({ onMessage: (message) => emitted.push(message) });
   session.projectRegistry.get = async (projectId: string) => projects.get(projectId) ?? null;
+  session.projectRegistry.update = async (projectId, updater) => {
+    const project = projects.get(projectId);
+    if (!project) return null;
+    const updated = updater(project);
+    projects.set(projectId, updated);
+    return updated;
+  };
   session.workspaceRegistry.upsert = async (record: unknown) => {
     const workspace = record as PersistedWorkspaceRecord;
     workspaces.set(workspace.workspaceId, workspace);

@@ -838,21 +838,24 @@ function ScheduleIsolationField({
   size: FieldControlSize;
 }): ReactElement {
   const options = useMemo<SelectFieldOption<"local" | "worktree">[]>(
-    () => [
-      {
-        id: "local",
-        value: "local",
-        label: "Local",
-        testID: "schedule-isolation-local",
-      },
-      {
-        id: "worktree",
-        value: "worktree",
-        label: "Worktree",
-        testID: "schedule-isolation-worktree",
-      },
-    ],
-    [],
+    () =>
+      (
+        [
+          {
+            id: "local",
+            value: "local",
+            label: "Local",
+            testID: "schedule-isolation-local",
+          },
+          {
+            id: "worktree",
+            value: "worktree",
+            label: "Worktree",
+            testID: "schedule-isolation-worktree",
+          },
+        ] satisfies SelectFieldOption<"local" | "worktree">[]
+      ).filter((option) => !state.forcedIsolation || option.value === state.forcedIsolation),
+    [state.forcedIsolation],
   );
   const selectedDisplay = useMemo<SelectFieldDisplay>(
     () => ({ label: state.effectiveIsolation === "worktree" ? "Worktree" : "Local" }),
@@ -890,6 +893,11 @@ function ScheduleIsolationField({
       selectedDisplay={selectedDisplay}
       options={options}
       onChange={handleSelectIsolation}
+      hint={
+        state.forcedIsolation && state.effectiveIsolation !== state.forcedIsolation
+          ? `Project requires ${state.forcedIsolation === "local" ? "Local" : "Worktree"}.`
+          : undefined
+      }
       placeholder="Select isolation"
       emptyText="No isolation options found"
       searchable={false}

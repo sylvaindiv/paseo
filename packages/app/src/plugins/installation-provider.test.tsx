@@ -40,6 +40,7 @@ function installation(invoked: string[]): InstalledPlugin {
     timelineTransformers: [],
     timelineRenderers: [],
     planActions: [],
+    workspaceTodosViews: [],
   };
 }
 

@@ -2,7 +2,10 @@ import { promises as fs } from "node:fs";
 
 import type { Logger } from "pino";
 import { z } from "zod";
-import { FirstAgentContextSchema } from "@getpaseo/protocol/messages";
+import {
+  FirstAgentContextSchema,
+  ProjectWorkspaceIsolationSchema,
+} from "@getpaseo/protocol/messages";
 
 import { writeJsonFileAtomic } from "./atomic-file.js";
 import { areEquivalentPaths } from "../utils/path.js";
@@ -44,6 +47,7 @@ const PersistedProjectRecordSchema = z.object({
     .nullable()
     .optional()
     .transform((value) => value ?? null),
+  workspaceIsolation: ProjectWorkspaceIsolationSchema.optional(),
   customIconEmoji: z
     .string()
     .nullable()
@@ -446,14 +450,13 @@ export class FileBackedProjectRegistry
       if (active) {
         if (active.kind === input.kind && active.projectKey === (input.projectKey ?? null))
           return active;
-        const refreshed = {
-          ...active,
+        const refreshed = await this.update(active.projectId, (current) => ({
+          ...current,
           kind: input.kind,
           projectKey: input.projectKey ?? null,
           updatedAt: input.timestamp,
-        };
-        await this.upsert(refreshed);
-        return refreshed;
+        }));
+        if (refreshed) return refreshed;
       }
 
       for (;;) {

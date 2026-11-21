@@ -77,7 +77,7 @@ import { projectIconPlaceholderLabelFromDisplayName } from "@/utils/project-disp
 import {
   getHostProjectSourceDirectory,
   getHostProjectId,
-  getWorktreeSupportForHostProject,
+  getHostProjectPlacement,
   hostProjectFromRoute,
   hostProjectFromWorkspace,
   resolveHostProjectCandidate,
@@ -712,7 +712,7 @@ interface WorkspaceIsolationState {
   isolation: "local" | "worktree";
   setIsolation: (value: "local" | "worktree") => void;
   effectiveIsolation: "local" | "worktree";
-  canCreateWorktree: boolean;
+  showIsolationPicker: boolean;
   showRefPicker: boolean;
 }
 
@@ -720,21 +720,25 @@ interface WorkspaceIsolationState {
 // the authoritative placement arrives, unsupported projects fall back to local.
 function useWorkspaceIsolation(input: {
   supportsMultiplicity: boolean;
-  worktreeSupport: "supported" | "unsupported" | "unknown";
-  projectId: string | null;
+  placement: ReturnType<typeof getHostProjectPlacement>;
   targetKey: string;
 }): WorkspaceIsolationState {
-  const { supportsMultiplicity, worktreeSupport } = input;
+  const { supportsMultiplicity, placement } = input;
   const [manualIsolation, setManualIsolation] = useState<{
     targetKey: string;
     value: "local" | "worktree";
   } | null>(null);
+  const projectIsolation = placement?.workspaceIsolation;
+  const forcedIsolation = projectIsolation === "both" ? undefined : projectIsolation;
   const isolation =
-    manualIsolation?.targetKey === input.targetKey
+    forcedIsolation ??
+    (manualIsolation?.targetKey === input.targetKey
       ? manualIsolation.value
-      : getDefaultWorkspaceIsolation(input.projectId);
-  const canCreateWorktree = supportsMultiplicity && worktreeSupport !== "unsupported";
-  const isWorktree = isolation === "worktree" && canCreateWorktree;
+      : getDefaultWorkspaceIsolation(placement?.projectId ?? null));
+  const canCreateWorktree =
+    supportsMultiplicity && placement !== null && placement.worktreeSupport !== "unsupported";
+  const isWorktree =
+    isolation === "worktree" && (canCreateWorktree || forcedIsolation === "worktree");
 
   const setIsolation = useCallback(
     (value: "local" | "worktree") => {
@@ -747,7 +751,7 @@ function useWorkspaceIsolation(input: {
     isolation,
     setIsolation,
     effectiveIsolation: isWorktree ? "worktree" : "local",
-    canCreateWorktree,
+    showIsolationPicker: canCreateWorktree && forcedIsolation === undefined,
     showRefPicker: !supportsMultiplicity || isWorktree,
   };
 }
@@ -1487,7 +1491,7 @@ interface NewWorkspaceFormStackInput {
     options: ComboboxOptionType[];
     onSelect: (id: string) => void;
     renderOption: RefPickerRenderOption;
-    canCreateWorktree: boolean;
+    showIsolationPicker: boolean;
   };
   base: FormPickerControl & {
     selectedSourceDirectory: string | null;
@@ -1617,7 +1621,7 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
     </View>
   ) : null;
 
-  const isolationControl = isolation.canCreateWorktree ? (
+  const isolationControl = isolation.showIsolationPicker ? (
     <View style={desktopControlStyle}>
       <IsolationPickerTrigger
         pickerAnchorRef={isolation.anchorRef}
@@ -1910,15 +1914,12 @@ export function NewWorkspaceScreen({
   const hasSelectedSourceDirectory = selectedSourceDirectory !== null;
   const pickerQueryEnabled = pickerOpen && clientReady && hasSelectedSourceDirectory;
 
-  const worktreeSupport = selectedProject
-    ? getWorktreeSupportForHostProject({ project: selectedProject, serverId: selectedServerId })
-    : "unsupported";
+  const placement = getHostProjectPlacement(selectedProject, selectedServerId);
   const isPending = isNewWorkspacePending({ pendingAction, isDraftHandoffActive });
-  const { effectiveIsolation, setIsolation, canCreateWorktree, showRefPicker } =
+  const { effectiveIsolation, setIsolation, showIsolationPicker, showRefPicker } =
     useWorkspaceIsolation({
       supportsMultiplicity: supportsWorkspaceMultiplicity,
-      worktreeSupport,
-      projectId: selectedProject ? getHostProjectId(selectedProject, selectedServerId) : null,
+      placement,
       targetKey: JSON.stringify([selectedServerId, selectedSourceDirectory]),
     });
 
@@ -2073,13 +2074,13 @@ export function NewWorkspaceScreen({
     setIsolationPickerOpen(nextOpen);
   }, []);
 
-  // "New worktree" is omitted entirely (not disabled) when the project isn't a
-  // git checkout, since worktree isolation is impossible there.
-  const isolationOptions = useMemo<ComboboxOptionType[]>(() => {
-    const localOption = { id: "local", label: isolationLabel(t, "local") };
-    if (!canCreateWorktree) return [localOption];
-    return [localOption, { id: "worktree", label: isolationLabel(t, "worktree") }];
-  }, [canCreateWorktree, t]);
+  const isolationOptions = useMemo<ComboboxOptionType[]>(
+    () => [
+      { id: "local", label: isolationLabel(t, "local") },
+      { id: "worktree", label: isolationLabel(t, "worktree") },
+    ],
+    [t],
+  );
 
   const handleSelectIsolationOption = useCallback(
     (id: string) => {
@@ -2466,7 +2467,7 @@ export function NewWorkspaceScreen({
       openState: isolationPickerOpen,
       onOpenChange: handleIsolationPickerOpenChange,
       renderOption: renderIsolationOption,
-      canCreateWorktree,
+      showIsolationPicker,
     },
     base: {
       anchorRef: pickerAnchorRef,

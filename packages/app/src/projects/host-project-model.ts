@@ -94,6 +94,7 @@ export function hostProjectFromWorkspace(input: {
         iconWorkingDir,
         worktreeSupport: canCreate ? "supported" : "unsupported",
         customIconRevision: input.workspace.projectCustomIconRevision,
+        workspaceIsolation: input.workspace.workspaceIsolation,
       },
     ],
     workspaceKeys: [`${input.serverId}:${input.workspace.id}`],
@@ -104,11 +105,11 @@ function projectCanCreateWorktree(project: HostProjectListItem): boolean {
   return project.hosts.some((host) => host.worktreeSupport !== "unsupported");
 }
 
-function getHostProjectPlacement(
-  project: HostProjectListItem,
+export function getHostProjectPlacement(
+  project: HostProjectListItem | null,
   serverId: string,
 ): WorkspaceStructureHostPlacement | null {
-  for (const host of project.hosts) {
+  for (const host of project?.hosts ?? []) {
     if (host.serverId === serverId) return host;
   }
   return null;

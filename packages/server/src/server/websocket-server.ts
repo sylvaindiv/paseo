@@ -1832,6 +1832,7 @@ export class VoiceAssistantWebSocketServer {
         ...(this.workspaceLabelService ? { workspaceLabels: true } : {}),
         workspaceTodos: true,
         workspaceTodoMilestones: true,
+        workspaceTodoSubtasks: true,
         interactiveResponses: true,
         // COMPAT(workspaceSetupRun): added in v0.7.3, remove gate after 2027-09-02.
         workspaceSetupRun: true,
@@ -1975,6 +1976,7 @@ export class VoiceAssistantWebSocketServer {
         projectCustomIcon: true,
         // COMPAT(projectEmojiIcon): added in v0.8.1, remove after 2027-03-14.
         projectEmojiIcon: true,
+        projectWorkspaceIsolation: true,
         // COMPAT(fsEntryOps): added in v0.3.0, remove gate after 2027-02-08.
         fsEntryOps: true,
         // COMPAT(fsEntryDuplicate): added in v0.3.0, remove gate after 2027-02-09.

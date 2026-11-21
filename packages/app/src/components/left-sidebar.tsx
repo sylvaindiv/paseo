@@ -47,7 +47,7 @@ import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model
 import { type SidebarGroupMode, useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { useHosts } from "@/runtime/host-runtime";
 import { PluginSidebarItem } from "@/plugins/sidebar-items";
-import { builtinSidebarNavLabelKey } from "@/sidebar-nav/model";
+import { builtinSidebarNavLabelKey, type SidebarNavItem } from "@/sidebar-nav/model";
 import { useSidebarNavItems } from "@/sidebar-nav/use-sidebar-nav-items";
 import { usePanelStore } from "@/stores/panel-store";
 import { useOwnsWindowChromeCorner, WindowChromeSafeArea } from "@/utils/desktop-window";
@@ -488,23 +488,32 @@ function SidebarFooterRows({ onBeforeNavigate }: { onBeforeNavigate?: () => void
     (item) => item.visible && (item.kind === "plugin" || usageSources.length > 0),
   );
   if (!showOpenDesign && visibleItems.length === 0) return null;
+  const beforeOpenDesign = visibleItems.filter(
+    (item) =>
+      item.kind === "plugin" &&
+      item.group.kind === "item" &&
+      item.group.targets.some((target) => target.item.placement === "before-opendesign"),
+  );
+  const renderItem = (item: SidebarNavItem<"footer">) =>
+    item.kind === "plugin" ? (
+      <PluginSidebarItem
+        key={item.key}
+        group={item.group}
+        section="footer"
+        fallbackAnchorRef={rowsRef}
+        onBeforeNavigate={onBeforeNavigate}
+      />
+    ) : (
+      <UsageSidebarItem key={item.key} sources={usageSources} />
+    );
   return (
     <>
       <View ref={rowsRef} collapsable={false} style={styles.footerRows}>
+        {showOpenDesign ? beforeOpenDesign.map(renderItem) : null}
         {showOpenDesign ? <OpenDesignRow onBeforeNavigate={onBeforeNavigate} /> : null}
-        {visibleItems.map((item) =>
-          item.kind === "plugin" ? (
-            <PluginSidebarItem
-              key={item.key}
-              group={item.group}
-              section="footer"
-              fallbackAnchorRef={rowsRef}
-              onBeforeNavigate={onBeforeNavigate}
-            />
-          ) : (
-            <UsageSidebarItem key={item.key} sources={usageSources} />
-          ),
-        )}
+        {visibleItems
+          .filter((item) => !showOpenDesign || !beforeOpenDesign.includes(item))
+          .map(renderItem)}
       </View>
       <SidebarSeparator testID="sidebar-footer-separator" />
     </>
