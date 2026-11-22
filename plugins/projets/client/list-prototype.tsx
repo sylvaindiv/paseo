@@ -1,4 +1,4 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop -- Eight in-memory tasks in a disposable design comparison. */
+/* oxlint-disable react-perf/jsx-no-new-function-as-prop -- In-memory project cards in a disposable design comparison. */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { prototypeCss } from "./list-prototype-style.js";
 
@@ -51,6 +51,48 @@ const initialTasks: Task[] = [
   children: task.children.map((title, i) => ({ id: i, title, done: false })),
 }));
 
+function makeTask(
+  id: number,
+  title: string,
+  phase: number,
+  subtasks: string[] = [],
+  done = false,
+): Task {
+  return {
+    id,
+    title,
+    phase,
+    done,
+    children: subtasks.map((label, index) => ({ id: index, title: label, done: false })),
+  };
+}
+
+const projects = [
+  { name: "Site Atelier", tasks: initialTasks },
+  {
+    name: "Maison Iris",
+    tasks: [
+      makeTask(0, "Choisir la photo de couverture", 0, [], true),
+      makeTask(1, "Relire la carte d’été", 0, ["Vérifier les prix", "Confirmer les horaires"]),
+      makeTask(2, "Ajouter la terrasse", 0),
+      makeTask(3, "Ouvrir les réservations", 1, [
+        "Tester une réservation",
+        "Confirmer le courriel",
+      ]),
+      makeTask(4, "Annoncer la réouverture", 1),
+    ],
+  },
+  {
+    name: "Studio Nacre",
+    tasks: [
+      makeTask(0, "Sélectionner les réalisations", 0, [], true),
+      makeTask(1, "Recadrer les visuels", 0, ["Portrait", "Paysage"]),
+      makeTask(2, "Publier le portfolio", 1, ["Relire les légendes", "Tester sur tablette"]),
+      makeTask(3, "Envoyer le lien au studio", 1),
+    ],
+  },
+];
+
 export function readVariant(value?: string | null) {
   return variants.find((v) => v === value);
 }
@@ -98,20 +140,54 @@ function EditableTitle({ task, save }: { task: Task; save(title: string): void }
   );
 }
 
-function List({ variant }: { variant: Variant }) {
-  const [tasks, setTasks] = useState(initialTasks);
-  const [selected, select] = useState(2);
+function Subtasks({ task, change }: { task: Task; change(values: Partial<Task>): void }) {
+  return (
+    <div className="lp-children">
+      {task.children.length ? (
+        task.children.map((item) => (
+          <label key={item.id}>
+            <input
+              className="lp-check"
+              type="checkbox"
+              checked={item.done}
+              onChange={() =>
+                change({
+                  children: task.children.map((c) =>
+                    c.id === item.id ? { ...c, done: !c.done } : c,
+                  ),
+                })
+              }
+            />
+            <span>{item.title}</span>
+          </label>
+        ))
+      ) : (
+        <span className="lp-muted">Aucune sous-tâche</span>
+      )}
+    </div>
+  );
+}
+
+interface ColumnProps {
+  variant: Variant;
+  name: string;
+  tasks: Task[];
+  selected?: number;
+  select(id: number): void;
+  update(tasks: Task[]): void;
+}
+function ProjectColumn({ variant, name, tasks, selected, select, update }: ColumnProps) {
   const [expanded, expand] = useState<number | null>(null);
   const [open, setOpen] = useState([true, true]);
-  const next = useRef(initialTasks.length);
-  const current = tasks.find((task) => task.id === selected)!;
+  const [folded, fold] = useState(false);
+  const next = useRef(tasks.length);
   function change(id: number, values: Partial<Task>) {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...values } : t)));
+    update(tasks.map((t) => (t.id === id ? { ...t, ...values } : t)));
   }
   function add(title: string, phase: number) {
-    const task = { id: next.current++, title, phase, done: false, children: [] };
-    setTasks((prev) => [...prev, task]);
-    if (variant === "detail") select(task.id);
+    const t = makeTask(next.current++, title, phase);
+    update([...tasks, t]);
+    if (variant === "detail") select(t.id);
   }
   function checkbox(task: Task) {
     return (
@@ -122,33 +198,6 @@ function List({ variant }: { variant: Variant }) {
         checked={task.done}
         onChange={(e) => change(task.id, { done: e.target.checked })}
       />
-    );
-  }
-  function children(task: Task) {
-    return (
-      <div className="lp-children">
-        {task.children.length ? (
-          task.children.map((item) => (
-            <label key={item.id}>
-              <input
-                className="lp-check"
-                type="checkbox"
-                checked={item.done}
-                onChange={() =>
-                  change(task.id, {
-                    children: task.children.map((c) =>
-                      c.id === item.id ? { ...c, done: !c.done } : c,
-                    ),
-                  })
-                }
-              />
-              <span>{item.title}</span>
-            </label>
-          ))
-        ) : (
-          <span className="lp-muted">Aucune sous-tâche</span>
-        )}
-      </div>
     );
   }
   function row(task: Task) {
@@ -170,85 +219,142 @@ function List({ variant }: { variant: Variant }) {
             </button>
           )}
         </div>
-        {expanded === task.id && children(task)}
+        {expanded === task.id && (
+          <Subtasks task={task} change={(values) => change(task.id, values)} />
+        )}
       </div>
     );
   }
   const done = tasks.filter((t) => t.done).length;
   return (
-    <main className={"lp-sheet lp-" + variant}>
-      <header className="lp-head">
-        <div className="lp-eyebrow">Projet d’essai</div>
-        <h1>Refonte du site Atelier</h1>
-        <div className="lp-progress">
+    <article className="lp-card" aria-label={name}>
+      <button
+        type="button"
+        className="lp-cardhead"
+        aria-label={name}
+        aria-expanded={!folded}
+        onClick={() => fold(!folded)}
+      >
+        <span className="lp-cardtitle">{name}</span>
+        <span className="lp-fold" aria-hidden="true">
+          {folded ? "+" : "−"}
+        </span>
+        <span className="lp-progress">
           <progress value={done} max={tasks.length} />
           <span>
-            {done} sur {tasks.length} terminée{done > 1 ? "s" : ""}
+            {done} / {tasks.length}
           </span>
-        </div>
-      </header>
-      {variant === "simple" && (
-        <section className="lp-paper">
-          <h2>Tâches</h2>
-          {tasks.map(row)}
-          <AddTask add={(title) => add(title, 0)} />
-        </section>
-      )}
-      {variant === "phases" && (
-        <div className="lp-groups">
-          {phases.map((phase, i) => {
-            const group = tasks.filter((t) => t.phase === i);
-            const left = group.filter((t) => !t.done).length;
-            return (
-              <section className="lp-paper" key={phase}>
-                <button
-                  type="button"
-                  className="lp-phase"
-                  aria-expanded={open[i]}
-                  onClick={() => setOpen(open.map((v, index) => (index === i ? !v : v)))}
+        </span>
+      </button>
+      <div hidden={folded} className="lp-cardbody">
+        {variant === "simple" && (
+          <section className="lp-paper">
+            {tasks.map(row)}
+            <AddTask add={(title) => add(title, 0)} />
+          </section>
+        )}
+        {variant === "phases" && (
+          <div className="lp-groups">
+            {phases.map((phase, i) => {
+              const group = tasks.filter((t) => t.phase === i);
+              const left = group.filter((t) => !t.done).length;
+              return (
+                <section className="lp-paper" key={phase}>
+                  <button
+                    type="button"
+                    className="lp-phase"
+                    aria-expanded={open[i]}
+                    onClick={() => setOpen(open.map((v, index) => (index === i ? !v : v)))}
+                  >
+                    <strong>{phase}</strong>
+                    <span>{left} à faire</span>
+                    <b aria-hidden="true">{open[i] ? "−" : "+"}</b>
+                  </button>
+                  {open[i] && (
+                    <>
+                      {group.map(row)}
+                      <AddTask add={(title) => add(title, i)} />
+                    </>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        )}
+        {variant === "detail" && (
+          <div className="lp-split">
+            <section className="lp-index">
+              {tasks.map((t) => (
+                <div
+                  className="lp-indexrow"
+                  data-selected={t.id === selected}
+                  data-done={t.done}
+                  key={t.id}
                 >
-                  <strong>{phase}</strong>
-                  <span>{left} à faire</span>
-                  <b aria-hidden="true">{open[i] ? "−" : "+"}</b>
-                </button>
-                {open[i] && (
-                  <>
-                    {group.map(row)}
-                    <AddTask add={(title) => add(title, i)} />
-                  </>
-                )}
-              </section>
-            );
-          })}
+                  {checkbox(t)}
+                  <button
+                    type="button"
+                    aria-pressed={t.id === selected}
+                    onClick={() => select(t.id)}
+                  >
+                    {t.title}
+                  </button>
+                </div>
+              ))}
+              <AddTask
+                add={(title) => add(title, tasks.find((t) => t.id === selected)?.phase ?? 0)}
+              />
+            </section>
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function Board({ variant }: { variant: Variant }) {
+  const [lists, setLists] = useState(() => projects.map((p) => p.tasks));
+  const [selection, setSelection] = useState({ project: 0, id: 2 });
+  const current = lists[selection.project].find((t) => t.id === selection.id)!;
+  function update(index: number, tasks: Task[]) {
+    setLists((prev) => prev.map((list, i) => (i === index ? tasks : list)));
+  }
+  function editDetail(values: Partial<Task>) {
+    update(
+      selection.project,
+      lists[selection.project].map((t) => (t.id === current.id ? { ...t, ...values } : t)),
+    );
+  }
+  return (
+    <main className={"lp-board lp-" + variant}>
+      <h1>
+        Mes projets <span>{projects.length}</span>
+      </h1>
+      <div className="lp-layout">
+        <div className="lp-rail" role="region" aria-label="Projets" tabIndex={0}>
+          {projects.map((project, i) => (
+            <ProjectColumn
+              key={project.name}
+              name={project.name}
+              tasks={lists[i]}
+              variant={variant}
+              selected={selection.project === i ? selection.id : undefined}
+              select={(id) => setSelection({ project: i, id })}
+              update={(tasks) => update(i, tasks)}
+            />
+          ))}
         </div>
-      )}
-      {variant === "detail" && (
-        <div className="lp-split">
-          <section className="lp-index">
-            <h2>Tâches</h2>
-            {tasks.map((t) => (
-              <div
-                className="lp-indexrow"
-                data-selected={t.id === selected}
-                data-done={t.done}
-                key={t.id}
-              >
-                {checkbox(t)}
-                <button type="button" aria-pressed={t.id === selected} onClick={() => select(t.id)}>
-                  {t.title}
-                </button>
-              </div>
-            ))}
-            <AddTask add={(title) => add(title, current.phase)} />
-          </section>
-          <section className="lp-detailpane">
-            <div className="lp-eyebrow">{phases[current.phase]}</div>
-            <EditableTitle task={current} save={(title) => change(current.id, { title })} />
+        {variant === "detail" && (
+          <aside className="lp-detailpane" aria-label="Détail de la tâche">
+            <div className="lp-eyebrow">
+              {projects[selection.project].name} · {phases[current.phase]}
+            </div>
+            <EditableTitle task={current} save={(title) => editDetail({ title })} />
             <h2>Sous-tâches</h2>
-            {children(current)}
-          </section>
-        </div>
-      )}
+            <Subtasks task={current} change={editDetail} />
+          </aside>
+        )}
+      </div>
     </main>
   );
 }
@@ -269,7 +375,14 @@ export function ListPrototype({ initial }: { initial: Variant }) {
       )
         return;
       const step = ({ ArrowRight: 1, ArrowLeft: -1 } as Record<string, number>)[e.key] ?? 0;
-      if (step && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (
+        step &&
+        e.target instanceof HTMLElement &&
+        e.target.closest(".lp-switch") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
         e.preventDefault();
         show(variants[(variants.indexOf(variant) + step + 3) % 3]);
       }
@@ -283,7 +396,7 @@ export function ListPrototype({ initial }: { initial: Variant }) {
       <div className="lp-scroll">
         {variants.map((v) => (
           <div key={v} hidden={v !== variant}>
-            <List variant={v} />
+            <Board variant={v} />
           </div>
         ))}
       </div>
