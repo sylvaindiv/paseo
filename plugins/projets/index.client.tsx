@@ -41,7 +41,7 @@ export default function contribute(client: PluginClientContext) {
       if (variant) return <ListPrototype key={variant} initial={variant} />;
       return (
         <>
-          <a href="?param.variant=simple" style={previewLink}>
+          <a href="?param.variant=phases" style={previewLink}>
             Essayer les listes
           </a>
           <ProjectsScreen {...props} />

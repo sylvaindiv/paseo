@@ -168,6 +168,47 @@ function Subtasks({ task, change }: { task: Task; change(values: Partial<Task>):
   );
 }
 
+interface TaskImage {
+  id: number;
+  file: File;
+}
+
+function ImageTile({ image, remove }: { image: TaskImage; remove(): void }) {
+  const [url, setUrl] = useState("");
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const src = URL.createObjectURL(image.file);
+    setUrl(src);
+    return () => URL.revokeObjectURL(src);
+  }, [image.file]);
+  if (!url) return null;
+  return (
+    <div className="lp-image">
+      <button
+        type="button"
+        aria-label={"Agrandir " + image.file.name}
+        onClick={() => dialog.current?.showModal()}
+      >
+        <img src={url} alt={image.file.name} />
+      </button>
+      <button
+        className="lp-remove"
+        type="button"
+        aria-label={"Retirer " + image.file.name}
+        onClick={remove}
+      >
+        ×
+      </button>
+      <dialog ref={dialog} className="lp-lightbox" aria-label={image.file.name}>
+        <img src={url} alt={image.file.name} />
+        <button type="button" onClick={() => dialog.current?.close()}>
+          Fermer
+        </button>
+      </dialog>
+    </div>
+  );
+}
+
 interface ColumnProps {
   variant: Variant;
   name: string;
@@ -181,6 +222,17 @@ function ProjectColumn({ variant, name, tasks, selected, select, update }: Colum
   const [open, setOpen] = useState([true, true]);
   const [folded, fold] = useState(false);
   const next = useRef(tasks.length);
+  const [images, setImages] = useState<Record<number, TaskImage[]>>({});
+  const nextImage = useRef(0);
+  function attach(id: number, files: FileList) {
+    const added = Array.from(files)
+      .filter((file) => file.type.startsWith("image/"))
+      .map((file) => ({ id: nextImage.current++, file }));
+    if (!added.length) return false;
+    setImages((prev) => ({ ...prev, [id]: [...(prev[id] ?? []), ...added] }));
+    expand(id);
+    return true;
+  }
   function change(id: number, values: Partial<Task>) {
     update(tasks.map((t) => (t.id === id ? { ...t, ...values } : t)));
   }
@@ -201,26 +253,76 @@ function ProjectColumn({ variant, name, tasks, selected, select, update }: Colum
     );
   }
   function row(task: Task) {
+    const byPhase = variant === "phases";
+    const attached = images[task.id] ?? [];
     return (
-      <div key={task.id}>
+      <div
+        key={task.id}
+        onPaste={(event) => {
+          if (byPhase && attach(task.id, event.clipboardData.files)) event.preventDefault();
+        }}
+      >
         <div className="lp-row" data-done={task.done}>
           {checkbox(task)}
           <EditableTitle task={task} save={(title) => change(task.id, { title })} />
-          {task.children.length > 0 && (
+          {(byPhase || task.children.length > 0) && (
             <button
               type="button"
               className="lp-disclose"
-              aria-label={"Sous-tâches de " + task.title}
+              aria-label={(byPhase ? "Détails de " : "Sous-tâches de ") + task.title}
               aria-expanded={expanded === task.id}
               onClick={() => expand(expanded === task.id ? null : task.id)}
             >
-              {task.children.length}
+              {byPhase
+                ? attached.length > 0 && (
+                    <span>
+                      {attached.length} image{attached.length > 1 ? "s" : ""}
+                    </span>
+                  )
+                : task.children.length}
               <span aria-hidden="true">{expanded === task.id ? "▴" : "▾"}</span>
             </button>
           )}
         </div>
         {expanded === task.id && (
-          <Subtasks task={task} change={(values) => change(task.id, values)} />
+          <>
+            {task.children.length > 0 && (
+              <Subtasks task={task} change={(values) => change(task.id, values)} />
+            )}
+            {byPhase && (
+              <div className="lp-attachments" tabIndex={0} aria-label={"Images de " + task.title}>
+                {attached.length > 0 && (
+                  <div className="lp-gallery">
+                    {attached.map((image) => (
+                      <ImageTile
+                        key={image.id}
+                        image={image}
+                        remove={() =>
+                          setImages((prev) => ({
+                            ...prev,
+                            [task.id]: prev[task.id].filter((item) => item.id !== image.id),
+                          }))
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+                <label className="lp-pick">
+                  Ajouter des images
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(event) => {
+                      if (event.target.files) attach(task.id, event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+                <small>ou coller ici</small>
+              </div>
+            )}
+          </>
         )}
       </div>
     );

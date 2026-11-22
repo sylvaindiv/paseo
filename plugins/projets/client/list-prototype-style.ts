@@ -43,6 +43,20 @@ export const prototypeCss = `
 .lp-indexrow[data-selected=true] {background:#e7eddf;color:#2e492e}
 .lp-detailpane {background:#fafaf2;border:1px solid var(--line);border-radius:10px;padding:15px;min-width:0}
 .lp-detailpane .lp-title {font:500 17px/1.3 Georgia,serif;margin:5px 0 18px}.lp-detailpane .lp-children {padding:3px 0 10px}
+.lp-attachments{padding:5px 0 12px 28px;color:var(--dim)}
+.lp-attachments small{font-size:12px;margin-left:7px}
+.lp-pick{display:inline-block;position:relative;font-size:13px;color:var(--leaf);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.lp-pick input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}
+.lp-pick:focus-within{outline:2px solid var(--leaf)}
+.lp-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(62px,1fr));gap:5px;margin:2px 0 8px}
+.lp-image{position:relative;aspect-ratio:1.3;min-width:0}
+.lp-image>button:first-child,.lp-image>button:first-child img{display:block;width:100%;height:100%;padding:0;object-fit:cover;border-radius:5px}
+.lp-image>button:first-child{border:1px solid var(--line);overflow:hidden}
+.lp-root .lp-remove{position:absolute;top:3px;right:3px;background:#fff;color:#303229;border-radius:50%;width:19px;height:19px;padding:0;line-height:17px;box-shadow:0 0 3px #0004}
+.lp-lightbox{border:0;padding:10px;border-radius:9px;background:var(--paper);max-width:90vw;max-height:90vh;text-align:right}
+.lp-lightbox img{display:block;max-width:84vw;max-height:76vh;object-fit:contain}
+.lp-lightbox::backdrop{background:#20221ec9}
+.lp-lightbox button{margin-top:6px}
 .lp-switch {align-self:center;display:flex;gap:2px;margin:8px auto 14px;padding:4px;background:#33392e;border-radius:20px;box-shadow:0 3px 12px #3333}
 .lp-switch button {border-radius:16px;color:#f3f4ed;font-size:13px;padding:6px 12px;white-space:nowrap}
 .lp-switch button[aria-pressed=true] {background:#f7f8ef;color:#293024}
