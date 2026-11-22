@@ -2383,8 +2383,18 @@ function ProjectModeList({
   );
 
   const renderProject = useCallback(
-    ({ item, drag, isActive, dragHandleProps }: DraggableRenderItemInfo<SidebarProjectEntry>) =>
-      renderProjectBlock(item, { drag, isDragging: isActive, dragHandleProps }),
+    ({
+      item,
+      index,
+      drag,
+      isActive,
+      dragHandleProps,
+    }: DraggableRenderItemInfo<SidebarProjectEntry>) => (
+      <>
+        {index > 0 && <View pointerEvents="none" style={styles.projectSeparator} />}
+        {renderProjectBlock(item, { drag, isDragging: isActive, dragHandleProps })}
+      </>
+    ),
     [renderProjectBlock],
   );
 
@@ -2540,6 +2550,12 @@ const styles = StyleSheet.create((theme) => ({
     // Schedules icon across the divider; their layout boxes have different insets.
     paddingTop: 2,
     paddingBottom: theme.spacing[4],
+  },
+  projectSeparator: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: theme.spacing[2],
+    backgroundColor: theme.colors.foreground,
+    opacity: 0.08,
   },
   projectListContainer: {
     width: "100%",

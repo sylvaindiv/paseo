@@ -105,6 +105,13 @@ export declare const Button: ComponentType<{
   testID?: string;
 }>;
 
+/** The project's image, emoji or colored initial, as shown in the sidebar. */
+export declare const ProjectIcon: ComponentType<{
+  serverId: string;
+  projectId: string;
+  size: number;
+}>;
+
 /** Paseo's inline editor for the open tasks of one workspace. */
 export declare const WorkspaceTodoList: ComponentType<{
   serverId: string;

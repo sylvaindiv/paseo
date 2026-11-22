@@ -39,7 +39,7 @@ function phaseKey(phaseId: string) {
   return "phase:" + phaseId;
 }
 
-const taskBoardKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
+export const taskBoardKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
   if (!String(args.active).startsWith("phase:")) return sortableKeyboardCoordinates(event, args);
   if (event.code !== "ArrowUp" && event.code !== "ArrowDown") return;
   event.preventDefault();
@@ -61,7 +61,7 @@ const taskBoardKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => 
   };
 };
 
-const collisionsUnderPointer: CollisionDetection = (args) => {
+export const collisionsUnderPointer: CollisionDetection = (args) => {
   const phaseDrag = String(args.active.id).startsWith("phase:");
   const droppableContainers = phaseDrag
     ? args.droppableContainers.filter(({ id }) => String(id).startsWith("phase:"))
