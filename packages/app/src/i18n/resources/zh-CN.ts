@@ -2083,6 +2083,7 @@ export const zhCN: TranslationResources = {
     draft: {
       newAgent: "新建 Agent",
       creatingAgent: "正在创建 Agent",
+      waitingForMemory: "等待可用内存",
     },
     file: {
       directoryMissing: "未找到 workspace 目录。",
@@ -2147,6 +2148,10 @@ export const zhCN: TranslationResources = {
     output: "输出",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "{{count}} 个操作",
+      other: "{{count}} 个操作",
+    },
     editedFiles: {
       one: "编辑了 {{count}} 个文件",
       other: "编辑了 {{count}} 个文件",

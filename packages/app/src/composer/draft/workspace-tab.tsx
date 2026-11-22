@@ -204,6 +204,10 @@ async function submitDraftCreateRequest(input: {
   const imagesData = await encodeImages(images);
   const options = {
     idempotencyKey: input.draftId,
+    onEvent: (snapshot: import("@getpaseo/protocol/messages").CreationSnapshot) =>
+      useCreateFlowStore
+        .getState()
+        .setMemoryWait(input.draftId, snapshot.waitingForMemory === true),
     launchProfileId: input.launchProfileId,
     ...((input.autoSubmitConfig?.modelRouting ?? composerState.modelRouting) === "jev"
       ? { modelRouting: { strategy: "jev" as const, prompt: text } }

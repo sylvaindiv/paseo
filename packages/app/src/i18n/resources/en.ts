@@ -2136,6 +2136,7 @@ export const en = {
     draft: {
       newAgent: "New Agent",
       creatingAgent: "Creating agent",
+      waitingForMemory: "Waiting for memory",
     },
     file: {
       directoryMissing: "Workspace directory not found.",
@@ -2200,6 +2201,10 @@ export const en = {
     output: "Output",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "{{count}} action",
+      other: "{{count}} actions",
+    },
     editedFiles: {
       one: "edited {{count}} file",
       other: "edited {{count}} files",

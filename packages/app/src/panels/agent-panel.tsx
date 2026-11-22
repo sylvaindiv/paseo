@@ -456,6 +456,7 @@ export function useDraftPanelDescriptor(
       return {
         isCreating: true,
         pendingPrompt: pending.text,
+        waitingForMemory: pending.waitingForMemory,
       };
     }),
   );

@@ -5171,6 +5171,7 @@ export const CreationSnapshotSchema = z.object({
   errorCode: z.string().optional(),
   failedStage: z.enum(["workspace", "agent", "prompt"]).optional(),
   outcomeUnknown: z.boolean().optional(),
+  waitingForMemory: z.boolean().optional(),
 });
 export type CreationSnapshot = z.infer<typeof CreationSnapshotSchema>;
 export type AgentCreateRequest = z.infer<typeof AgentCreateRequestSchema>;
@@ -5198,6 +5199,7 @@ export const AgentCreateResponseSchema = z.object({
     requestId: z.string(),
     agent: AgentSnapshotPayloadSchema.nullable(),
     error: z.string().nullable(),
+    errorCode: z.string().optional(),
     creation: CreationSnapshotSchema.optional(),
   }),
 });

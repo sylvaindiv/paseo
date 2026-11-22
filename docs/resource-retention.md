@@ -22,9 +22,14 @@ Closing the window ends its sampling. Each journal has two segments of at most f
 ## Codex sessions
 
 Codex 0.171.0 and later must affirm an idle thread, no background terminals, no active goal and
-no other loaded thread before Paseo releases the runtime. Pending work, a reader on any client or
-an incomplete response retains it. **Put to sleep** in host diagnostics skips the inactivity
+no other loaded thread before Paseo releases the runtime. Pending work, a reader on any client,
+an active workspace terminal or an incomplete response retains it. **Put to sleep** in host diagnostics skips the inactivity
 delay and uses the same proof and durable save. It requires workspace write access.
+
+On macOS, memory pressure defers new agent launches and runs the inactivity check
+without the 15-minute delay. Active sessions continue. After 30 seconds of normal pressure,
+Paseo starts waiting launches one at a time and samples pressure before each one.
+A connected creation client resubmits waiting creation receipts after a daemon restart.
 
 Paseo gives Codex a dedicated, named agent-browser session. Browse on demand and use the integrated
 browser for an existing Paseo page. On turn completion, Paseo closes the dedicated session only
@@ -33,7 +38,7 @@ orphaned browser processes.
 
 Use the REA CLI on demand. Set `PASEO_CODEX_CHROME_DEVTOOLS=1` or `PASEO_CODEX_REA_MCP=1` in a
 Codex provider profile to use the corresponding configured MCP server on launch. Paseo applies
-its defaults at launch, so the global Codex configuration and running sessions are preserved.
+its defaults at launch and when opening a thread, so the global Codex configuration and running sessions are preserved.
 
 Samples contain
 process RSS for the daemon and descendants, Node memory, resident runtime counts, cumulative releases

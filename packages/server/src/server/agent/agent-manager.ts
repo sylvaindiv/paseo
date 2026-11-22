@@ -1,3 +1,4 @@
+import { AgentLaunchPressure } from "./agent-launch-pressure.js";
 import type { ResourceMemorySample } from "../resource-retention.js";
 import { DaemonBusyError } from "../lifecycle-reasons.js";
 import { closeAgentBrowser } from "../agent-browser.js";
@@ -373,6 +374,7 @@ export interface AgentManagerOptions {
   onWorkspaceStateMayHaveChanged?: (params: { cwd: string }) => void;
   durableTimelineStore?: AgentTimelineStore;
   terminalManager?: TerminalManager | null;
+  readMemoryPressure?: () => Promise<boolean | null>;
   mcpBaseUrl?: string;
   mcpAuthToken?: string;
   paseoToolsEnabled?: boolean;
@@ -816,26 +818,11 @@ export class AgentManager {
     )
       return "active";
     if (!agent.persistence || !this.registry || agent.internal) return "not-persistent";
-    if (
-      agent.pendingPermissions.size ||
-      agent.inFlightPermissionResponses.size ||
-      (agent.attention.requiresAttention && agent.attention.attentionReason === "permission")
-    )
-      return "attention";
+    if (this.terminalManager?.hasActiveTerminal?.(agent.cwd, agent.workspaceId)) return "terminal";
+    if (this.hasInactivityBlockingAttention(agent)) return "attention";
     if ([...this.timelineReaders.values()].some((ids) => ids === "all" || ids.has(agent.id)))
       return "reader";
-    if (this.providerSubagents.list(agent.id).some((child) => child.status === "running"))
-      return "subagent";
-    if (
-      [...this.agents.values()].some(
-        (child) =>
-          child.labels[PARENT_AGENT_ID_LABEL] === agent.id &&
-          (child.lifecycle !== "idle" ||
-            child.pendingPermissions.size ||
-            this.runs.hasRun(child.id)),
-      )
-    )
-      return "subagent";
+    if (this.hasWorkInSubagents(agent.id)) return "subagent";
     if (
       !agent.session.canCloseForInactivity ||
       agent.session.supportsInactivityClosure?.() === false
@@ -844,7 +831,31 @@ export class AgentManager {
     return null;
   }
 
-  hibernateInactiveAgents(now = Date.now()): Promise<Record<string, number>> {
+  private hasInactivityBlockingAttention(agent: LiveManagedAgent): boolean {
+    return Boolean(
+      agent.pendingPermissions.size ||
+      agent.inFlightPermissionResponses.size ||
+      (agent.attention.requiresAttention && agent.attention.attentionReason === "permission"),
+    );
+  }
+
+  private hasWorkInSubagents(agentId: string): boolean {
+    return (
+      this.providerSubagents.list(agentId).some((child) => child.status === "running") ||
+      [...this.agents.values()].some(
+        (child) =>
+          child.labels[PARENT_AGENT_ID_LABEL] === agentId &&
+          (child.lifecycle !== "idle" ||
+            child.pendingPermissions.size ||
+            this.runs.hasRun(child.id)),
+      )
+    );
+  }
+
+  hibernateInactiveAgents(
+    now = Date.now(),
+    underPressure = false,
+  ): Promise<Record<string, number>> {
     if (this.inactivitySweep) return this.inactivitySweep;
     const sweep = async () => {
       const reasons: Record<string, number> = {};
@@ -870,7 +881,7 @@ export class AgentManager {
             candidate = { since: now, updatedAt };
             this.inactiveSince.set(id, candidate);
           }
-          if (now - candidate.since < 15 * 60_000) {
+          if (!underPressure && now - candidate.since < 15 * 60_000) {
             count("recent-use");
             return;
           }
@@ -1029,14 +1040,50 @@ export class AgentManager {
   private acceptingAgentRegistrations = true;
 
   private readonly paseoHome?: string;
+  private readonly launchPressure?: AgentLaunchPressure;
+  private readonly admittedCreations = new Set<string>();
+  private readonly terminalManager?: TerminalManager | null;
+
+  async sweepInactiveAgents(): Promise<Record<string, number>> {
+    const pressure = await this.launchPressure?.observe();
+    return this.hibernateInactiveAgents(Date.now(), pressure === true);
+  }
+
+  launchCreation<T>(agentId: string, launch: () => Promise<T>, onWaiting: () => void): Promise<T> {
+    if (!this.launchPressure) return launch();
+    return this.launchPressure.launch(
+      agentId,
+      async () => {
+        this.admittedCreations.add(agentId);
+        try {
+          return await launch();
+        } finally {
+          this.admittedCreations.delete(agentId);
+        }
+      },
+      onWaiting,
+    );
+  }
+
+  launchProviderSession<T>(agentId: string | undefined, launch: () => Promise<T>): Promise<T> {
+    return this.launchPressure ? this.launchPressure.launch(agentId, launch) : launch();
+  }
 
   constructor(options: AgentManagerOptions) {
     this.paseoHome = options.paseoHome;
+    this.terminalManager = options.terminalManager;
+    if (options.readMemoryPressure) {
+      this.launchPressure = new AgentLaunchPressure(options.readMemoryPressure, () => {
+        void this.hibernateInactiveAgents(Date.now(), true).catch((err) =>
+          this.logger.warn({ err }, "Failed to release inactive agents under memory pressure"),
+        );
+      });
+    }
     this.timelineStore = createAgentTimelineStore(options.paseoHome);
     this.onFirstUserPrompt = options.onFirstUserPrompt;
     this.resolveLaunchProfile = options.resolveLaunchProfile;
     this.pluginLifecycle = options.pluginLifecycle;
-    this.idFactory = options?.idFactory ?? (() => randomUUID());
+    this.idFactory = options.idFactory ?? (() => randomUUID());
     this.registry = options?.registry;
     this.durableTimelineStore = options?.durableTimelineStore;
     this.onAgentAttention = options?.onAgentAttention;
@@ -1162,6 +1209,7 @@ export class AgentManager {
 
   prepareForShutdown(): void {
     this.acceptingAgentRegistrations = false;
+    this.launchPressure?.stop();
   }
 
   setPaseoToolsEnabled(enabled: boolean): void {
@@ -1608,7 +1656,11 @@ export class AgentManager {
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
-    const session = await client.createSession(providerLaunchConfig, launchContext, createOptions);
+    const createSession = () =>
+      client.createSession(providerLaunchConfig, launchContext, createOptions);
+    const session = await (this.admittedCreations.has(resolvedAgentId)
+      ? createSession()
+      : this.launchProviderSession(resolvedAgentId, createSession));
     await this.requireExternalMcpSupport(session, storedConfig);
     const agent = await this.registerSession(session, storedConfig, resolvedAgentId, {
       labels: options.labels,
@@ -1771,11 +1823,8 @@ export class AgentManager {
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
-    const session = await client.resumeSession(
-      handle,
-      providerLaunchConfig,
-      launchContext,
-      currentResumeOptions,
+    const session = await this.launchProviderSession(resolvedAgentId, () =>
+      client.resumeSession(handle, providerLaunchConfig, launchContext, currentResumeOptions),
     );
     await this.requireExternalMcpSupport(session, storedConfig);
     return this.registerSession(session, storedConfig, resolvedAgentId, {
@@ -1829,12 +1878,11 @@ export class AgentManager {
       { reason: "import", purpose: "interactive", workspaceId: input.workspaceId },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
-    const imported = await client.importSession(
-      {
-        providerHandleId: input.providerHandleId,
-        cwd: input.cwd,
-      },
-      { config: providerLaunchConfig, storedConfig, launchContext },
+    const imported = await this.launchProviderSession(resolvedAgentId, () =>
+      client.importSession!(
+        { providerHandleId: input.providerHandleId, cwd: input.cwd },
+        { config: providerLaunchConfig, storedConfig, launchContext },
+      ),
     );
     let handedToRegistration = false;
     try {
@@ -1879,8 +1927,10 @@ export class AgentManager {
     options?: { rehydrateFromDisk?: boolean },
   ): Promise<ManagedAgent> {
     return this.trackAgentRegistrationOperation(
-      this.runLifecycleMutation(agentId, () =>
-        this.reloadAgentSessionInternal(agentId, overrides, options),
+      this.launchProviderSession(agentId, () =>
+        this.runLifecycleMutation(agentId, () =>
+          this.reloadAgentSessionInternal(agentId, overrides, options),
+        ),
       ),
     );
   }
@@ -2059,6 +2109,7 @@ export class AgentManager {
   }
 
   closeAgent(agentId: string, options?: { offloadTimeline?: boolean }): Promise<void> {
+    this.launchPressure?.cancel(agentId);
     const existing = this.inFlightAgentCloses.get(agentId);
     if (existing) {
       return existing;

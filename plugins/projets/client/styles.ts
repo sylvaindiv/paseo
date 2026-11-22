@@ -28,8 +28,17 @@ export const projectColors = {
 const colors = projectColors;
 
 export const projectStyles = StyleSheet.create({
+  boardLayout: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    flexDirection: "row",
+    backgroundColor: colors.surface0,
+  },
   page: {
     flex: 1,
+    minWidth: 0,
+    minHeight: 0,
     backgroundColor: colors.surface0,
   },
   heading: {
@@ -53,6 +62,8 @@ export const projectStyles = StyleSheet.create({
     minHeight: 32,
     paddingHorizontal: 5,
   },
+  boardContent: { flexGrow: 1 },
+  scrollRow: { flexShrink: 0 },
   columns: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -106,7 +117,8 @@ export const projectStyles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
-    paddingHorizontal: 10,
+    paddingLeft: 9,
+    paddingRight: 10,
   },
   queue: {
     borderWidth: 1,
@@ -192,14 +204,14 @@ export const projectStyles = StyleSheet.create({
     fontSize: 11,
     fontVariant: ["tabular-nums"],
   },
-  phaseBody: { paddingLeft: 19, paddingRight: 7, paddingBottom: 4 },
-  phaseLink: { paddingVertical: 8, paddingLeft: 29, paddingRight: 10 },
+  phaseBody: { paddingLeft: 7, paddingRight: 7, paddingBottom: 4 },
+  phaseLink: { paddingVertical: 8, paddingLeft: 28, paddingRight: 10 },
   phaseDone: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderStyle: "dashed",
     borderColor: colors.border,
     paddingVertical: 6,
-    paddingLeft: 29,
+    paddingLeft: 28,
   },
   options: { gap: 8, alignItems: "flex-start" },
   small: { fontSize: 12, color: colors.foregroundMuted },
@@ -214,7 +226,6 @@ export const projectStyles = StyleSheet.create({
   todoCard: {
     position: "relative",
     borderRadius: 10,
-    paddingLeft: 20,
     paddingRight: 30,
     paddingVertical: 6,
   },
@@ -222,7 +233,6 @@ export const projectStyles = StyleSheet.create({
     backgroundColor: colors.surface1,
     boxShadow: "0px 1px 2px hsla(32, 28%, 18%, 0.12)",
   },
-  nextRow: { borderLeftWidth: 2, borderLeftColor: colors.accent, paddingLeft: 18 },
   todoLine: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   subtaskLine: { flexDirection: "row", alignItems: "flex-start", gap: 8, paddingVertical: 2 },
   taskAction: { width: 27, height: 28, alignItems: "center", justifyContent: "center" },
@@ -268,7 +278,7 @@ export const projectStyles = StyleSheet.create({
   },
   subtaskCheckbox: { width: 14, height: 14 },
   checked: { backgroundColor: colors.foreground, borderColor: colors.foreground },
-  doing: { backgroundColor: colors.borderStrong, borderColor: colors.borderStrong },
+  queued: { backgroundColor: colors.borderStrong, borderColor: colors.borderStrong },
   checkMark: { color: colors.surface0 },
   subCount: { flexDirection: "row", paddingTop: 2, alignItems: "center", gap: 4 },
   inlineChildAdd: { paddingLeft: 26, paddingTop: 4 },

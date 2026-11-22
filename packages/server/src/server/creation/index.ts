@@ -1,3 +1,4 @@
+import { AgentLaunchStoppedError } from "../agent/agent-launch-pressure.js";
 import type { Logger } from "pino";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -58,6 +59,11 @@ export class CreationService {
       snapshot: CreationSnapshot,
     ) => Promise<void> = async () => {},
     private readonly legacyDirectory?: string,
+    private readonly admitAgent: <T>(
+      id: string,
+      launch: () => Promise<T>,
+      onWaiting: () => void,
+    ) => Promise<T> = (_id, launch) => launch(),
   ) {}
 
   isWorkspaceStarting(workspaceId: string): boolean {
@@ -184,20 +190,7 @@ export class CreationService {
         });
       }
       if (input.hasAgent && input.createAgent && !record.snapshot.agent) {
-        record.inFlight = "agent";
-        await this.write(identity, record);
-        const agent = await input.createAgent(
-          record.snapshot.agentId!,
-          record.snapshot.workspace,
-          async (readyAgent) => {
-            record.inFlight = input.hasPrompt ? "prompt" : null;
-            await this.publish(identity, record, {
-              phase: "agent_ready",
-              agent: readyAgent,
-              workspaceId: readyAgent.workspaceId ?? record.snapshot.workspaceId,
-            });
-          },
-        );
+        const agent = await this.startAgent(identity, record, input.createAgent, input.hasPrompt);
         record.inFlight = null;
         if (input.hasPrompt)
           await this.publish(identity, record, { phase: "prompt_started", agent });
@@ -206,30 +199,82 @@ export class CreationService {
       record.inFlight = null;
       await this.publish(identity, record, { phase: "completed" });
     } catch (error) {
-      const stage = record.inFlight ?? "agent";
-      const resourceId =
-        stage === "workspace" ? record.snapshot.workspaceId : record.snapshot.agentId;
-      const code =
-        error instanceof Error && "code" in error && typeof error.code === "string"
-          ? error.code
-          : undefined;
-      const rejectedBeforeProvision = code === "directory_not_found" || code === "source_required";
-      const unknown =
-        stage === "prompt" ||
-        (stage === "workspace" && !rejectedBeforeProvision) ||
-        (resourceId !== null && (await input.exists(stage, resourceId)));
-      // A failed provider startup with no registered resource can retry under the same ID.
-      // A partially provisioned resource or an attempted prompt needs reconciliation.
-      if (!unknown) record.inFlight = null;
-      await this.publish(identity, record, {
-        phase: "failed",
-        error: error instanceof Error ? error.message : String(error),
-        errorCode: code,
-        failedStage: stage,
-        outcomeUnknown: unknown,
-      });
+      if (error instanceof AgentLaunchStoppedError && !record.inFlight) throw error;
+      await this.recordFailure(identity, record, input, error);
     }
     return record.snapshot;
+  }
+
+  private async recordFailure(
+    identity: string,
+    record: Record,
+    input: CreationInput,
+    error: unknown,
+  ): Promise<void> {
+    const stage = record.inFlight ?? "agent";
+    const resourceId =
+      stage === "workspace" ? record.snapshot.workspaceId : record.snapshot.agentId;
+    const code =
+      error instanceof Error && "code" in error && typeof error.code === "string"
+        ? error.code
+        : undefined;
+    const rejectedBeforeProvision = code === "directory_not_found" || code === "source_required";
+    const unknown =
+      stage === "prompt" ||
+      (stage === "workspace" && !rejectedBeforeProvision) ||
+      (resourceId !== null && (await input.exists(stage, resourceId)));
+    // A failed provider startup with no registered resource can retry under the same ID.
+    // A partially provisioned resource or an attempted prompt needs reconciliation.
+    if (!unknown) record.inFlight = null;
+    await this.publish(identity, record, {
+      phase: "failed",
+      waitingForMemory: undefined,
+      error: error instanceof Error ? error.message : String(error),
+      errorCode: code,
+      failedStage: stage,
+      outcomeUnknown: unknown,
+    });
+  }
+
+  private async startAgent(
+    identity: string,
+    record: Record,
+    createAgent: NonNullable<CreationInput["createAgent"]>,
+    hasPrompt: boolean,
+  ): Promise<AgentSnapshotPayload> {
+    let waiting: Promise<void> | undefined;
+    try {
+      const agentId = record.snapshot.agentId!;
+      return await this.admitAgent(
+        agentId,
+        async () => {
+          await waiting;
+          record.inFlight = "agent";
+          if (record.snapshot.waitingForMemory)
+            await this.publish(identity, record, { waitingForMemory: undefined });
+          else await this.write(identity, record);
+          return createAgent(agentId, record.snapshot.workspace, async (readyAgent) => {
+            record.inFlight = hasPrompt ? "prompt" : null;
+            await this.publish(identity, record, {
+              phase: "agent_ready",
+              agent: readyAgent,
+              workspaceId: readyAgent.workspaceId ?? record.snapshot.workspaceId,
+            });
+          });
+        },
+        () => {
+          waiting = this.publish(identity, record, { waitingForMemory: true });
+          void waiting.catch((error) =>
+            this.logger.warn({ err: error }, "Could not record queued creation"),
+          );
+        },
+      );
+    } catch (error) {
+      await waiting?.catch(() => undefined);
+      if (error instanceof AgentLaunchStoppedError && !record.snapshot.waitingForMemory)
+        await this.publish(identity, record, { waitingForMemory: true });
+      throw error;
+    }
   }
 
   // COMPAT(agentRequestReceipts): added in v0.8.0, remove after 2027-03-11 once old creation receipts can expire.

@@ -446,19 +446,52 @@ required = true
           .join("");
         writeFileSync(path.join(home, "config.toml"), mcpConfig, { flag: "a" });
 
-        const { id } = await manager.createAgent(
-          { provider: "codex", cwd: home, modeId: "auto", model: "mock-model" },
-          undefined,
-          { workspaceId: undefined },
-        );
+        const config = {
+          provider: "codex",
+          cwd: home,
+          modeId: "auto",
+          model: "mock-model",
+        } as const;
+        const { id } = await manager.createAgent(config, undefined, {
+          workspaceId: undefined,
+        });
+        const checkTools = () => {
+          const tools = JSON.parse(mockServer.requestBodies.at(-1)!).tools;
+          const names: Array<string | undefined> = tools.map(
+            (tool: { name?: string }) => tool.name,
+          );
+          for (const name of ["chrome-devtools", "rea"]) {
+            expect(
+              names.some((tool) => tool?.startsWith(`mcp__${name.replaceAll("-", "_")}`)),
+              names.join(", "),
+            ).toBe(expected.includes(name));
+          }
+        };
         expect((await manager.runAgent(id, "verify startup")).finalText).toBe("done");
+        checkTools();
         const launched = () =>
           existsSync(launches) ? readFileSync(launches, "utf8").trim().split("\n") : [];
         expect(launched()).toEqual(expected);
 
         await manager.reloadAgentSession(id, undefined, { rehydrateFromDisk: true });
         expect((await manager.runAgent(id, "verify resume")).finalText).toBe("done");
+        checkTools();
         expect(launched()).toEqual([...expected, ...expected]);
+
+        // The workspace history reader resumes without browser ownership.
+        const persistence = manager.getAgent(id)?.persistence;
+        await manager.closeAgent(id);
+        const history = await client.resumeSession(persistence!, config, undefined, {
+          purpose: "history",
+        });
+        try {
+          for await (const _event of history.streamHistory()) {
+            // Drain the persisted history.
+          }
+          expect(launched()).toEqual([...expected, ...expected]);
+        } finally {
+          await history.close();
+        }
       } finally {
         for (const { id } of manager.listAgents()) await manager.closeAgent(id);
         await storage.flush();

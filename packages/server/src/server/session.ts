@@ -4337,6 +4337,10 @@ export class Session {
             requestId,
             agent: null,
             error: error instanceof Error ? error.message : String(error),
+            errorCode:
+              error instanceof Error && "code" in error && typeof error.code === "string"
+                ? error.code
+                : undefined,
           },
         },
         source,

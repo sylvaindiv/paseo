@@ -57,6 +57,7 @@ function fixture(modern: boolean) {
   const result = new Promise<CreationResult>((done) => {
     resolve = done;
   });
+  let notify!: (snapshot: CreationSnapshot | null, initial?: boolean) => void;
   const client = new CreationClient({
     supports: (feature) => (feature === "creationLifecycle" ? modern : true),
     requestId: () => "generated-key",
@@ -64,7 +65,10 @@ function fixture(modern: boolean) {
       requests.push({ kind, input });
       return result;
     },
-    observe: () => () => {},
+    observe: (_kind, _key, next) => {
+      notify = next;
+      return () => {};
+    },
     legacyWorkspace: async (input) => {
       legacy.push({ kind: "workspace", input });
       return { requestId: "legacy-workspace", workspace, error: null, setupTerminalId: null };
@@ -83,7 +87,14 @@ function fixture(modern: boolean) {
       clientMessageId: "message-one",
     },
   };
-  return { client, requests, legacy, resolve, input };
+  return {
+    client,
+    requests,
+    legacy,
+    resolve,
+    input,
+    notify: (...args: Parameters<typeof notify>) => notify(...args),
+  };
 }
 
 test("duplicate client submissions join one complete intent and cumulative updates never regress", async () => {
@@ -221,4 +232,27 @@ test.each([
     input: { workspaceId: workspace.id, config: { cwd: "/project/worktree/src" } },
   });
   f.client.close();
+});
+
+test("a reconnect replays a memory-blocked creation without resubmitting live updates", async () => {
+  const f = fixture(true);
+  const result = f.client.createWorkspace(f.input);
+  f.client.reconnect();
+  const queued: CreationSnapshot = {
+    kind: "workspace",
+    idempotencyKey: f.input.idempotencyKey,
+    revision: 2,
+    phase: "workspace_ready",
+    workspaceId: workspace.id,
+    agentId: agent.id,
+    workspace,
+    error: null,
+    waitingForMemory: true,
+  };
+  f.notify(queued, true);
+  f.notify({ ...queued, revision: 3 });
+  expect(f.requests).toHaveLength(2);
+  expect(f.requests[1]).toEqual(f.requests[0]);
+  f.resolve({ workspace, agent, error: null });
+  await expect(result).resolves.toMatchObject({ workspace, agent });
 });

@@ -2116,6 +2116,7 @@ export const ko: TranslationResources = {
     draft: {
       newAgent: "새 에이전트",
       creatingAgent: "에이전트 생성 중",
+      waitingForMemory: "메모리 대기 중",
     },
     file: {
       directoryMissing: "워크스페이스 디렉터리를 찾을 수 없습니다.",
@@ -2180,6 +2181,10 @@ export const ko: TranslationResources = {
     output: "출력",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "작업 {{count}}개",
+      other: "작업 {{count}}개",
+    },
     editedFiles: {
       one: "{{count}} 파일을 편집했습니다.",
       other: "{{count}} 파일을 편집했습니다.",

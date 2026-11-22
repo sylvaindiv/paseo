@@ -1,20 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRpc, type PluginProjectSummary } from "@getpaseo/plugin/client";
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import {
-  AccessibilityInfo,
-  Animated,
-  Easing,
-  Modal,
-  Platform,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
-} from "react-native";
+import { Modal, ScrollView } from "@getpaseo/plugin/client/react-native";
+import { useCallback, useEffect, useMemo, useRef, type KeyboardEvent } from "react";
+import { AccessibilityInfo, Platform, StyleSheet, Text, View } from "react-native";
 import {
   currentProjectPhase,
   readProjectsOverview,
@@ -40,18 +28,16 @@ export function ProjectsOverview({
   hostId,
   projects,
   loadingProjects,
+  compact,
   close,
 }: {
   hostId: string;
   projects: readonly PluginProjectSummary[];
   loadingProjects: boolean;
+  compact: boolean;
   close(): void;
 }) {
-  const { width } = useWindowDimensions();
-  const panelWidth = Math.min(560, width - 28);
-  const compact = panelWidth < 420;
   const closeButton = useRef<View>(null);
-  const progress = useRef(new Animated.Value(0)).current;
   const read = useRpc(readProjectsOverview);
   const projectKeys = projects.map((project) => project.viewKey);
   const overview = useQuery({
@@ -63,118 +49,91 @@ export function ProjectsOverview({
   });
   const { refetch } = overview;
   const retry = useCallback(() => void refetch(), [refetch]);
-  const focusClose = useCallback(() => {
-    requestAnimationFrame(() => focusOverviewControl(closeButton.current));
-  }, []);
   const phasesByProject = useMemo(
     () => new Map(overview.data?.map(({ projectKey, phases }) => [projectKey, phases])),
     [overview.data],
   );
 
   useEffect(() => {
-    let mounted = true;
-    const animation = Animated.timing(progress, {
-      toValue: 1,
-      duration: 200,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: Platform.OS !== "web",
-    });
-    async function enter() {
-      const reduced = await AccessibilityInfo.isReduceMotionEnabled().catch(() => false);
-      if (!mounted) return;
-      if (reduced) progress.setValue(1);
-      else animation.start();
-    }
-    void enter();
-    return () => {
-      mounted = false;
-      animation.stop();
-    };
-  }, [progress]);
-
-  const panelStyle = useMemo(() => {
-    const translateX = progress.interpolate({ inputRange: [0, 1], outputRange: [-panelWidth, 0] });
-    return [styles.panel, { width: panelWidth, transform: [{ translateX }] }];
-  }, [panelWidth, progress]);
+    if (compact) return;
+    const frame = requestAnimationFrame(() => focusOverviewControl(closeButton.current));
+    return () => cancelAnimationFrame(frame);
+  }, [compact]);
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      close();
+    },
+    [close],
+  );
+  const webProps = Platform.OS === "web" ? { onKeyDown: handleKeyDown } : undefined;
   const isLoading = loadingProjects || overview.isLoading;
+  const content = (
+    <View style={styles.body} testID="projets-overview">
+      {overview.isError ? (
+        <View style={styles.notice}>
+          <Text accessibilityRole="alert" style={styles.meta}>
+            Aperçu indisponible
+          </Text>
+          <ProjectButton onPress={retry}>Réessayer</ProjectButton>
+        </View>
+      ) : null}
+      {isLoading ? <Text style={styles.noticeText}>Chargement…</Text> : null}
+      {projects.length ? (
+        <ScrollView style={styles.body} contentContainerStyle={styles.list}>
+          {projects.map(({ viewKey, projectName }) => (
+            <OverviewRow key={viewKey} name={projectName} phases={phasesByProject.get(viewKey)} />
+          ))}
+        </ScrollView>
+      ) : null}
+      {!projects.length && !isLoading ? (
+        <Text style={styles.noticeText}>Aucun projet actif</Text>
+      ) : null}
+    </View>
+  );
+
+  if (compact) {
+    return (
+      <Modal title="Aperçu des projets" open onOpenChange={close}>
+        <Modal.Content
+          scrollable={false}
+          style={styles.sheet}
+          contentContainerStyle={styles.sheetContent}
+        >
+          {content}
+        </Modal.Content>
+      </Modal>
+    );
+  }
+
   return (
-    <Modal
-      visible
-      transparent
-      accessibilityLabel="Aperçu des projets"
-      onRequestClose={close}
-      onShow={focusClose}
-    >
-      <View style={styles.overlay}>
-        <Pressable
-          accessible={false}
-          focusable={false}
-          accessibilityElementsHidden
-          importantForAccessibility="no"
-          style={styles.backdrop}
-          onPress={close}
-          testID="projets-overview-backdrop"
-        />
-        <Animated.View style={panelStyle} accessibilityViewIsModal testID="projets-overview">
-          <SafeAreaView style={styles.body}>
-            <View style={styles.header}>
-              <Text accessibilityRole="header" style={styles.heading}>
-                Aperçu des projets
-              </Text>
-              <ProjectButton ref={closeButton} onPress={close}>
-                Fermer
-              </ProjectButton>
-            </View>
-            {overview.isError ? (
-              <View style={styles.notice}>
-                <Text accessibilityRole="alert" style={styles.meta}>
-                  Aperçu indisponible
-                </Text>
-                <ProjectButton onPress={retry}>Réessayer</ProjectButton>
-              </View>
-            ) : null}
-            {isLoading ? <Text style={styles.noticeText}>Chargement…</Text> : null}
-            {projects.length ? (
-              <ScrollView style={styles.body} contentContainerStyle={styles.list}>
-                {projects.map(({ viewKey, projectName }) => (
-                  <OverviewRow
-                    key={viewKey}
-                    name={projectName}
-                    phases={phasesByProject.get(viewKey)}
-                    compact={compact}
-                  />
-                ))}
-              </ScrollView>
-            ) : null}
-            {!projects.length && !isLoading ? (
-              <Text style={styles.noticeText}>Aucun projet actif</Text>
-            ) : null}
-          </SafeAreaView>
-        </Animated.View>
+    <View style={styles.panel} testID="projets-overview-dock" {...webProps}>
+      <View style={styles.header}>
+        <Text accessibilityRole="header" style={styles.heading}>
+          Aperçu des projets
+        </Text>
+        <View>
+          <ProjectButton ref={closeButton} onPress={close}>
+            Fermer
+          </ProjectButton>
+        </View>
       </View>
-    </Modal>
+      {content}
+    </View>
   );
 }
 
-function OverviewRow({
-  name,
-  phases,
-  compact,
-}: {
-  name: string;
-  phases?: readonly OverviewPhase[];
-  compact: boolean;
-}) {
+function OverviewRow({ name, phases }: { name: string; phases?: readonly OverviewPhase[] }) {
   const current = phases && currentProjectPhase(phases);
   const status = current?.status;
   const emptyLabel = phases?.every((phase) => phase.total === 0) ? "Sans tâche" : "—";
   const label = status ? phaseLabels[status] : emptyLabel;
-  const summaryStyle = StyleSheet.compose(styles.summary, compact && styles.summaryCompact);
   const badgeStyle = StyleSheet.compose(styles.badge, status && statusBackgrounds[status]);
   const badgeTextStyle = StyleSheet.compose(styles.badgeText, status && statusColors[status]);
   const summary =
     current && phases && phases.length > 1 ? (
-      <View style={summaryStyle}>
+      <View style={styles.summary}>
         <Text numberOfLines={1} style={styles.phaseName}>
           {current.name}
           {status === "EN COURS" && current.total > 0
@@ -214,12 +173,11 @@ function OverviewRow({
         <Text numberOfLines={1} style={styles.name}>
           {name}
         </Text>
-        {!compact ? summary : null}
         <View style={badgeStyle}>
           <Text style={badgeTextStyle}>{label}</Text>
         </View>
       </View>
-      {compact ? summary : null}
+      {summary}
     </View>
   );
 }
@@ -239,15 +197,23 @@ const statusBackgrounds = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  body: { flex: 1 },
-  overlay: { flex: 1, flexDirection: "row" },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(30, 25, 20, 0.34)" },
-  panel: { backgroundColor: colors.surface0, borderRightWidth: 1, borderColor: colors.border },
+  body: { flex: 1, minHeight: 0 },
+  sheet: { backgroundColor: colors.surface1 },
+  sheetContent: { padding: 0, gap: 0 },
+  panel: {
+    width: 388,
+    maxWidth: "45%",
+    minHeight: 0,
+    backgroundColor: colors.surface1,
+    borderRightWidth: 1,
+    borderColor: colors.border,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: 14,
+    minHeight: 42,
+    paddingHorizontal: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
@@ -268,14 +234,12 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 11, fontWeight: "600", color: colors.foregroundMuted },
   summary: {
-    width: "48%",
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
     gap: 6,
-    paddingVertical: 4,
+    paddingBottom: 7,
   },
-  summaryCompact: { width: "100%", paddingTop: 0, paddingBottom: 7 },
   phaseName: { maxWidth: "100%", color: colors.foregroundMuted, fontSize: 12 },
   track: { maxWidth: "100%", flexDirection: "row", flexWrap: "wrap", gap: 3 },
   segment: {

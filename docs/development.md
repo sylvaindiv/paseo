@@ -7,13 +7,12 @@
 
 ## Running the dev server
 
-```bash
-npm run dev:server
-npm run dev:app
-npm run dev:desktop
-```
+For everyday Paseo Dev validation, reuse the checkout's `daemon` and `app` services
+from `paseo.json` and keep one browser tab on the app URL. Check the branch label
+in the expanded sidebar and the connected Dev host before testing. Use the
+`desktop` service for features that require Electron.
 
-Root checkout dev is intentionally split across terminals:
+For standalone development from the root checkout:
 
 - `npm run dev:server` runs the daemon on `127.0.0.1:6768`.
 - `npm run dev:app` runs Expo on `http://localhost:8081` and connects to the dev daemon.

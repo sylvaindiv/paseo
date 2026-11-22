@@ -2105,6 +2105,7 @@ export const ar: TranslationResources = {
     draft: {
       newAgent: "وكيل جديد",
       creatingAgent: "وكيل الخلق",
+      waitingForMemory: "في انتظار الذاكرة",
     },
     file: {
       directoryMissing: "لم يتم العثور على دليل Workspace.",
@@ -2169,6 +2170,10 @@ export const ar: TranslationResources = {
     output: "الإخراج",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "إجراء واحد ({{count}})",
+      other: "{{count}} إجراءات",
+    },
     editedFiles: {
       one: "حرّر {{count}} ملفًا",
       other: "حرّر {{count}} ملفات",

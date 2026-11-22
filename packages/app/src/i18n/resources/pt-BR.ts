@@ -2140,6 +2140,7 @@ export const ptBR: TranslationResources = {
     draft: {
       newAgent: "Novo Agente",
       creatingAgent: "Criando agente",
+      waitingForMemory: "Aguardando memória",
     },
     file: {
       directoryMissing: "Diretório do workspace não encontrado.",
@@ -2204,6 +2205,10 @@ export const ptBR: TranslationResources = {
     output: "Saída",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "{{count}} ação",
+      other: "{{count}} ações",
+    },
     editedFiles: {
       one: "editou {{count}} arquivo",
       other: "editou {{count}} arquivos",

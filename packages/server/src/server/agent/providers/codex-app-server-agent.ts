@@ -153,6 +153,17 @@ function disabledCodexMcpServer(value: unknown): {
   };
 }
 
+const OPTIONAL_CODEX_MCPS = {
+  "chrome-devtools": "PASEO_CODEX_CHROME_DEVTOOLS",
+  rea: "PASEO_CODEX_REA_MCP",
+} as const;
+
+function disabledOptionalCodexMcps(environment: Record<string, string>): string[] {
+  return Object.entries(OPTIONAL_CODEX_MCPS)
+    .filter(([, optIn]) => environment[optIn] !== "1")
+    .map(([name]) => name);
+}
+
 function isArchivedCodexThreadResumeError(error: unknown, threadId: string): boolean {
   if (!(error instanceof Error)) return false;
   const expectedMessage =
@@ -5636,6 +5647,14 @@ export class CodexAppServerAgentSession implements AgentSession {
       };
     }
     const configured = applyCodexToolPolicy(innerConfig, this.config.toolPolicy);
+    const disabled = this.deps.environment
+      ? disabledOptionalCodexMcps(this.harnessEnvironment)
+      : [];
+    if (disabled.length > 0) {
+      const servers = { ...toObjectRecord(configured.mcp_servers) };
+      for (const name of disabled) servers[name] = { command: "false", enabled: false };
+      configured.mcp_servers = servers;
+    }
     return Object.keys(configured).length > 0 ? configured : null;
   }
 
@@ -7545,18 +7564,15 @@ export class CodexAppServerAgentClient implements AgentClient {
     },
   ): Promise<ChildProcessWithoutNullStreams> {
     const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
-    const defaults: string[] = [];
-    if (options && launchEnv?.PASEO_BROWSER_OWNER && options.readOnlyCwd === undefined) {
-      const environment =
-        options.environment ?? buildCodexAppServerEnv(this.runtimeSettings, launchEnv);
-      if (environment.PASEO_CODEX_CHROME_DEVTOOLS !== "1") {
-        defaults.push("-c", 'mcp_servers.chrome-devtools={command="false",enabled=false}');
-      }
-      if (environment.PASEO_CODEX_REA_MCP !== "1") {
-        defaults.push("-c", 'mcp_servers.rea={command="false",enabled=false}');
+    const environment =
+      options?.environment ?? buildCodexAppServerEnv(this.runtimeSettings, launchEnv);
+    const args = [...launchPrefix.args];
+    if (options?.readOnlyCwd === undefined) {
+      for (const name of disabledOptionalCodexMcps(environment)) {
+        args.push("-c", `mcp_servers.${name}={command="false",enabled=false}`);
       }
     }
-    const args = [...defaults, ...launchPrefix.args, "app-server"];
+    args.push("app-server");
     if (options?.goalsEnabled) {
       args.push("--enable", "goals");
     }
@@ -7601,7 +7617,7 @@ export class CodexAppServerAgentClient implements AgentClient {
     const child = spawnProcess(launchPrefix.command, args, {
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
-      baseEnv: options?.environment ?? buildCodexAppServerEnv(this.runtimeSettings, launchEnv),
+      baseEnv: environment,
     });
     assertChildWithPipes(child);
     return child;

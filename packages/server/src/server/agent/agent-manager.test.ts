@@ -1,3 +1,4 @@
+import { createTerminalManager } from "../../terminal/terminal-manager.js";
 import { agentBrowserEnv } from "../agent-browser-env.js";
 import { expect, test, vi } from "vitest";
 import { spawn } from "node:child_process";
@@ -12477,6 +12478,8 @@ test("twenty verified runtime sleep and resume cycles retain the same complete h
 test("failed persistence or provider background work prevents inactivity closure", async () => {
   const home = mkdtempSync(join(tmpdir(), "agent-retention-persist-"));
   let failSave = false;
+  const terminalManager = createTerminalManager();
+  const activeTerminal = vi.spyOn(terminalManager, "hasActiveTerminal").mockReturnValue(false);
   class RetentionStorage extends AgentStorage {
     override async applySnapshot(
       ...args: Parameters<AgentStorage["applySnapshot"]>
@@ -12489,6 +12492,7 @@ test("failed persistence or provider background work prevents inactivity closure
   const manager = new AgentManager({
     paseoHome: home,
     registry: storage,
+    terminalManager,
     clients: { codex: new TestAgentClient() },
     logger,
   });
@@ -12505,9 +12509,14 @@ test("failed persistence or provider background work prevents inactivity closure
       resident: 1,
     });
     live.session.canCloseForInactivity = async () => true;
-    await manager.hibernateInactiveAgents(16 * 60_000);
+    activeTerminal.mockReturnValue(true);
+    expect(await manager.hibernateInactiveAgents(16 * 60_000, true)).toMatchObject({
+      terminal: 1,
+      resident: 1,
+    });
+    activeTerminal.mockReturnValue(false);
     failSave = true;
-    expect(await manager.hibernateInactiveAgents(31 * 60_000)).toMatchObject({
+    expect(await manager.hibernateInactiveAgents(31 * 60_000, true)).toMatchObject({
       failure: 1,
       resident: 1,
     });

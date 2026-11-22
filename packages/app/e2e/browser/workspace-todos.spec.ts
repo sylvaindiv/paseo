@@ -141,30 +141,41 @@ test("Projets keeps project lists separate from workspace To-do", async ({ page 
 
     const queue = list.getByTestId("projets-queue");
     await expect(queue).toContainText("À envoyer");
-    await dragOnBoard(page, title, queue, "y");
-    await expect(queue.getByText("Project-only task", { exact: true })).toBeVisible();
-    await expect(target.getByText("Project-only task", { exact: true })).toBeVisible();
-    await page.reload();
-    await expect(queue.getByText("Project-only task", { exact: true })).toBeVisible();
-    await queue.getByRole("button", { name: "Retirer Project-only task de l’envoi" }).click();
-    await expect(queue.getByText("Project-only task", { exact: true })).toBeHidden();
-    await review.click();
-
     const begin = target.getByRole("checkbox", {
-      name: "Commencer Project-only task",
+      name: "Ajouter Project-only task à l’envoi",
       exact: true,
     });
-    await begin.click();
     const finish = target.getByRole("checkbox", {
       name: "Terminer Project-only task",
       exact: true,
     });
+    const queuedTask = queue.getByText("Project-only task", { exact: true });
+    await expect(begin).not.toBeChecked();
+    await begin.click();
+    await expect(queuedTask).toBeVisible();
+    await expect(finish).toHaveAttribute("aria-checked", "mixed");
+    await dragOnBoard(page, title, queue, "y");
+    await expect(queuedTask).toHaveCount(1);
+
+    await page.reload();
+    await expect(queuedTask).toBeVisible();
+    await review.click();
+    await expect(finish).toHaveAttribute("aria-checked", "mixed");
+    await queue.getByRole("button", { name: "Retirer Project-only task de l’envoi" }).click();
+    await expect(queuedTask).toBeHidden();
+    await expect(begin).not.toBeChecked();
+
+    await dragOnBoard(page, title, queue, "y");
+    await expect(queuedTask).toBeVisible();
     await expect(finish).toHaveAttribute("aria-checked", "mixed");
     await finish.click();
+    await expect(queuedTask).toBeHidden();
     await target.getByRole("button", { name: "Terminées · 1", exact: true }).click();
-    await expect(
-      target.getByRole("checkbox", { name: "Rouvrir Project-only task", exact: true }),
-    ).toBeChecked();
+    const reopen = target.getByRole("checkbox", { name: "Rouvrir Project-only task", exact: true });
+    await expect(reopen).toBeChecked();
+    await reopen.click();
+    await expect(begin).not.toBeChecked();
+    await expect(queuedTask).toBeHidden();
 
     const reviewHeader = list.getByRole("group", { name: "Déplacer la phase Review", exact: true });
     const firstPhaseHeader = list.getByRole("group", {
@@ -391,16 +402,25 @@ test("Projets opens a read-only overview on demand", async ({ page }) => {
     await page.getByRole("button", { name: "Projets", exact: true }).click();
 
     const board = page.getByTestId("projets-page");
+    const boardBody = board.getByTestId("projets-board");
     const open = board.getByRole("button", { name: "Aperçu", exact: true });
     const card = board.getByRole("button", { name: active.projectDisplayName, exact: true });
     const panel = page.getByTestId("projets-overview");
+    const dock = board.getByTestId("projets-overview-dock");
     const rows = panel.getByTestId("projets-overview-row");
-    const close = panel.getByRole("button", { name: "Fermer", exact: true });
+    const close = dock.getByRole("button", { name: "Fermer", exact: true });
     await expect(panel).toHaveCount(0);
     await card.click();
     await expect(card).toHaveAttribute("aria-expanded", "false");
+    const originalBoard = (await boardBody.boundingBox())!;
     await open.click();
     await expect(close).toBeFocused();
+    await expect(open).toHaveAttribute("aria-expanded", "true");
+    const dockBox = (await dock.boundingBox())!;
+    const dockedBoard = (await boardBody.boundingBox())!;
+    expect(dockBox.x).toBe(originalBoard.x);
+    expect(dockedBoard.x).toBeCloseTo(dockBox.x + dockBox.width);
+    expect(dockedBoard.width + dockBox.width).toBeCloseTo(originalBoard.width);
     await expect(rows).toHaveCount(2);
     await expect(rows.first()).toContainText(active.projectDisplayName);
     await expect(rows.last()).toContainText(empty.projectDisplayName);
@@ -409,6 +429,7 @@ test("Projets opens a read-only overview on demand", async ({ page }) => {
     await expect(rows.first()).toContainText("En attente");
     await expect(rows.last()).toContainText("Sans tâche");
     await expect(panel.getByTestId("projets-overview-phases")).toHaveCount(0);
+    await close.focus();
     await page.keyboard.press("Escape");
     await expect(panel).toHaveCount(0);
     await expect(open).toBeFocused();
@@ -419,6 +440,7 @@ test("Projets opens a read-only overview on demand", async ({ page }) => {
     await write({ operation: "add", phaseId: "sprint", taskId: "t1", title: "Première tâche" });
     await write({ operation: "add", phaseId: "sprint", taskId: "t2", title: "Deuxième tâche" });
     await write({ operation: "update", taskId: "t1", completed: true });
+    await write({ operation: "update", taskId: "t2", status: "doing" });
     await open.click();
     const track = rows.first().getByTestId("projets-overview-phases");
     await expect(rows.first()).toContainText("Sprint · 1/2");
@@ -427,8 +449,23 @@ test("Projets opens a read-only overview on demand", async ({ page }) => {
     await track.click();
     await expect(rows).toHaveCount(2);
     await expect(panel.getByText("Première tâche")).toHaveCount(0);
-    await expect.poll(async () => (await panel.boundingBox())?.x).toBe(0);
-    await page.getByTestId("projets-overview-backdrop").click({ position: { x: 1300, y: 48 } });
+    await card.click();
+    await expect(panel).toBeVisible();
+    const sprint = board.getByRole("button", { name: "Phase Sprint", exact: true });
+    await expect(sprint).toBeVisible();
+    if ((await sprint.getAttribute("aria-expanded")) === "false") await sprint.click();
+    const select = board.getByRole("checkbox", {
+      name: "Ajouter Deuxième tâche à l’envoi",
+      exact: true,
+    });
+    await expect(select).not.toBeChecked();
+    await expect(board.getByTestId("projets-queue").getByText("Deuxième tâche")).toHaveCount(0);
+    await select.click();
+    await board.getByRole("checkbox", { name: "Terminer Deuxième tâche", exact: true }).click();
+    await expect(rows.first()).toContainText("Sprint · 2/2");
+    await open.click();
+    await expect(dock).toHaveCount(0);
+    await expect(open).toHaveAttribute("aria-expanded", "false");
     await expect(open).toBeFocused();
 
     await page.setViewportSize({ width: 390, height: 780 });
@@ -439,12 +476,13 @@ test("Projets opens a read-only overview on demand", async ({ page }) => {
       await page.getByRole("button", { name: "Projets", exact: true }).click();
     }
     await open.click();
+    await expect(dock).toHaveCount(0);
     const name = rows.first().getByText(active.projectDisplayName, { exact: true });
     await expect(track).toBeVisible();
     await expect
       .poll(async () => (await track.boundingBox())!.y - (await name.boundingBox())!.y)
       .toBeGreaterThan(15);
-    await close.click();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
     await expect(panel).toHaveCount(0);
     await expect(open).toBeFocused();
   } finally {
@@ -502,6 +540,10 @@ test("Projets sends distinct lots and restores review after reconnecting", async
       await list.getByRole("button", { name: "Actions de " + name }).click();
       await page.getByRole("menuitem", { name: "Ajouter à « À envoyer »" }).click();
       await expect(queue.getByText(name, { exact: true })).toBeVisible();
+      await expect(list.getByRole("checkbox", { name: "Terminer " + name })).toHaveAttribute(
+        "aria-checked",
+        "mixed",
+      );
       if (name === names[0]) {
         await list.screenshot({ path: testInfo.outputPath("projets-a-envoyer.png") });
       }

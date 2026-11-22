@@ -7,6 +7,7 @@ export function ProjectButton({
   children,
   onPress,
   disabled,
+  expanded,
   primary,
   testID,
   ref,
@@ -14,6 +15,7 @@ export function ProjectButton({
   children: ReactNode;
   onPress(): void;
   disabled?: boolean;
+  expanded?: boolean;
   primary?: boolean;
   testID?: string;
   ref?: Ref<View>;
@@ -32,6 +34,7 @@ export function ProjectButton({
     <Pressable
       ref={ref}
       accessibilityRole="button"
+      aria-expanded={expanded}
       disabled={disabled}
       onPress={onPress}
       style={style}

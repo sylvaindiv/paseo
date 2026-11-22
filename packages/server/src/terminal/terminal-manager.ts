@@ -68,6 +68,7 @@ export interface TerminalManager {
   }): Promise<TerminalSession>;
   registerCwdEnv(options: { cwd: string; env: Record<string, string> }): void;
   validateTerminalActivityToken(terminalId: string, token: string): "valid" | "unknown" | "invalid";
+  hasActiveTerminal?(cwd: string, workspaceId?: string): boolean;
   getTerminal(id: string): TerminalSession | undefined;
   getTerminalState(
     id: string,
@@ -284,6 +285,20 @@ export function createTerminalManager(
   }
 
   return {
+    hasActiveTerminal(cwd, workspaceId) {
+      for (const [bucketCwd, sessions] of terminalsByCwd) {
+        if (workspaceId === undefined && !isSameOrDescendantPath(cwd, bucketCwd)) continue;
+        if (
+          sessions.some(
+            (session) =>
+              (workspaceId === undefined || session.workspaceId === workspaceId) &&
+              session.getActivity()?.state !== "idle",
+          )
+        )
+          return true;
+      }
+      return false;
+    },
     async getTerminals(
       cwd: string,
       options?: { workspaceId?: string },

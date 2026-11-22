@@ -2174,6 +2174,7 @@ export const fr: TranslationResources = {
     draft: {
       newAgent: "Nouvel agent",
       creatingAgent: "Création de l’agent",
+      waitingForMemory: "En attente de mémoire",
     },
     file: {
       directoryMissing: "Répertoire du workspace introuvable.",
@@ -2238,6 +2239,10 @@ export const fr: TranslationResources = {
     output: "Sortie",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "{{count}} action",
+      other: "{{count}} actions",
+    },
     editedFiles: {
       one: "{{count}} fichier modifié",
       other: "{{count}} fichiers modifiés",

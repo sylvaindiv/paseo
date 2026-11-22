@@ -1,3 +1,4 @@
+import { readMacMemoryPressure } from "./agent/agent-launch-pressure.js";
 import { startResourceRetention } from "./resource-retention.js";
 import { startBrowserResourceService } from "./browser-resource-service.js";
 import { DesktopToolsBroker } from "./desktop-tools/broker.js";
@@ -970,6 +971,8 @@ export async function createPaseoDaemon(
   });
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
   const agentManager = new AgentManager({
+    terminalManager,
+    readMemoryPressure: process.platform === "darwin" ? readMacMemoryPressure : undefined,
     paseoHome: config.paseoHome,
     resolveLaunchProfile: (id) =>
       daemonConfigStore.get().agentProfiles?.find((profile) => profile.id === id),
@@ -1166,11 +1169,9 @@ export async function createPaseoDaemon(
       const client =
         providerSnapshotManager.getAgentManagerProviderState().clients[record.provider];
       if (!client) throw new Error(`Naming history provider unavailable: ${record.provider}`);
-      const session = await client.resumeSession(
-        record.persistence,
-        { cwd: record.cwd },
-        undefined,
-        { purpose: "history" },
+      const handle = record.persistence;
+      const session = await agentManager.launchProviderSession(record.id, () =>
+        client.resumeSession(handle, { cwd: record.cwd }, undefined, { purpose: "history" }),
       );
       try {
         for await (const event of session.streamHistory()) {
@@ -1873,7 +1874,7 @@ export async function createPaseoDaemon(
       stopResourceRetention = startResourceRetention({
         file: path.join(config.paseoHome, "logs", "resource-retention.ndjson"),
         paseoHome: config.paseoHome,
-        sweep: () => agentManager.hibernateInactiveAgents(),
+        sweep: () => agentManager.sweepInactiveAgents(),
         owners: () => agentManager.getMemoryOwners(),
         publish: (current, peak) => {
           agentManager.resourceMemory = { current, peak };

@@ -5,6 +5,8 @@ import {
   type PluginScreenProps,
 } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
+import { ProjectsWindow, ProjectsWindowButton } from "./projects-window.js";
+import { useBoardPan } from "./board-pan.js";
 import { ProjectButton } from "./project-button.js";
 import { ProjectMenu } from "./project-menu.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -50,15 +52,21 @@ export function createProjectsScreen(
   const preferences = createProjectPreferences(storage);
 
   return function ProjectsScreen(props: PluginScreenProps) {
-    return props.isFocused ? (
-      <ProjectsContent {...props} preferences={preferences} tracking={tracking} />
-    ) : null;
+    if (!props.isFocused) return null;
+    const board = <ProjectsContent {...props} preferences={preferences} tracking={tracking} />;
+    return props.layout.platform === "web" && props.params.fenetre === "projets" ? (
+      <ProjectsWindow>{board}</ProjectsWindow>
+    ) : (
+      board
+    );
   };
 }
 
 function ProjectsContent({
   theme,
   host,
+  layout,
+  params,
   navigation,
   preferences,
   tracking,
@@ -85,19 +93,20 @@ function ProjectsContent({
   const [saving, setSaving] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
   const overviewButton = useRef<View>(null);
-  const openOverview = useCallback(() => {
-    if (Platform.OS === "web") focusOverviewControl(overviewButton.current);
-    setOverviewOpen(true);
-  }, []);
   const closeOverview = useCallback(() => {
     setOverviewOpen(false);
     requestAnimationFrame(() => focusOverviewControl(overviewButton.current));
   }, []);
+  const toggleOverview = useCallback(() => {
+    if (overviewOpen) closeOverview();
+    else setOverviewOpen(true);
+  }, [closeOverview, overviewOpen]);
   const [showFinished, setShowFinished] = useState(false);
   const toggleFinished = useCallback(() => setShowFinished((open) => !open), []);
   const [retrySave, setRetrySave] = useState<(() => void) | null>(null);
   const inFlight = useRef(false);
   const activeRow = useRef<ScrollView>(null);
+  const boardPan = useBoardPan();
 
   useEffect(() => {
     let mounted = true;
@@ -223,98 +232,119 @@ function ProjectsContent({
   };
 
   return (
-    <View style={styles.page} testID="projets-page">
-      <SortableTitleStyles />
-      {loadFailed || retrySave || hostErrors.length > 0 ? (
-        <View style={styles.notice}>
-          {loadFailed ? (
-            <>
-              <Text style={styles.message} accessibilityRole="alert">
-                Préférences indisponibles
-              </Text>
-              <ProjectButton onPress={retryLoad}>Réessayer</ProjectButton>
-            </>
-          ) : null}
-          {retrySave ? (
-            <>
-              <Text style={styles.message} accessibilityRole="alert">
-                Préférences non enregistrées
-              </Text>
-              <ProjectButton onPress={retrySave}>Réessayer</ProjectButton>
-            </>
-          ) : null}
-          {hostErrors.length > 0 ? (
-            <Text style={styles.message} accessibilityRole="alert">
-              Certains projets sont indisponibles
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-      <ScrollView style={styles.page} keyboardShouldPersistTaps="handled">
-        <View style={styles.boardHeading} onLayout={measure}>
-          <View style={styles.boardHeadingGroup}>
-            <Text style={styles.heading}>À avancer</Text>
-            <ProjectButton ref={overviewButton} disabled={controlsDisabled} onPress={openOverview}>
-              Aperçu
-            </ProjectButton>
-          </View>
-          {finishedKeys.length > 0 ? (
-            <Pressable
-              accessibilityRole="button"
-              aria-expanded={showFinished}
-              onPress={toggleFinished}
-              style={styles.finishedToggle}
-            >
-              <Icon
-                name={showFinished ? "ChevronDown" : "ChevronRight"}
-                size={14}
-                color={projectColors.foregroundMuted}
-              />
-              <Text style={styles.message}>Terminés · {finishedKeys.length}</Text>
-            </Pressable>
-          ) : null}
-        </View>
-        {activeKeys.length === 0 ? (
-          <View style={styles.notice}>
-            {isLoading || hostErrors.length === 0 ? (
-              <Text style={styles.message}>{isLoading ? "Chargement…" : "Aucun projet actif"}</Text>
-            ) : null}
-          </View>
-        ) : (
-          <ProjectDragRow keys={activeKeys} move={reorder}>
-            <ScrollView
-              ref={activeRow}
-              horizontal
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.columns}
-              testID="projets-cards"
-            >
-              {activeKeys.map((key, index) => (
-                <SortableProject
-                  key={key}
-                  id={key}
-                  disabled={controlsDisabled || activeKeys.length < 2}
-                >
-                  {renderCard(key, index)}
-                </SortableProject>
-              ))}
-            </ScrollView>
-          </ProjectDragRow>
-        )}
-        {showFinished && finishedKeys.length > 0 ? (
-          <ScrollView horizontal contentContainerStyle={styles.columns} testID="projets-finished">
-            {finishedKeys.map((key) => renderCard(key))}
-          </ScrollView>
-        ) : null}
-      </ScrollView>
+    <View style={styles.boardLayout} testID="projets-page">
       {overviewOpen ? (
         <ProjectsOverview
           hostId={host.id}
           projects={activeProjects}
           loadingProjects={isLoading}
+          compact={layout.compact}
           close={closeOverview}
         />
       ) : null}
+      <View ref={boardPan} style={styles.page} testID="projets-board">
+        <SortableTitleStyles />
+        {loadFailed || retrySave || hostErrors.length > 0 ? (
+          <View style={styles.notice}>
+            {loadFailed ? (
+              <>
+                <Text style={styles.message} accessibilityRole="alert">
+                  Préférences indisponibles
+                </Text>
+                <ProjectButton onPress={retryLoad}>Réessayer</ProjectButton>
+              </>
+            ) : null}
+            {retrySave ? (
+              <>
+                <Text style={styles.message} accessibilityRole="alert">
+                  Préférences non enregistrées
+                </Text>
+                <ProjectButton onPress={retrySave}>Réessayer</ProjectButton>
+              </>
+            ) : null}
+            {hostErrors.length > 0 ? (
+              <Text style={styles.message} accessibilityRole="alert">
+                Certains projets sont indisponibles
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+        <ScrollView
+          style={styles.page}
+          contentContainerStyle={styles.boardContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.boardHeading} onLayout={measure}>
+            <View style={styles.boardHeadingGroup}>
+              <Text style={styles.heading}>À avancer</Text>
+              <ProjectButton
+                ref={overviewButton}
+                disabled={controlsDisabled}
+                expanded={overviewOpen}
+                onPress={toggleOverview}
+              >
+                Aperçu
+              </ProjectButton>
+              <ProjectsWindowButton hostId={host.id} detached={params.fenetre === "projets"} />
+            </View>
+            {finishedKeys.length > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                aria-expanded={showFinished}
+                onPress={toggleFinished}
+                style={styles.finishedToggle}
+              >
+                <Icon
+                  name={showFinished ? "ChevronDown" : "ChevronRight"}
+                  size={14}
+                  color={projectColors.foregroundMuted}
+                />
+                <Text style={styles.message}>Terminés · {finishedKeys.length}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {activeKeys.length === 0 ? (
+            <View style={styles.notice}>
+              {isLoading || hostErrors.length === 0 ? (
+                <Text style={styles.message}>
+                  {isLoading ? "Chargement…" : "Aucun projet actif"}
+                </Text>
+              ) : null}
+            </View>
+          ) : (
+            <ProjectDragRow keys={activeKeys} move={reorder}>
+              <ScrollView
+                ref={activeRow}
+                style={styles.scrollRow}
+                horizontal
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={styles.columns}
+                testID="projets-cards"
+              >
+                {activeKeys.map((key, index) => (
+                  <SortableProject
+                    key={key}
+                    id={key}
+                    disabled={controlsDisabled || activeKeys.length < 2}
+                  >
+                    {renderCard(key, index)}
+                  </SortableProject>
+                ))}
+              </ScrollView>
+            </ProjectDragRow>
+          )}
+          {showFinished && finishedKeys.length > 0 ? (
+            <ScrollView
+              horizontal
+              style={styles.scrollRow}
+              contentContainerStyle={styles.columns}
+              testID="projets-finished"
+            >
+              {finishedKeys.map((key) => renderCard(key))}
+            </ScrollView>
+          ) : null}
+        </ScrollView>
+      </View>
     </View>
   );
 }

@@ -1,3 +1,4 @@
+import { AgentLaunchPressure } from "../agent/agent-launch-pressure.js";
 import pino from "pino";
 import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -325,4 +326,40 @@ test("observer failures are logged without failing creation", async () => {
       err: expect.objectContaining({ message: "delivery failed" }),
     }),
   );
+});
+
+test("replays a memory-blocked creation after restart using the same receipt", async () => {
+  const f = await fixture();
+  const gate = new AgentLaunchPressure(
+    async () => true,
+    () => {},
+  );
+  const service = new CreationService(
+    f.directory,
+    silentLogger,
+    undefined,
+    undefined,
+    (id, launch, wait) => gate.launch(id, launch, wait),
+  );
+  const queued = deferred();
+  const interrupted = expect(
+    service.create(f.input, (snapshot) => {
+      if (snapshot.waitingForMemory) queued.resolve();
+    }),
+  ).rejects.toMatchObject({ code: "agent_launch_stopped" });
+  await queued.promise;
+  expect(f.calls).toEqual(["workspace"]);
+  gate.stop();
+  await interrupted;
+
+  const restarted = new CreationService(f.directory, silentLogger);
+  const { snapshot, unsubscribe } = await restarted.subscribe("workspace", f.input.key, () => {});
+  expect(snapshot).toMatchObject({ waitingForMemory: true, agentId: agent.id });
+  unsubscribe();
+  const first = restarted.create(f.input);
+  const retry = restarted.create(f.input);
+  f.provider.resolve();
+  await expect(first).resolves.toMatchObject({ phase: "completed", agent });
+  await expect(retry).resolves.toMatchObject({ phase: "completed", agent });
+  expect(f.calls).toEqual(["workspace", "agent", "prompt"]);
 });

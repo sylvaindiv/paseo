@@ -4,6 +4,7 @@ import type { PanelDescriptor, PanelIconProps } from "@/panels/panel-registry";
 
 export function buildDraftPanelDescriptor(input: {
   isCreating: boolean;
+  waitingForMemory?: boolean;
   profileName?: string;
   pendingPrompt?: string | null;
   icon: ComponentType<PanelIconProps>;
@@ -14,7 +15,9 @@ export function buildDraftPanelDescriptor(input: {
   if (isCreating) {
     return {
       label: creatingLabel,
-      subtitle: i18n.t("panels.draft.creatingAgent"),
+      subtitle: i18n.t(
+        input.waitingForMemory ? "panels.draft.waitingForMemory" : "panels.draft.creatingAgent",
+      ),
       tooltip: creatingLabel,
       titleState: "ready",
       icon,

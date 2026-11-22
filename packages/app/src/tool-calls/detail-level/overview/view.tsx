@@ -4,9 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { ExpandableBadge } from "@/components/message";
-import { useIsCompactFormFactor } from "@/constants/layout";
-import { type OverviewSummary, type OverviewToolCallGroup } from "./model";
-import { OverviewToolCallGroupSheet } from "./sheet";
+import { type OverviewToolCallGroup } from "./model";
 
 interface OverviewGroupProps {
   group: OverviewToolCallGroup;
@@ -18,39 +16,12 @@ interface OverviewGroupProps {
 
 const TOOL_CALL_GROUP_MAX_HEIGHT = 400;
 
-function joinSummaryParts(parts: string[], conjunction: string): string {
-  if (parts.length === 0) {
-    return "";
-  }
-  let joined = parts[0] ?? "";
-  if (parts.length === 2) {
-    joined = `${parts[0]} ${conjunction} ${parts[1]}`;
-  } else if (parts.length > 2) {
-    joined = `${parts.slice(0, -1).join(", ")}, ${conjunction} ${parts.at(-1)}`;
-  }
-  const firstCharacter = joined[0];
-  return firstCharacter ? `${firstCharacter.toLocaleUpperCase()}${joined.slice(1)}` : joined;
-}
-
-function useOverviewSummary(summary: OverviewSummary): string {
+function useActionCount(count: number): string {
   const { t } = useTranslation();
-  return useMemo(() => {
-    const parts: string[] = [];
-    const entries = [
-      [summary.editedFileCount, "toolCallGroup.editedFiles"],
-      [summary.commandCount, "toolCallGroup.commands"],
-      [summary.readFileCount, "toolCallGroup.readFiles"],
-      [summary.searchCount, "toolCallGroup.searches"],
-      [summary.otherToolCount, "toolCallGroup.otherTools"],
-      [summary.paseoCallCount, "toolCallGroup.paseoCalls"],
-    ] as const;
-    for (const [count, key] of entries) {
-      if (count > 0) {
-        parts.push(t(`${key}.${count === 1 ? "one" : "other"}`, { count }));
-      }
-    }
-    return joinSummaryParts(parts, t("toolCallGroup.and"));
-  }, [summary, t]);
+  return useMemo(
+    () => t(`toolCallGroup.actionCount.${count === 1 ? "one" : "other"}`, { count }),
+    [count, t],
+  );
 }
 
 export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView({
@@ -61,17 +32,13 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
   children,
 }: OverviewGroupProps) {
   const scrollRef = useRef<ScrollView>(null);
-  const isCompact = useIsCompactFormFactor();
-  const aggregateSummary = useOverviewSummary(group.summary);
+  const label = useActionCount(group.run.calls.length);
   const scrollToLatest = useCallback(() => {
     scrollRef.current?.scrollToEnd({ animated: false });
   }, []);
   const toggle = useCallback(() => {
     onExpandedChange(group.run.id, !expanded);
   }, [expanded, group.run.id, onExpandedChange]);
-  const close = useCallback(() => {
-    onExpandedChange(group.run.id, false);
-  }, [group.run.id, onExpandedChange]);
   const renderDetails = useCallback(
     () => (
       <ScrollView
@@ -88,29 +55,10 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
     [children, scrollToLatest],
   );
 
-  if (isCompact) {
-    return (
-      <>
-        <ExpandableBadge
-          testID="tool-call-group"
-          label={aggregateSummary}
-          icon={Wrench}
-          isLoading={group.isLoading}
-          isExpanded={false}
-          isLastInSequence={isLastInSequence}
-          onToggle={toggle}
-        />
-        <OverviewToolCallGroupSheet visible={expanded} summary={aggregateSummary} onClose={close}>
-          {children}
-        </OverviewToolCallGroupSheet>
-      </>
-    );
-  }
-
   return (
     <ExpandableBadge
       testID="tool-call-group"
-      label={aggregateSummary}
+      label={label}
       icon={Wrench}
       isLoading={group.isLoading}
       isExpanded={expanded}

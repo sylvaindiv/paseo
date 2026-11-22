@@ -14,6 +14,7 @@ export interface PendingCreateAttempt {
   timestamp: number;
   lifecycle: CreateFlowLifecycleState;
   errorMessage?: string;
+  waitingForMemory?: boolean;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
 }
@@ -36,6 +37,7 @@ interface CreateFlowState {
   pendingByDraftId: Record<string, PendingCreateAttempt>;
   setPending: (pending: Omit<PendingCreateAttempt, "lifecycle">) => void;
   trySetPending: (pending: Omit<PendingCreateAttempt, "lifecycle">) => boolean;
+  setMemoryWait: (draftId: string, waitingForMemory: boolean) => void;
   updateAgentId: (input: { draftId: string; agentId: string }) => void;
   markLifecycle: (input: {
     draftId: string;
@@ -66,6 +68,17 @@ export const useCreateFlowStore = create<CreateFlowState>((set, get) => ({
     get().setPending(pending);
     return true;
   },
+  setMemoryWait: (draftId, waitingForMemory) =>
+    set((state) => {
+      const pending = state.pendingByDraftId[draftId];
+      if (!pending || Boolean(pending.waitingForMemory) === waitingForMemory) return state;
+      return {
+        pendingByDraftId: {
+          ...state.pendingByDraftId,
+          [draftId]: { ...pending, waitingForMemory },
+        },
+      };
+    }),
   updateAgentId: ({ draftId, agentId }) =>
     set((state) => {
       const current = state.pendingByDraftId[draftId];

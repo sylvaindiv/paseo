@@ -779,7 +779,7 @@ describe("appearance settings", () => {
     expect(result.contentFontSize).toBe(DEFAULT_UI_BASE_FONT_SIZE);
     expect(result.codeFontSize).toBe(DEFAULT_CODE_FONT_SIZE);
     expect(result.syntaxTheme).toBe("one");
-    expect(result.toolCallDetailLevel).toBe("detailed");
+    expect(result.toolCallDetailLevel).toBe("overview");
   });
 
   it("migrates the enabled compact tool call preference to overview", async () => {
@@ -792,10 +792,20 @@ describe("appearance settings", () => {
     expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("overview");
   });
 
-  it("clears settings with an unrecognized tool call detail level", async () => {
+  it("defaults to compact for an unrecognized tool call detail level", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
         [APP_SETTINGS_KEY]: JSON.stringify({ toolCallDetailLevel: "unknown" }),
+      }),
+    });
+
+    expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("overview");
+  });
+
+  it("preserves the selected detailed tool call preference", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ toolCallDetailLevel: "detailed" }),
       }),
     });
 

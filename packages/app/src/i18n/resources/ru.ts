@@ -2139,6 +2139,7 @@ export const ru: TranslationResources = {
     draft: {
       newAgent: "Новый агент",
       creatingAgent: "Создание агента",
+      waitingForMemory: "Ожидание памяти",
     },
     file: {
       directoryMissing: "Каталог рабочего пространства не найден.",
@@ -2204,6 +2205,10 @@ export const ru: TranslationResources = {
     output: "Выходные данные",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "{{count}} действие",
+      other: "{{count}} действия",
+    },
     editedFiles: {
       one: "изменён {{count}} файл",
       other: "изменены файлы ({{count}})",

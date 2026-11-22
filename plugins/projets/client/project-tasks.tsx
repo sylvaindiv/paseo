@@ -108,6 +108,7 @@ function ProjectTodoContent(
   const {
     data,
     projectKey,
+    hostId,
     queryKey,
     stale,
     refresh,
@@ -165,11 +166,12 @@ function ProjectTodoContent(
   const write = useCallback(
     async (change: Change) => {
       await mutate(change);
+      void client.invalidateQueries({ queryKey: ["projets", "overview", hostId] });
       await refreshList();
       if (change.operation === "phase-move" || change.operation === "phase-add")
         showPhase(change.phaseId);
     },
-    [mutate, refreshList, showPhase],
+    [client, hostId, mutate, refreshList, showPhase],
   );
   const record = useCallback<RecordObservation>(
     async (batchId, state, turnId) => {
@@ -232,7 +234,7 @@ function ProjectTodoContent(
         <InlineTodo
           key={task.id}
           task={task}
-          next={queue.includes(task.id)}
+          queued={queue.includes(task.id)}
           canSelect={!disabled && !stale && !reserved.has(task.id)}
           write={write}
           styles={styles}

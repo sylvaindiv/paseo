@@ -223,7 +223,7 @@ test.describe("Schedules project target", () => {
       }
     }
 
-    await page.setViewportSize({ width: 1280, height: 880 });
+    await page.setViewportSize({ width: 1760, height: 880 });
     await page.goto(buildSchedulesRoute());
     const groups = page.getByTestId("schedule-project-group");
     await expect(groups).toHaveCount(projects.length, { timeout: 30_000 });
@@ -231,6 +231,7 @@ test.describe("Schedules project target", () => {
     const row = page.getByTestId(`schedule-row-${scheduleId}`);
 
     await checkScheduleColumns(page, 3, testInfo.outputPath("schedules-three-columns.png"));
+    expect((await groups.first().boundingBox())?.width).toBeGreaterThan(450);
     const projectFilter = page.getByTestId("schedules-project-filter");
     const filterBox = await projectFilter.boundingBox();
     expect(filterBox?.height).toBe(32);
@@ -242,10 +243,11 @@ test.describe("Schedules project target", () => {
     await expect.poll(async () => (await left(3)) === (await left(0))).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("schedules-reflow.png") });
 
-    await page.setViewportSize({ width: 845, height: 880 });
+    await page.setViewportSize({ width: 1000, height: 880 });
     await expect(toggles.first()).toHaveAttribute("aria-expanded", "false");
     await toggles.first().click();
     await checkScheduleColumns(page, 2, testInfo.outputPath("schedules-two-columns.png"));
+    expect((await groups.first().boundingBox())?.width).toBeGreaterThan(320);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await checkScheduleColumns(page, 1, testInfo.outputPath("schedules-one-column.png"));

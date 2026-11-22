@@ -2155,6 +2155,7 @@ export const es: TranslationResources = {
     draft: {
       newAgent: "Nuevo agente",
       creatingAgent: "Agente creador",
+      waitingForMemory: "Esperando memoria",
     },
     file: {
       directoryMissing: "No se encontró el directorio de Workspace.",
@@ -2219,6 +2220,10 @@ export const es: TranslationResources = {
     output: "Producción",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "{{count}} acción",
+      other: "{{count}} acciones",
+    },
     editedFiles: {
       one: "editó {{count}} archivo",
       other: "editó {{count}} archivos",

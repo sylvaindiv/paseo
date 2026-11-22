@@ -689,6 +689,7 @@ export class VoiceAssistantWebSocketServer {
       this.logger.child({ module: "creation" }),
       (snapshot) => this.validateCompletedCreation(snapshot),
       join(paseoHome, "agent-requests"),
+      (id, launch, onWaiting) => agentManager.launchCreation(id, launch, onWaiting),
     );
     this.projectRegistry = projectRegistry ?? createNoopProjectRegistry();
     this.workspaceRegistry = workspaceRegistry ?? createNoopWorkspaceRegistry();

@@ -102,11 +102,11 @@ function row(
 
 describe("schedule masonry", () => {
   it("uses the available pane width and caps the columns at the number of sections", () => {
-    expect([469, 470, 689, 690].map((width) => scheduleColumnCount(width, 5))).toEqual([
+    expect([649, 650, 1039, 1040].map((width) => scheduleColumnCount(width, 5))).toEqual([
       1, 2, 2, 3,
     ]);
-    expect(scheduleColumnCount(860, 1)).toBe(1);
-    expect(scheduleColumnCount(860, 2)).toBe(2);
+    expect(scheduleColumnCount(1440, 1)).toBe(1);
+    expect(scheduleColumnCount(1440, 2)).toBe(2);
   });
 
   it("moves cards into the shortest column when a section is collapsed", () => {

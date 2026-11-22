@@ -2365,6 +2365,10 @@ describe("Codex app-server provider", () => {
       OPENAI_BASE_URL: "https://custom-relay.example.com",
     });
     expect(capturedThreadStartConfig(capturedRequests)).toEqual({
+      mcp_servers: {
+        "chrome-devtools": { command: "false", enabled: false },
+        rea: { command: "false", enabled: false },
+      },
       model_provider: "codex-iisb",
       model_providers: {
         "codex-iisb": {
@@ -2385,6 +2389,10 @@ describe("Codex app-server provider", () => {
     );
 
     expect(capturedThreadStartConfig(capturedRequests)).toEqual({
+      mcp_servers: {
+        "chrome-devtools": { command: "false", enabled: false },
+        rea: { command: "false", enabled: false },
+      },
       model_provider: "codex-custom",
       model_providers: {
         "codex-custom": expect.objectContaining({

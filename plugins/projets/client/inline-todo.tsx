@@ -140,17 +140,17 @@ export function QuickAdd({
 function ToggleDone({
   title,
   done,
-  doing = false,
+  queued = false,
   subtask = false,
-  reset,
+  disabled = false,
   onChange,
   styles,
 }: {
   title: string;
   done: boolean;
-  doing?: boolean;
+  queued?: boolean;
   subtask?: boolean;
-  reset?(): Promise<void>;
+  disabled?: boolean;
   onChange(): Promise<void>;
   styles: ProjectStyles;
 }) {
@@ -166,28 +166,32 @@ function ToggleDone({
       setPending(false);
     }
   }, [onChange, toast]);
-  const checked = doing ? ("mixed" as const) : done;
-  const state = useMemo(() => ({ checked, disabled: pending }), [checked, pending]);
+  const checked = queued ? ("mixed" as const) : done;
+  const unavailable = disabled || pending;
+  const state = useMemo(() => ({ checked, disabled: unavailable }), [checked, unavailable]);
   const checkStyle = useMemo(
     () => [
       styles.checkbox,
       subtask && styles.subtaskCheckbox,
       done && styles.checked,
-      doing && styles.doing,
+      queued && styles.queued,
     ],
-    [doing, done, styles, subtask],
+    [done, queued, styles, subtask],
   );
   const target = subtask ? styles.subtaskCheckTarget : styles.checkTarget;
-  const nextLabel = doing || subtask ? "Terminer " : "Commencer ";
+  const label =
+    !done && !queued && !subtask
+      ? "Ajouter " + title + " à l’envoi"
+      : (done ? "Rouvrir " : "Terminer ") + title;
   const button = (
     <Pressable
       style={target}
       accessibilityRole="checkbox"
-      accessibilityLabel={(done ? "Rouvrir " : nextLabel) + title}
+      accessibilityLabel={label}
       accessibilityState={state}
       aria-checked={checked}
       onPress={toggle}
-      disabled={pending}
+      disabled={unavailable}
     >
       <View style={checkStyle}>
         {done ? (
@@ -196,21 +200,7 @@ function ToggleDone({
       </View>
     </Pressable>
   );
-  const context = useCallback(
-    (event: React.MouseEvent) => {
-      if (!doing || !reset) return;
-      event.preventDefault();
-      void reset().catch(() => toast.error("Modification non enregistrée"));
-    },
-    [doing, reset, toast],
-  );
-  return Platform.OS === "web" ? (
-    <span data-no-dnd="" onContextMenu={context}>
-      {button}
-    </span>
-  ) : (
-    button
-  );
+  return Platform.OS === "web" ? <span data-no-dnd="">{button}</span> : button;
 }
 
 export interface TaskDraft {
@@ -234,7 +224,7 @@ export function InlineTodo({
   write,
   styles,
   muted,
-  next = false,
+  queued = false,
   canSelect = false,
   actions,
   draft,
@@ -246,7 +236,7 @@ export function InlineTodo({
   write(change: Change): Promise<void>;
   styles: ProjectStyles;
   muted: string;
-  next?: boolean;
+  queued?: boolean;
   canSelect?: boolean;
   actions(request: TaskMenuRequest): void;
   draft?: TaskDraft;
@@ -266,20 +256,16 @@ export function InlineTodo({
     [childDraft, task.subtasks],
   );
   const editing = focus !== undefined;
-  const doing = !task.completed && task.status === "doing";
-  const toggle = useCallback(
-    () =>
-      write({
+  const toggle = useCallback(() => {
+    if (task.completed || queued) {
+      return write({
         operation: "update",
         taskId: task.id,
-        status: cycleTaskStatus(task.completed, doing),
-      }),
-    [doing, task.id, task.completed, write],
-  );
-  const reset = useCallback(
-    () => write({ operation: "update", taskId: task.id, status: "todo" }),
-    [task.id, write],
-  );
+        status: task.completed ? "todo" : "done",
+      });
+    }
+    return write({ operation: "queue-task", taskId: task.id, queued: true });
+  }, [queued, task.completed, task.id, write]);
   const rename = useCallback(
     async (title: string) => {
       if (draft && !draft.saved) {
@@ -372,14 +358,14 @@ export function InlineTodo({
         anchor,
         edit: startTitle,
         canSelect: canSelect && !task.completed,
-        selected: next,
+        selected: queued,
       }),
-    [actions, canSelect, next, startTitle, task.completed, task.id],
+    [actions, canSelect, queued, startTitle, task.completed, task.id],
   );
   const toggleChildren = useCallback(() => setExpanded((open) => !open), []);
   const cardStyle = useMemo(
-    () => [styles.todoCard, editing && styles.todoEditing, next && styles.nextRow],
-    [editing, next, styles],
+    () => [styles.todoCard, editing && styles.todoEditing],
+    [editing, styles],
   );
   return (
     <View style={cardStyle} testID={"projets-task-" + task.id}>
@@ -390,8 +376,8 @@ export function InlineTodo({
           <ToggleDone
             title={task.title}
             done={task.completed}
-            doing={doing}
-            reset={reset}
+            queued={queued}
+            disabled={!task.completed && !canSelect}
             onChange={toggle}
             styles={styles}
           />
@@ -501,11 +487,6 @@ const addSubtaskStyle = {
   fontStyle: "italic",
   textAlign: "left",
 } as const;
-
-function cycleTaskStatus(done: boolean, doing: boolean) {
-  if (done) return "todo" as const;
-  return doing ? ("done" as const) : ("doing" as const);
-}
 
 export function TaskControlStyles() {
   if (Platform.OS !== "web") return null;

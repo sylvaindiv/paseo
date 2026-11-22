@@ -2946,7 +2946,7 @@ export class DaemonClient {
         idempotencyKey,
       });
       observation.subscribe({
-        snapshot: (result) => next(result.snapshot),
+        snapshot: (result) => next(result.snapshot, true),
         update: (message) => {
           if (message.type === "workspace.create.update" || message.type === "agent.create.update")
             next(message.payload);

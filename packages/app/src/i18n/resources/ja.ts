@@ -2125,6 +2125,7 @@ export const ja: TranslationResources = {
     draft: {
       newAgent: "新しいエージェント",
       creatingAgent: "エージェントを作成中",
+      waitingForMemory: "メモリの空き待ち",
     },
     file: {
       directoryMissing: "ワークスペースディレクトリが見つかりません。",
@@ -2190,6 +2191,10 @@ export const ja: TranslationResources = {
     output: "出力",
   },
   toolCallGroup: {
+    actionCount: {
+      one: "{{count}} 件のアクション",
+      other: "{{count}} 件のアクション",
+    },
     editedFiles: {
       one: "{{count}}個のファイルを編集",
       other: "{{count}}個のファイルを編集",

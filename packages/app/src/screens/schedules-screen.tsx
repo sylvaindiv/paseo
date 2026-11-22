@@ -41,6 +41,7 @@ import {
   ALL_SCHEDULE_PROJECTS,
   buildScheduleGroups,
   listScheduleProjects,
+  SCHEDULES_MAX_WIDTH,
   type ScheduleGroup,
   type ScheduleRowView,
   type ScheduleSort,
@@ -548,7 +549,7 @@ const styles = StyleSheet.create((theme) => ({
   filterRow: {
     alignSelf: "center",
     width: "100%",
-    maxWidth: 908,
+    maxWidth: SCHEDULES_MAX_WIDTH + 2 * theme.spacing[6],
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",

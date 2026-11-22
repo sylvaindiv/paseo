@@ -24,7 +24,7 @@ interface Dependencies {
   observe: (
     kind: Kind,
     key: string,
-    next: (snapshot: CreationSnapshot | null) => void,
+    next: (snapshot: CreationSnapshot | null, initial?: boolean) => void,
     error: (error: unknown) => void,
   ) => () => void;
   legacyAgent: (input: CreateAgentRequestOptions) => Promise<AgentSnapshotPayload>;
@@ -167,6 +167,7 @@ export class CreationClient {
         ...operation.input,
         subscribe: true,
       });
+      if (result.errorCode === "agent_launch_stopped") return;
       if (result.creation) this.receive(result.creation);
       this.finish(operation, result);
     } catch (error) {
@@ -204,11 +205,15 @@ export class CreationClient {
       operation.stopObserving = this.deps.observe(
         operation.kind,
         operation.key,
-        (snapshot) => {
-          if (!snapshot) void this.submit(operation);
-          else {
-            // Re-subscription is authoritative even if its revision matches the last live event.
-            this.receive(snapshot);
+        (snapshot, initial) => {
+          if (snapshot) this.receive(snapshot);
+          if (
+            !snapshot ||
+            (initial && (snapshot.phase === "accepted" || snapshot.phase === "workspace_ready"))
+          ) {
+            // The daemon reports interrupted provisioning as failed. Accepted work can be retried
+            // with the original identity, whether it is still running or waiting on a new daemon.
+            void this.submit(operation);
           }
         },
         (error) => this.fail(operation, error),

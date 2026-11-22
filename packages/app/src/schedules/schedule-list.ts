@@ -29,6 +29,7 @@ interface ScheduleListOptions {
 }
 
 export const ALL_SCHEDULE_PROJECTS = "all";
+export const SCHEDULES_MAX_WIDTH = 1440;
 const UNASSIGNED_PROJECT = "unassigned";
 
 function scheduleProject(row: ScheduleRowView, unassignedLabel: string): ScheduleProject {
@@ -101,7 +102,7 @@ export function buildScheduleGroups(
 }
 
 export function scheduleColumnCount(width: number, sectionCount: number): number {
-  const columns = width >= 690 ? 3 : 1 + Number(width >= 470);
+  const columns = width >= 1040 ? 3 : 1 + Number(width >= 650);
   return Math.max(1, Math.min(sectionCount, columns));
 }
 

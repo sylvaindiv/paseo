@@ -106,6 +106,9 @@ export function SortableTitleStyles() {
   if (Platform.OS !== "web") return null;
   return (
     <style>{`
+      [data-testid="projets-board"][data-panning], [data-testid="projets-board"][data-panning] * {
+        cursor: grabbing !important;
+      }
       .projets-title-drag-region, .projets-title-drag-region [role="button"]:not([data-no-dnd]) {
         cursor: grab;
         user-select: none;

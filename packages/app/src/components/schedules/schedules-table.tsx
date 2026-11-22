@@ -16,6 +16,7 @@ import { useScheduleMutations } from "@/hooks/use-schedule-mutations";
 import type { AggregatedSchedule } from "@/hooks/use-schedules";
 import {
   placeScheduleSections,
+  SCHEDULES_MAX_WIDTH,
   scheduleColumnCount,
   type ScheduleGroup,
   type ScheduleRowView,
@@ -269,11 +270,11 @@ const styles = StyleSheet.create((theme) => ({
   grid: {
     alignSelf: "center",
     width: "100%",
-    maxWidth: 860,
+    maxWidth: SCHEDULES_MAX_WIDTH,
     gap: GAP,
   },
   single: {
-    maxWidth: 440,
+    maxWidth: 560,
   },
   groupHeader: {
     flexDirection: "row",

@@ -1039,6 +1039,10 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
       withInitialAgent: true,
       agent: requestedAgent,
       onEvent: (snapshot) => {
+        if (input.draftId)
+          useCreateFlowStore
+            .getState()
+            .setMemoryWait(input.draftId, snapshot.waitingForMemory === true);
         if (!snapshot.workspace || navigated) return;
         navigated = true;
         if (!input.isStillOnCreateScreen()) return;
