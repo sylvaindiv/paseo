@@ -1429,6 +1429,40 @@ export class MockLoadTestAgentSession implements AgentSession {
     this.clearTurnTimer(turn);
     this.emitTurnStarted(turn);
 
+    // The (c), the quoted flag and the --- are load-bearing: they trip
+    // three different markdown-it typographer rules, and
+    // plan-card-markdown.spec.ts asserts all three render verbatim. That
+    // is the only guard against the plan card's parser prop going missing.
+    const plan = [
+      "1. Add the (c) README note.",
+      '2. Run --name="my repo".',
+      "3. Verify ---buzz in the diff.",
+    ];
+    if (/with the CVC diagram/i.test(promptToText(turn.prompt))) {
+      plan.push(
+        "",
+        "```mermaid",
+        "flowchart TD",
+        '    A["Accueil"] --> P["Prestations"]',
+        '    A --> PRO["Professionnels"]',
+        '    A --> Z["Zone d’intervention"]',
+        '    P --> I["Nettoyage intérieur<br/>Confort et CVC"]',
+        '    P --> E["Nettoyage extérieur<br/>Confort et CVC"]',
+        '    P --> L["Lustrage et polissage"]',
+        '    P --> C["Protection céramique<br/>après lustrage ou polissage"]',
+        '    P --> R["Rénovation des phares"]',
+        '    PRO --> D["Demander un devis pour plusieurs véhicules"]',
+        '    PRO -. "Selon le besoin" .-> P',
+        '    Z --> V["Pages des villes prioritaires"]',
+        '    V -. "Soins disponibles" .-> P',
+        "```",
+        "",
+        "```sh",
+        'printf "%s\\n" "Confort et CVC"',
+        "```",
+      );
+    }
+
     const request: AgentPermissionRequest = {
       id: `mock-plan-${turn.turnId}`,
       provider: this.provider,
@@ -1438,11 +1472,7 @@ export class MockLoadTestAgentSession implements AgentSession {
       title: "Plan",
       description: "Review the proposed plan before implementation starts.",
       input: {
-        // The (c), the quoted flag and the --- are load-bearing: they trip
-        // three different markdown-it typographer rules, and
-        // plan-card-markdown.spec.ts asserts all three render verbatim. That
-        // is the only guard against the plan card's parser prop going missing.
-        plan: '1. Add the (c) README note.\n2. Run --name="my repo".\n3. Verify ---buzz in the diff.',
+        plan: plan.join("\n"),
       },
       actions: [
         {

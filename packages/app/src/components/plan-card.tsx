@@ -10,6 +10,8 @@ import {
 import { type ASTNode } from "react-native-markdown-display";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
+import { getMarkdownFenceLanguage } from "@/components/markdown/fence/language";
+import { MermaidFence } from "@/components/markdown/fence/mermaid";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { ChevronRight } from "lucide-react-native";
 import { isWeb } from "@/constants/platform";
@@ -113,11 +115,24 @@ function createPlanMarkdownRules() {
       _parent: ASTNode[],
       styles: MarkdownRuleStyles,
       inheritedStyles: TextStyle = {},
-    ) => (
-      <MarkdownInlineText key={node.key} inheritedStyle={inheritedStyles} ruleStyle={styles.fence}>
-        {node.content}
-      </MarkdownInlineText>
-    ),
+    ) =>
+      getMarkdownFenceLanguage(node.sourceInfo) === "mermaid" ? (
+        <MermaidFence
+          key={node.key}
+          code={node.content}
+          phase="complete"
+          inheritedStyles={inheritedStyles}
+          textStyle={styles.fence}
+        />
+      ) : (
+        <MarkdownInlineText
+          key={node.key}
+          inheritedStyle={inheritedStyles}
+          ruleStyle={styles.fence}
+        >
+          {node.content}
+        </MarkdownInlineText>
+      ),
     code_inline: (
       node: ASTNode,
       _children: ReactNode[],
