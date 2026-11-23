@@ -1,4 +1,6 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { registerThings } from "./server/things-sync.js";
+import { registerTaskCapture } from "./server/task-capture.js";
 import { homedir } from "node:os";
 import path from "node:path";
 import { openProjectTodoStore } from "./server/project-todos.js";
@@ -10,6 +12,11 @@ import {
 } from "./shared/project-todos.js";
 
 export default function contribute(server: PluginServerContext) {
+  const stopThings = registerThings(
+    server,
+    process.env.PASEO_HOME ?? path.join(homedir(), ".paseo"),
+  );
+  const stopCapture = registerTaskCapture(server);
   let store: ReturnType<typeof openProjectTodoStore> | undefined;
   function getStore() {
     const home = process.env.PASEO_HOME ?? path.join(homedir(), ".paseo");
@@ -42,7 +49,9 @@ export default function contribute(server: PluginServerContext) {
       );
     }
   });
-  return () => {
+  return async () => {
+    await stopThings();
+    await stopCapture();
     offStart();
     offEnd();
     store?.close();

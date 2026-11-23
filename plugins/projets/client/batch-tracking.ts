@@ -143,7 +143,18 @@ async function findInitialTurn(agent: Agent, id: string) {
   }
 }
 
-export async function launchBatch(batch: ProjectBatch, record: RecordObservation) {
+export interface ProfileSettings {
+  id: string;
+  modeId?: string;
+  thinkingOptionId?: string;
+  featureValues?: Record<string, unknown>;
+}
+
+export async function launchBatch(
+  batch: ProjectBatch & { profile?: ProfileSettings },
+  record: RecordObservation,
+  images?: { data: string; mimeType: string }[],
+) {
   const { id, destination } = batch;
   const api = getPaseoClient(destination.serverId);
   let initial: Snapshot | undefined;
@@ -151,8 +162,15 @@ export async function launchBatch(batch: ProjectBatch, record: RecordObservation
   let agent: Agent;
   try {
     agent = await api.workspaces.ref(destination.workspaceId).agents.create({
-      config: { provider: destination.providerModel },
+      config: {
+        provider: destination.providerModel,
+        modeId: batch.profile?.modeId,
+        thinkingOptionId: batch.profile?.thinkingOptionId,
+        featureValues: batch.profile?.featureValues,
+      },
+      launchProfileId: batch.profile?.id,
       prompt: batch.prompt,
+      images,
       title: batch.title,
       agentId: id,
       idempotencyKey: id,
