@@ -91,6 +91,14 @@ export default function contribute(client: PluginClientContext) {
       return props.params.fenetre === "projets" ? <BoardWindow>{board}</BoardWindow> : board;
     },
   });
+  const removeCapture = client.addScreen({
+    id: "desktop-capture",
+    title: "Ajouter des tâches",
+    Component: function DesktopTaskCapture({ host, desktopCapture }: PluginScreenProps) {
+      if (!desktopCapture) return null;
+      return <TaskCapture hostId={host.id} close={desktopCapture.close} capture={desktopCapture} />;
+    },
+  });
   const removeSettings = client.addSettingsScreen({
     id: "capture",
     title: "Projets",
@@ -104,6 +112,7 @@ export default function contribute(client: PluginClientContext) {
     Component: ProjectsRow,
   });
   return () => {
+    removeCapture();
     removeSettings();
     removeRow();
     removeScreen();

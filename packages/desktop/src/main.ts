@@ -1119,9 +1119,6 @@ async function bootstrap(): Promise<void> {
       ? new URL("/desktop-capture", `${DEV_SERVER_URL}/`).toString()
       : `${APP_SCHEME}://app/desktop-capture`,
     preload: path.join(__dirname, "preload.js"),
-    openAgent: async (target) => {
-      await desktopWindowOwner.openOrFocusAgent(target);
-    },
   });
   const restored = localUpdate?.restoreWindows ?? [];
   const primary = BrowserWindow.getAllWindows().find(

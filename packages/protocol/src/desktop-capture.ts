@@ -52,22 +52,13 @@ export const DesktopCaptureDraftSchema = z.object({
   cropPng: z.string().optional(),
 });
 export type DesktopCaptureDraft = z.infer<typeof DesktopCaptureDraftSchema>;
-export const DesktopCaptureTargetSchema = z.object({
-  serverId: z.string(),
-  workspaceId: z.string(),
-  agentId: z.uuid(),
-});
-export type DesktopCaptureTarget = z.infer<typeof DesktopCaptureTargetSchema>;
 export interface DesktopCaptureBridge {
   getDraft(): Promise<DesktopCaptureDraft | null>;
   onGesture(handler: (gesture: DesktopCaptureGesture) => void): () => void;
   present(): Promise<void>;
   onUpdate(handler: (draft: DesktopCaptureDraft | null) => void): () => void;
   cancel(): Promise<void>;
-  complete(target: DesktopCaptureTarget): Promise<void>;
-  open(): Promise<void>;
   device(): Promise<string>;
-  ensurePara(): Promise<string>;
   execute(request: DesktopExecuteRequest): Promise<DesktopExecuteResponse>;
   revoke(sessionId: string): Promise<void>;
   onStop(handler: () => void): () => void;

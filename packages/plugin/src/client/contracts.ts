@@ -1,5 +1,6 @@
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { PaseoApi, WorkspaceTodos } from "@getpaseo/client";
+import type { DesktopCaptureDraft } from "@getpaseo/protocol/desktop-capture";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type { ZodType, input as ZodInput, output as ZodOutput } from "zod";
 import type { PluginRpcContract } from "../rpc.js";
@@ -72,11 +73,30 @@ export interface PluginScreenLocation {
 
 export interface PluginSurfaceProps extends PluginNavigableHostProps {}
 
+export interface PluginDesktopCaptureFields {
+  project: string;
+  text: string;
+  files: File[];
+}
+
+export interface PluginDesktopCapture {
+  id: string;
+  context: DesktopCaptureDraft["context"];
+  ocr: string;
+  warning: string;
+  fields: PluginDesktopCaptureFields;
+  update(fields: Partial<PluginDesktopCaptureFields>): void;
+  close(): void;
+  preview?: ReactNode;
+}
+
 export interface PluginScreenProps extends PluginSurfaceProps {
   /** The params the screen was opened with; `{}` when none. */
   params: PluginScreenParams;
   /** Whether this screen is the current navigation destination. */
   isFocused: boolean;
+  /** Present when the desktop capture window opens this screen. */
+  desktopCapture?: PluginDesktopCapture;
 }
 
 export interface PluginPopoverProps extends PluginHostProps {

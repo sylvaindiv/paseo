@@ -2,6 +2,8 @@ export type {
   PluginHostProps,
   PluginSurfaceProps,
   PluginScreenProps,
+  PluginDesktopCapture,
+  PluginDesktopCaptureFields,
   PluginPopoverProps,
   PluginScreenParams,
   PluginOpenScreenInput,

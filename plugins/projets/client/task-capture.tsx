@@ -1,8 +1,14 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop -- Local form events. */
-import { getPaseoClient, useRpc, type PluginHostProps } from "@getpaseo/plugin/client";
+import {
+  getPaseoClient,
+  useRpc,
+  type PluginHostProps,
+  type PluginDesktopCapture,
+  type PluginDesktopCaptureFields,
+} from "@getpaseo/plugin/client";
 import { useEffect, useRef, useState, useMemo, useSyncExternalStore, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { captureReply, captureSession } from "../shared/task-capture.js";
+import { captureReply, captureSession, type CaptureReply } from "../shared/task-capture.js";
 import { addCapturedTasks, captureContext } from "./capture-tasks.js";
 import { createFolderStore } from "./folder-store.js";
 import { projects, initialBoard } from "./priority-prototype.js";
@@ -21,6 +27,9 @@ function errorMessage(cause: unknown) {
 }
 const css = `
 .taskCapture{position:fixed;inset:0 0 0 auto;margin:0;padding:0;width:min(410px,100vw);height:100dvh;max-height:100dvh;max-width:100vw;box-sizing:border-box;border:0;border-left:1px solid #dcdcd7;background:#fafaf9;color:#363631;font:14px/1.45 system-ui;box-shadow:-5px 0 28px #0001}
+.desktopTaskCapture{inset:0;width:100vw;border-left:0}
+.taskCapture .captureImages{display:flex;gap:8px;min-height:0}
+.taskCapture .captureImages img{max-width:100%;min-width:0;max-height:220px;object-fit:contain}
 .taskCapture::backdrop{background:#25252136}
 .taskCapture[open]{display:flex;flex-direction:column}
 .taskCapture header,.taskCapture form,.taskCapture .target{padding:14px 18px}
@@ -46,9 +55,11 @@ const css = `
 export function TaskCapture({
   hostId,
   close,
+  capture,
 }: {
   hostId: PluginHostProps["host"]["id"];
   close(): void;
+  capture?: PluginDesktopCapture;
 }) {
   const rpc = useRpc(captureSession);
   const call = useRef(rpc);
@@ -61,9 +72,17 @@ export function TaskCapture({
   const history = useRef<HTMLDivElement>(null);
   const store = useMemo(() => createFolderStore(hostId, initialBoard), [hostId]);
   const saved = useSyncExternalStore(store.subscribe, store.get);
-  const [project, setProject] = useState("");
-  const [text, setText] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [manual, setManual] = useState<PluginDesktopCaptureFields>({
+    project: "",
+    text: "",
+    files: [],
+  });
+  const { project, text, files } = capture?.fields ?? manual;
+  function update(changes: Partial<PluginDesktopCaptureFields>) {
+    if (capture) capture.update(changes);
+    else setManual((current) => ({ ...current, ...changes }));
+  }
+  const recorded = capture ? saved.board.recordedCaptures?.[capture.id] : undefined;
   const library = useRef<File[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
   const [busy, setBusy] = useState(false);
@@ -105,9 +124,37 @@ export function TaskCapture({
       ),
     );
   }
+  async function ensureSession() {
+    if (started.current) return;
+    started.current = true;
+    try {
+      const { ok } = await rpc({ id: id.current, action: "open" });
+      if (!ok) throw new Error("Projets indisponible. Réessaie.");
+    } catch (cause) {
+      started.current = false;
+      throw cause;
+    }
+  }
+  async function applyReply(reply: CaptureReply, selected: number | null) {
+    if (!reply.tasks.length) {
+      return capture && selected === null ? "Quel projet ?" : reply.message;
+    }
+    const summary = reply.tasks
+      .map((task) => projects[task.project]?.name + " · " + task.title)
+      .join("\n");
+    await store.write((board) => {
+      if (!capture) return addCapturedTasks(board, reply, selected, library.current);
+      if (board.recordedCaptures?.[capture.id]) return board;
+      const images = files.map((_, index) => index);
+      const withImages = { ...reply, tasks: reply.tasks.map((task) => ({ ...task, images })) };
+      const next = addCapturedTasks(board, withImages, selected, files);
+      return { ...next, recordedCaptures: { ...board.recordedCaptures, [capture.id]: summary } };
+    });
+    return capture ? "" : "Enregistré\n" + summary;
+  }
   async function send(e: FormEvent) {
     e.preventDefault();
-    if (locked.current || !saved.ready || (!text.trim() && !files.length)) return;
+    if (recorded || locked.current || !saved.ready || (!text.trim() && !files.length)) return;
     locked.current = true;
     setBusy(true);
     setError("");
@@ -116,22 +163,15 @@ export function TaskCapture({
     try {
       const attachments = await Promise.all(files.map(encodeImage));
       if (!alive.current) return;
-      if (!started.current) {
-        started.current = true;
-        try {
-          await rpc({ id: id.current, action: "open" });
-        } catch (cause) {
-          started.current = false;
-          throw cause;
-        }
-      }
+      await ensureSession();
       if (!alive.current) return;
-      const offset = library.current.length;
-      library.current.push(...files);
+      const offset = capture ? 0 : library.current.length;
+      if (!capture) library.current.push(...files);
       const input = JSON.stringify({
         projetChoisi: selected,
         tableau: captureContext(store.get().board),
         message,
+        observationsEcran: capture && { ...capture.context, texte: capture.ocr.slice(0, 32000) },
         imagesJointes: files.map((f, i) => ({ index: offset + i, nom: f.name })),
       });
       setLines((l) => [
@@ -142,28 +182,16 @@ export function TaskCapture({
           text: [message, ...files.map((f) => f.name)].filter(Boolean).join("\n"),
         },
       ]);
-      setText("");
-      setFiles([]);
+      if (!capture) update({ text: "", files: [] });
       const reply = await readReply(input, attachments);
       if (!reply) return;
-      if (reply.tasks.length)
-        await store.write((board) => addCapturedTasks(board, reply, selected, library.current));
-      if (!alive.current) return;
-      const response = reply.tasks.length
-        ? reply.tasks.map((t) => projects[t.project].name + " · " + t.title).join("\n")
-        : reply.message;
-      setLines((l) => [
-        ...l,
-        {
-          id: crypto.randomUUID(),
-          kind: "answer",
-          text: reply.tasks.length ? "Enregistré\n" + response : response,
-        },
-      ]);
+      const response = await applyReply(reply, selected);
+      if (alive.current && response) {
+        setLines((l) => [...l, { id: crypto.randomUUID(), kind: "answer", text: response }]);
+      }
     } catch (cause) {
       if (alive.current) {
-        setText(message);
-        setFiles(files);
+        if (!capture) update({ text: message, files });
         setError(errorMessage(cause));
       }
     } finally {
@@ -173,19 +201,20 @@ export function TaskCapture({
   }
   function attach(newFiles: FileList) {
     const incoming = Array.from(newFiles).filter((file) => file.type.startsWith("image/"));
-    setFiles((current) => [...current, ...incoming]);
+    update({ files: [...files, ...incoming] });
   }
+  const pendingCapture = Boolean(capture && busy);
   return createPortal(
     <dialog
-      className="taskCapture"
+      className={capture ? "taskCapture desktopTaskCapture" : "taskCapture"}
       ref={dialog}
       aria-labelledby="task-capture-heading"
       onCancel={(e) => {
         e.preventDefault();
-        close();
+        if (!capture || !locked.current) close();
       }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) {
+        if (!capture && e.target === e.currentTarget) {
           const r = e.currentTarget.getBoundingClientRect();
           if (e.clientX < r.left || e.clientX > r.right) close();
         }
@@ -194,75 +223,130 @@ export function TaskCapture({
       <style>{css}</style>
       <header>
         <h2 id="task-capture-heading">Ajouter des tâches</h2>
-        <button type="button" aria-label="Fermer la conversation" onClick={close}>
+        <button
+          type="button"
+          aria-label="Fermer la conversation"
+          disabled={pendingCapture}
+          onClick={close}
+        >
           ×
         </button>
       </header>
-      <label className="target">
-        Projet
-        <select value={project} disabled={busy} onChange={(e) => setProject(e.target.value)}>
-          <option value="">Préciser dans le message</option>
-          {projects.map((p, i) => (
-            <option key={p.name} value={i}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="history" ref={history} role="log">
-        {lines.map((line) => (
-          <p key={line.id} className={line.kind}>
-            {line.text}
-          </p>
-        ))}
-        {busy && <p className="status">En cours…</p>}
-      </div>
-      <form onSubmit={send}>
-        {(error || saved.error) && <p role="alert">{error || saved.error}</p>}
-        <textarea
-          aria-label="Message"
-          placeholder="Qu’y a-t-il à faire ?"
-          value={text}
-          disabled={busy}
-          onChange={(e) => setText(e.target.value)}
-          onPaste={(e) => {
-            if (e.clipboardData.files.length) {
-              e.preventDefault();
-              attach(e.clipboardData.files);
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              e.currentTarget.form?.requestSubmit();
-            }
-          }}
-        />
-        {files.length > 0 && <p className="files">{files.map((f) => f.name).join(" · ")}</p>}
-        <div className="actions">
-          <label className="attach">
-            ＋ Images
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              disabled={busy}
-              onChange={(e) => {
-                if (e.target.files) attach(e.target.files);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <button
-            className="send"
-            disabled={busy || !saved.ready || (!text.trim() && !files.length)}
-            type="submit"
+      {recorded ? null : (
+        <label className="target">
+          Projet
+          <select
+            value={project}
+            disabled={busy}
+            onChange={(e) => update({ project: e.target.value })}
           >
-            Envoyer
-          </button>
-        </div>
-      </form>
+            <option value="">Préciser dans le message</option>
+            {projects.map((p, i) => (
+              <option key={p.name} value={i}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="history" ref={history} role="log">
+        {capture && <CapturePreview capture={capture} />}
+        {recorded ? (
+          <p className="answer">{"Enregistré\n" + recorded}</p>
+        ) : (
+          <CaptureConversation lines={lines} busy={busy} warning={capture?.warning} />
+        )}
+      </div>
+      {recorded ? null : (
+        <form onSubmit={send}>
+          {(error || saved.error) && <p role="alert">{error || saved.error}</p>}
+          <textarea
+            aria-label="Message"
+            placeholder="Qu’y a-t-il à faire ?"
+            value={text}
+            disabled={busy}
+            onChange={(e) => update({ text: e.target.value })}
+            onPaste={(e) => {
+              if (e.clipboardData.files.length) {
+                e.preventDefault();
+                attach(e.clipboardData.files);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (!capture && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
+          {files.length > 0 && <p className="files">{files.map((f) => f.name).join(" · ")}</p>}
+          <div className="actions">
+            <label className="attach">
+              ＋ Images
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                disabled={busy}
+                onChange={(e) => {
+                  if (e.target.files) attach(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <button
+              className="send"
+              disabled={busy || !saved.ready || (!text.trim() && !files.length)}
+              type="submit"
+            >
+              Envoyer
+            </button>
+          </div>
+        </form>
+      )}
     </dialog>,
     document.body,
+  );
+}
+
+function CapturePreview({ capture }: { capture: PluginDesktopCapture }) {
+  const { files } = capture.fields;
+  const [urls, setUrls] = useState<string[]>([]);
+  useEffect(() => {
+    if (capture.preview) return;
+    const next = files.map((file) => URL.createObjectURL(file));
+    setUrls(next);
+    return () => next.forEach((url) => URL.revokeObjectURL(url));
+  }, [files, capture.preview]);
+  return (
+    capture.preview ?? (
+      <div className="captureImages">
+        {urls.map((url, index) => (
+          <img key={url} src={url} alt={files[index]?.name ?? "Image"} />
+        ))}
+      </div>
+    )
+  );
+}
+
+function CaptureConversation({
+  lines,
+  busy,
+  warning,
+}: {
+  lines: Line[];
+  busy: boolean;
+  warning?: string;
+}) {
+  return (
+    <>
+      {warning && <p className="status">{warning}</p>}
+      {lines.map((line) => (
+        <p key={line.id} className={line.kind}>
+          {line.text}
+        </p>
+      ))}
+      {busy && <p className="status">En cours…</p>}
+    </>
   );
 }

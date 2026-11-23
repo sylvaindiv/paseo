@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
@@ -8,18 +7,12 @@ import {
   DesktopExecuteRequestSchema,
   type DesktopExecuteResponse,
   type DesktopCommand,
-  DesktopCaptureTargetSchema,
   type DesktopCaptureDraft,
-  type DesktopCaptureTarget,
 } from "@getpaseo/protocol/desktop-capture";
 import { resolveDesktopDaemonStatus } from "../../daemon/daemon-manager.js";
 import { startCaptureHelper, type CaptureHelperEvent } from "./helper.js";
 
-export function registerDesktopCapture(input: {
-  url: string;
-  preload: string;
-  openAgent(target: DesktopCaptureTarget): Promise<void>;
-}) {
+export function registerDesktopCapture(input: { url: string; preload: string }) {
   if (process.platform !== "darwin" || Number(os.release().split(".")[0]) < 23) return null;
   const deviceId = randomUUID();
   const helperExecutable = app.isPackaged
@@ -45,11 +38,9 @@ export function registerDesktopCapture(input: {
   const toolIds = new Set<string>();
   let window: BrowserWindow | null = null;
   let draft: DesktopCaptureDraft | null = null;
-  let target: DesktopCaptureTarget | null = null;
   let quitting = false;
   let pendingCapture = false;
   let gestureId: string | null = null;
-  let confirmationTimer: ReturnType<typeof setTimeout> | undefined;
   let helper: ReturnType<typeof startCaptureHelper> | null = null;
   function publish() {
     window?.webContents.send("paseo:desktop-capture:update", draft);
@@ -166,15 +157,13 @@ export function registerDesktopCapture(input: {
   }
   function receiveGesture(event: Extract<CaptureHelperEvent, { event: "gesture" }>) {
     if (event.phase === "began") {
-      if ((gestureId && !target) || (draft && !target)) {
+      if (gestureId || draft) {
         helper?.command({ command: "cancel_gesture" });
         if (draft) show();
         return;
       }
-      clearTimeout(confirmationTimer);
       gestureId = event.id;
       draft = null;
-      target = null;
       window?.hide();
       window?.setSize(720, 620);
       publish();
@@ -198,6 +187,7 @@ export function registerDesktopCapture(input: {
         if (status.status === "running") localServerId = status.serverId;
       }
       if (!localServerId) throw new Error("Ouvrez Paseo et réessayez.");
+      if (event.gesture && event.id !== gestureId) return;
       draft = {
         id: event.id,
         deviceId,
@@ -211,10 +201,12 @@ export function registerDesktopCapture(input: {
         gesture: event.gesture,
         cropPng: event.cropPng,
       };
-      target = null;
       if (event.gesture) publish();
       else show();
     } catch (error) {
+      if (gestureId === event.id) {
+        receiveGesture({ event: "gesture", id: event.id, phase: "cancelled" });
+      }
       await dialog.showMessageBox({
         message: error instanceof Error ? error.message : "Capture indisponible.",
         type: "error",
@@ -291,12 +283,6 @@ export function registerDesktopCapture(input: {
     window?.setSize(720, 620);
     show();
   });
-  ipcMain.handle("paseo:desktop-capture:para", async (event) => {
-    requireOwner(event);
-    const directory = "/Users/sylvaindivito/Desktop/PARA";
-    await mkdir(directory, { recursive: true });
-    return directory;
-  });
   ipcMain.handle("paseo:desktop-capture:device", (event) => {
     requireOwner(event);
     return deviceId;
@@ -344,35 +330,9 @@ export function registerDesktopCapture(input: {
   ipcMain.handle("paseo:desktop-capture:cancel", (event) => {
     requireOwner(event);
     draft = null;
-    target = null;
     gestureId = null;
     window?.hide();
     publish();
-  });
-  ipcMain.handle("paseo:desktop-capture:complete", (event, raw: unknown) => {
-    requireOwner(event);
-    const parsed = DesktopCaptureTargetSchema.parse(raw);
-    if (target && JSON.stringify(target) === JSON.stringify(parsed)) return;
-    if (!draft || parsed.serverId !== draft.serverId)
-      throw new Error("Invalid capture destination.");
-    const automatic = draft.gesture;
-    target = parsed;
-    draft = null;
-    if (automatic) {
-      setTimeout(() => {
-        if (target !== parsed) return;
-        window?.setSize(360, 220);
-        window?.showInactive();
-        confirmationTimer = setTimeout(() => window?.hide(), 8000);
-      }, 100);
-    }
-  });
-  ipcMain.handle("paseo:desktop-capture:open", async (event) => {
-    requireOwner(event);
-    if (target) {
-      await input.openAgent(target);
-      window?.hide();
-    }
   });
   app.on("before-quit", () => {
     quitting = true;

@@ -42,7 +42,6 @@ export function CaptureCanvas({ png, mode, disabled, onChange }: CaptureCanvasPr
       canvas.width = image.naturalWidth;
       canvas.height = image.naturalHeight;
       context.drawImage(image, 0, 0);
-      exportImages();
     };
     image.addEventListener("load", loaded);
     image.src = `data:image/png;base64,${png}`;

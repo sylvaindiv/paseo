@@ -2,42 +2,27 @@
 
 On macOS 14 or later, the desktop app owns the global modifier shortcut and the
 hold gesture. Hold Option + Control to speak and paint a trail with the pointer,
-then release either modifier to send. Escape or an extra key cancels. No mouse
+then release either modifier to open a task draft. Escape or an extra key cancels. No mouse
 button is needed, and the foreground application keeps focus. A transparent native
 overlay follows the pointer; the screenshot taken on release excludes helper
 windows and receives the same trail plus a crop.
 
-A preloaded hidden renderer records through the existing dictation pipeline and
-joins the final transcript with the screenshot before creating exactly one agent.
-It uses the local daemon identity independently of the host selected in the main
-window, enrolling that connection even on first launch. It never participates in
-workspace restoration. The request panel opens only to recover an error or empty
-dictation; success shows a short inactive confirmation.
+A preloaded hidden renderer joins the dictation and screenshot, then presents the
+Projets task form on the local daemon regardless of the main window's selected
+host. The draft stays open through plugin reloads. The configured Projets capture
+profile reads the request after **Envoyer**. The board commits tasks and the
+capture ID in one transaction, so retrying a recorded capture cannot duplicate it.
 Use **File → Capture** to request macOS permissions or change the modifier chord.
-The alternative chord applies to the current app session.
 
-The initial agent message includes the source window's explicit local directory or
-file path, document URL, selection, a bounded accessibility snapshot and OCR,
-when available. Finder also exposes its current location through the path bar when AXDocument is absent.
-Paths come from accessibility URLs and are checked on disk; never
-infer a path from a window title. This evidence is quoted separately from the
-user's request and cannot authorize actions or choose a destination on its own.
-Only the source window is inspected; secure fields are skipped. The renderer
-composes this prompt before the RPC so archived workflow plugins do not depend on
-the host protocol package at runtime.
+The source window's location, selection, bounded accessibility snapshot and OCR
+are project hints. The project selected in the form takes precedence, followed
+by a project named in the request. The source window's accessibility URLs are
+checked on disk. Secure fields are skipped.
 
 The Swift helper is compiled for the target architecture during `afterPack` and
 signed as an explicit additional binary. Keep it outside `app.asar`; launch it
 only on supported macOS versions. Its pipe carries screenshots and accessible
 content: never log complete messages or image data.
-
-The opt-in workflow plugin owns classification and creation. JEV receives only
-request text, OCR, window context and project candidates. Images go to the agent.
-The two-second deadline includes key lookup, HTTP and response decoding; aborting
-HTTP alone does not bound a stalled request. A durable decision precedes resource
-creation. Never reclassify a retry or move a failed worktree request to PARA.
-Without the plugin, the client uses the same idempotent agent creation in the
-shared PARA workspace.
 
 Desktop control is attached to the capture's device and agent. Registration and
 responses belong to one physical client source. The daemon checks the agent's
@@ -50,8 +35,8 @@ A completed agent turn releases the controller. Another agent waits for release.
 
 Run the new capture cases in `packages/desktop/e2e/desktop-capture.spec.ts` and the
 `desktop host commands` case in `owned-subscriptions.e2e.test.ts`. They use isolated
-daemons. The renderer fixture proves hold-to-dictate, release-to-send, annotation and
-draft retention, not global keyboard delivery, macOS permissions or packaged signing.
+daemons. The renderer fixture proves hold-to-dictate, release-to-draft, confirmation and
+duplicate prevention, not global keyboard delivery, macOS permissions or packaged signing.
 
 Compile and run `native/desktop-capture/ShortcutTests.swift` with
 `ModifierShortcut.swift` and `CaptureContext.swift` to check the modifier state machine without sending keys

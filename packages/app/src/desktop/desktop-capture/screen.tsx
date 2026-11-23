@@ -1,27 +1,22 @@
-import { createCaptureSubmitter, type CaptureSubmission } from "./submit";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
-import { StyleSheet } from "react-native-unistyles";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import type { PluginTheme } from "@getpaseo/plugin";
+import type { PluginDesktopCaptureFields } from "@getpaseo/plugin/client";
 import {
   DesktopCaptureDraftSchema,
   type DesktopCaptureDraft,
 } from "@getpaseo/protocol/desktop-capture";
 import { getDesktopHost } from "@/desktop/host";
-import {
-  getHostRuntimeStore,
-  useHostRuntimeClient,
-  useHostRuntimeIsConnected,
-} from "@/runtime/host-runtime";
+import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { connectionFromListen } from "@/types/host-connection";
-import { useAgentInputDraft } from "@/composer/draft/input-draft";
-import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
-import { useDictation } from "@/hooks/use-dictation";
-import { DraftAgentControls } from "@/composer/agent-controls";
 import { Button } from "@/components/ui/button";
-import { isWeb } from "@/constants/platform";
-import { persistAttachmentFromDataUrl } from "@/attachments/service";
-import { getAttachmentStore } from "@/attachments/store";
 import { getDesktopDaemonStatus } from "@/desktop/daemon/desktop-daemon";
+import { useInstalledPlugin } from "@/plugins/registry";
+import { PluginInstallationProvider } from "@/plugins/installation-provider";
+import { SurfaceErrorBoundary } from "@/plugins/surface-error-boundary";
+import type { Theme } from "@/styles/theme";
+import { toPluginTheme } from "@/plugins/theme";
 import { DesktopControlHost } from "./control-host";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { CaptureCanvas } from "./canvas";
@@ -32,11 +27,13 @@ export function DesktopCaptureScreen() {
   const [host, setHost] = useState<{ serverId: string; deviceId: string } | null>(null);
   const [capture, setCapture] = useState<DesktopCaptureDraft | null>(null);
   const [error, setError] = useState("");
-  const [automatic, setAutomatic] = useState<{ text: string; error: string } | null>(null);
+  const [input, setInput] = useState({ text: "", warning: "" });
+  const displayed = useRef<string | null>(null);
   const holdReady = useStableEvent((value: DesktopCaptureDraft, text: string, failure: string) => {
-    setAutomatic({ text, error: failure });
+    displayed.current = value.id;
+    setInput({ text, warning: failure });
     setCapture(value);
-    if (failure) void bridge?.present();
+    void bridge?.present();
   });
   const hold = useHoldCapture(bridge, host?.serverId ?? null, holdReady);
   useEffect(() => {
@@ -44,19 +41,19 @@ export function DesktopCaptureScreen() {
     const accept = (value: unknown) => {
       if (value) {
         const parsed = DesktopCaptureDraftSchema.parse(value);
-        if (parsed.gesture) {
-          if (!hold.capture(parsed)) {
-            setAutomatic({ text: "", error: "Écrivez ou dictez votre demande." });
-            setCapture(parsed);
-            void bridge.present();
-          }
-        } else {
-          setAutomatic(null);
+        if (displayed.current === parsed.id) {
           setCapture(parsed);
+          return;
         }
+        if (parsed.gesture && hold.capture(parsed)) return;
+        displayed.current = parsed.id;
+        setInput({ text: "", warning: "" });
+        setCapture(parsed);
+        if (parsed.gesture) void bridge.present();
       } else {
+        displayed.current = null;
         setCapture(null);
-        setAutomatic(null);
+        setInput({ text: "", warning: "" });
       }
     };
     let disposed = false;
@@ -91,10 +88,17 @@ export function DesktopCaptureScreen() {
       }
     };
     void prepareHost();
-    const off = bridge.onUpdate(accept);
+    let updated = false;
+    const off = bridge.onUpdate((value) => {
+      updated = true;
+      accept(value);
+    });
     void bridge
       .getDraft()
-      .then(accept)
+      .then((value) => {
+        if (!disposed && !updated) accept(value);
+        return;
+      })
       .catch(() => setError("Capture indisponible."));
     return () => {
       disposed = true;
@@ -102,278 +106,143 @@ export function DesktopCaptureScreen() {
       off();
     };
   }, [bridge, hold]);
+  const close = useCallback(() => {
+    hold.cancel();
+    void bridge?.cancel();
+  }, [bridge, hold]);
   if (!bridge) return null;
   return (
     <>
       {host ? <DesktopControlHost serverId={host.serverId} deviceId={host.deviceId} /> : null}
       {capture ? (
-        <CaptureRequest key={capture.id} capture={capture} automatic={automatic} />
+        <CaptureRequest key={capture.id} capture={capture} input={input} close={close} />
       ) : (
         <View style={styles.page}>
-          <Text style={styles.text}>{error || "Prêt à capturer"}</Text>
+          <Text style={styles.text}>
+            {error || (host ? "Prêt à capturer" : "Connexion à Paseo…")}
+          </Text>
         </View>
       )}
     </>
   );
 }
 
-function CaptureRequest({
+function captureFile(png: string, name: string) {
+  const data = Uint8Array.from(atob(png), (byte) => byte.charCodeAt(0));
+  return new File([data], name, { type: "image/png" });
+}
+
+const EMPTY_PARAMS = {};
+const CAPTURE_LAYOUT = { compact: false, platform: "web" } as const;
+
+function CaptureRequestView({
   capture,
-  automatic,
+  input,
+  close,
+  theme,
 }: {
   capture: DesktopCaptureDraft;
-  automatic: { text: string; error: string } | null;
+  input: { text: string; warning: string };
+  close(): void;
+  theme: PluginTheme;
 }) {
-  const bridge = getDesktopHost()!.desktopCapture!;
-  const client = useHostRuntimeClient(capture.serverId);
-  const connected = useHostRuntimeIsConnected(capture.serverId);
-  const draft = useAgentInputDraft({
-    draftKey: `desktop-capture:${capture.id}`,
-    composer: { initialServerId: capture.serverId, isVisible: true },
-  });
-  const text = useSyncExternalStore(
-    draft.textSource.subscribe,
-    draft.textSource.getSnapshot,
-    draft.textSource.getSnapshot,
+  const plugin = useInstalledPlugin(capture.serverId, "projets");
+  const Surface = plugin?.surfaces.find((entry) => entry.id === "desktop-capture")?.Component;
+  const originalFiles = useMemo(
+    () => [
+      captureFile(capture.png, "Capture.png"),
+      ...(capture.cropPng ? [captureFile(capture.cropPng, "Zone.png")] : []),
+    ],
+    [capture.png, capture.cropPng],
   );
-  const editor = useRef<EditingTextInputHandle>(null);
+  const [fields, setFields] = useState<PluginDesktopCaptureFields>(() => ({
+    project: "",
+    text: input.text,
+    files: originalFiles,
+  }));
+  const update = useCallback((changes: Partial<PluginDesktopCaptureFields>) => {
+    setFields((current) => ({ ...current, ...changes }));
+  }, []);
   const [mode, setMode] = useState<"rectangle" | "pen">("rectangle");
-  const [images, setImages] = useState<string[]>(() =>
-    [capture.png, ...(capture.cropPng ? [capture.cropPng] : [])].map(
-      (png) => `data:image/png;base64,${png}`,
-    ),
-  );
-  const [error, setError] = useState(() => automatic?.error ?? "");
-  const initialized = useRef(false);
-  const autoStarted = useRef(false);
-  const [busy, setBusy] = useState(false);
-  const [attempted, setAttempted] = useState(false);
-  const [complete, setComplete] = useState(false);
-  const active = useRef(false);
-  const attempt = useRef<CaptureSubmission | null>(null);
-  const submitter = useRef(createCaptureSubmitter());
-  const form = draft.composerState;
-  const selectedProvider = form?.selectedProvider;
-  const cancel = useStableEvent(() => {
-    if (active.current) return;
-    void dictation.cancelDictation();
-    draft.clear("abandoned");
-    void bridge.cancel();
-  });
-  useEffect(() => {
-    if (!isWeb) return;
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        cancel();
-      }
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [cancel]);
-  async function submit() {
-    if (active.current || !client || !connected || !form || !form.selectedProvider) return;
-    active.current = true;
-    setBusy(true);
-    setError("");
-    setAttempted(true);
-    try {
-      if (!attempt.current) {
-        const store = await getAttachmentStore();
-        const encoded = [];
-        const attachments = [];
-        for (let index = 0; index < images.length; index++) {
-          const metadata = await persistAttachmentFromDataUrl({
-            dataUrl: images[index],
-            mimeType: "image/png",
-            fileName: index === 0 ? "capture.png" : "zone.png",
-          });
-          attachments.push({ kind: "image" as const, metadata });
-          encoded.push({
-            data: await store.encodeBase64({ attachment: metadata }),
-            mimeType: "image/png",
-          });
-        }
-        draft.setAttachments(attachments);
-        attempt.current = {
-          key: capture.id,
-          deviceId: capture.deviceId,
-          text: draft.textSource.getSnapshot(),
-          ocr: capture.ocr,
-          context: capture.context,
-          autoModel: form.modelRouting === "jev",
-          launchProfileId: form.selectedLaunchProfileId,
-          config: {
-            provider: `${form.selectedProvider}/${form.effectiveModelId}`,
-            modeId: form.selectedMode,
-            thinkingOptionId: form.effectiveThinkingOptionId,
-            featureValues: form.featureValues,
-          },
-          images: encoded,
-        };
-      }
-      const result = await submitter.current(client, attempt.current, bridge.ensurePara);
-      await bridge.complete({
-        serverId: capture.serverId,
-        workspaceId: result.workspaceId,
-        agentId: result.agentId,
-      });
-      draft.clear("sent");
-      setComplete(true);
-    } catch {
-      setError("Envoi non confirmé. Réessayez pour retrouver la même demande.");
-      void bridge.present();
-    } finally {
-      active.current = false;
-      setBusy(false);
-    }
-  }
-  const open = useCallback(() => {
-    void bridge.open();
-  }, [bridge]);
-  const close = useCallback(() => {
-    void bridge.cancel();
-  }, [bridge]);
   const rectangle = useCallback(() => setMode("rectangle"), []);
   const pen = useCallback(() => setMode("pen"), []);
-  const send = useStableEvent(() => {
-    void submit();
-  });
-  const transcript = useStableEvent((value: string) => {
-    const before = draft.textSource.getSnapshot();
-    draft.replaceText([before, value].filter(Boolean).join(" "));
-  });
-  const dictationError = useStableEvent(() =>
-    setError("Micro indisponible. Vous pouvez écrire votre demande."),
-  );
-  const dictation = useDictation({
-    client,
-    onTranscript: transcript,
-    onError: dictationError,
-    canStart: () => connected && !attempted,
-  });
-  const microphone = useStableEvent(() => {
-    if (dictation.isRecording) void dictation.confirmDictation();
-    else void dictation.startDictation();
-  });
-  useEffect(() => {
-    if (!draft.isHydrated || initialized.current) return;
-    initialized.current = true;
-    if (automatic?.text) draft.replaceText(automatic.text);
-  }, [draft, automatic]);
-  useEffect(() => {
-    if (
-      !automatic ||
-      automatic.error ||
-      autoStarted.current ||
-      !initialized.current ||
-      !connected ||
-      !selectedProvider ||
-      !draft.isHydrated ||
-      !text.trim() ||
-      !images.length
-    )
-      return;
-    autoStarted.current = true;
-    send();
-  }, [automatic, connected, selectedProvider, draft.isHydrated, text, images.length, send]);
-  const captureImages = useCallback(
-    (values: string[]) => {
-      setImages(
-        values.length === 1 && capture.cropPng
-          ? [...values, `data:image/png;base64,${capture.cropPng}`]
-          : values,
-      );
-    },
-    [capture.cropPng],
-  );
-  useEffect(() => {
-    editor.current?.replaceText(draft.textReplacement.text);
-  }, [draft.textReplacement]);
-  if (complete)
-    return (
-      <View style={styles.page}>
-        <Text style={styles.text}>Agent créé</Text>
-        <Button onPress={open}>Ouvrir dans Paseo</Button>
-        <Button variant="ghost" onPress={close}>
-          Fermer
-        </Button>
-      </View>
+  const captureFileCount = useRef(originalFiles.length);
+  const annotate = useCallback((images: string[]) => {
+    const files = images.map((image, index) =>
+      captureFile(image.split(",")[1], index === 0 ? "Capture.png" : "Zone.png"),
     );
-  return (
-    <View style={styles.page}>
-      <ScrollView style={styles.preview}>
-        <CaptureCanvas
-          png={capture.png}
-          mode={mode}
-          disabled={attempted}
-          onChange={captureImages}
-        />
-      </ScrollView>
-      <View style={styles.actions}>
-        <Button
-          variant={mode === "rectangle" ? "secondary" : "ghost"}
-          disabled={attempted}
-          onPress={rectangle}
-        >
-          Rectangle
-        </Button>
-        <Button variant={mode === "pen" ? "secondary" : "ghost"} disabled={attempted} onPress={pen}>
-          Crayon
-        </Button>
-        <Button variant="ghost" disabled={busy} onPress={cancel}>
+    const previousCount = captureFileCount.current;
+    captureFileCount.current = files.length;
+    setFields((current) => ({
+      ...current,
+      files: [...files, ...current.files.slice(previousCount)],
+    }));
+  }, []);
+  const preview = useMemo(
+    () =>
+      capture.gesture ? undefined : (
+        <View style={styles.tools}>
+          <ScrollView style={styles.preview}>
+            <CaptureCanvas png={capture.png} mode={mode} disabled={false} onChange={annotate} />
+          </ScrollView>
+          <View style={styles.actions}>
+            <Button variant={mode === "rectangle" ? "secondary" : "ghost"} onPress={rectangle}>
+              Rectangle
+            </Button>
+            <Button variant={mode === "pen" ? "secondary" : "ghost"} onPress={pen}>
+              Crayon
+            </Button>
+          </View>
+        </View>
+      ),
+    [capture.gesture, capture.png, mode, annotate, rectangle, pen],
+  );
+  const showUnavailable = useCallback(
+    () => (
+      <View style={styles.page}>
+        <Text style={styles.text}>Projets indisponible. Brouillon conservé.</Text>
+        <Button variant="ghost" onPress={close}>
           Annuler
         </Button>
       </View>
-      {!connected && <Text style={styles.text}>Connexion à Paseo…</Text>}
-      {error ? (
-        <Text accessibilityRole="alert" style={styles.text}>
-          {error}
-        </Text>
-      ) : null}
-      <>
-        <EditingTextInput
-          ref={editor}
-          initialValue={text}
-          onChangeText={draft.editText}
-          editable={!attempted}
-          multiline
-          autoFocus
-          accessibilityLabel="Votre demande"
-          placeholder="Que voulez-vous faire ?"
-          style={styles.input}
+    ),
+    [close],
+  );
+  const localHost = useMemo(() => ({ id: capture.serverId, label: "Local" }), [capture.serverId]);
+  const desktopCapture = useMemo(
+    () => ({
+      id: capture.id,
+      context: capture.context,
+      ocr: capture.ocr,
+      warning: input.warning,
+      fields,
+      update,
+      close,
+      preview,
+    }),
+    [capture, input.warning, fields, update, close, preview],
+  );
+  if (!plugin || !Surface) return showUnavailable();
+  return (
+    <SurfaceErrorBoundary installation={plugin} Surface={Surface} renderError={showUnavailable}>
+      <PluginInstallationProvider plugin={plugin}>
+        <Surface
+          params={EMPTY_PARAMS}
+          isFocused
+          host={localHost}
+          theme={theme}
+          layout={CAPTURE_LAYOUT}
+          desktopCapture={desktopCapture}
         />
-        <View style={styles.actions}>
-          {!attempted && form ? <DraftAgentControls {...form.agentControls} /> : null}
-          {!attempted ? (
-            <Button
-              variant="ghost"
-              disabled={!connected || dictation.isProcessing}
-              onPress={microphone}
-            >
-              {dictation.isRecording ? "Terminer" : "Dicter"}
-            </Button>
-          ) : null}
-          <Button
-            disabled={
-              !connected ||
-              !draft.isHydrated ||
-              !selectedProvider ||
-              !images.length ||
-              !text.trim() ||
-              dictation.isRecording ||
-              dictation.isProcessing
-            }
-            loading={busy}
-            onPress={send}
-          >
-            {attempted && !busy ? "Réessayer" : "Envoyer"}
-          </Button>
-        </View>
-      </>
-    </View>
+      </PluginInstallationProvider>
+    </SurfaceErrorBoundary>
   );
 }
+
+const CaptureRequest = withUnistyles(CaptureRequestView, (theme: Theme) => ({
+  theme: toPluginTheme(theme),
+}));
+
 const styles = StyleSheet.create((theme) => ({
   page: {
     flex: 1,
@@ -381,16 +250,8 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[3],
     backgroundColor: theme.colors.surface0,
   },
-  preview: { flex: 1 },
-  input: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    minHeight: theme.spacing[16],
-    padding: theme.spacing[3],
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.md,
-  },
-  actions: { flexDirection: "row", gap: theme.spacing[2], alignItems: "center" },
   text: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
+  tools: { gap: theme.spacing[2] },
+  preview: { maxHeight: 230 },
+  actions: { flexDirection: "row", gap: theme.spacing[2] },
 }));

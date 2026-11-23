@@ -31,7 +31,7 @@ const flush = async () => {
 };
 
 describe("hold to capture", () => {
-  it("starts while held and sends once after release, capture and transcription", async () => {
+  it("starts while held and opens the draft once after release, capture and transcription", async () => {
     const ready = vi.fn();
     const start = vi.fn(async () => {});
     const finish = vi.fn(async () => "Corrige ceci");
@@ -85,7 +85,7 @@ describe("hold to capture", () => {
     expect(finish).not.toHaveBeenCalled();
     expect(ready).not.toHaveBeenCalled();
   });
-  it("surfaces microphone refusal instead of creating an empty agent", async () => {
+  it("surfaces microphone refusal instead of requiring dictation", async () => {
     const ready = vi.fn();
     const finish = vi.fn(async () => "");
     const hold = new HoldCapture({
@@ -103,79 +103,4 @@ describe("hold to capture", () => {
     expect(finish).not.toHaveBeenCalled();
     expect(ready.mock.calls[0][2]).toContain("Micro indisponible");
   });
-});
-
-import { createCaptureSubmitter } from "./submit";
-import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-const paraAgentCreate = vi.hoisted(() =>
-  vi.fn(async (_request: unknown) => ({ id: "00000000-0000-4000-8000-000000000001" })),
-);
-vi.mock("@getpaseo/client", () => ({
-  createPaseoApi: () => ({
-    workspaces: { open: async () => ({ id: "para", agents: { create: paraAgentCreate } }) },
-    dispose: async () => {},
-  }),
-}));
-it("adds source context to the first agent message without the workflow plugin", async () => {
-  const submit = createCaptureSubmitter();
-  await submit(
-    { listPlugins: async () => [] } as unknown as DaemonClient,
-    {
-      key: "capture",
-      deviceId: "mac",
-      text: "Classe ces documents",
-      context: {
-        application: "Finder",
-        directoryPath: "/Users/test/Factures",
-        selectedPaths: ["/Users/test/Factures/devis.pdf"],
-      },
-      ocr: "Devis",
-      config: { provider: "codex" },
-      autoModel: false,
-      images: [{ data: "image", mimeType: "image/png" }],
-    },
-    async () => "/PARA",
-  );
-  const request = paraAgentCreate.mock.calls[0][0] as unknown as {
-    prompt: string;
-    images: unknown[];
-  };
-  expect(request.prompt).toContain("Classe ces documents");
-  expect(request.prompt).toContain('"directoryPath": "/Users/test/Factures"');
-  expect(request.prompt).toContain("devis.pdf");
-  expect(request.prompt).toContain('"screenText": "Devis"');
-  expect(request.images).toHaveLength(1);
-});
-
-it("keeps routing text separate from the enriched agent prompt sent to the plugin", async () => {
-  const invokePluginRpc = vi.fn(async (_plugin: string, _method: string, _input: unknown) => ({
-    type: "workflow.capture.create.response",
-    workspaceId: "w",
-    agentId: "00000000-0000-4000-8000-000000000001",
-    destination: "/PARA",
-    classificationMs: 0,
-    creationMs: 1,
-  }));
-  const client = {
-    listPlugins: async () => [{ id: "paseo-workflow", status: "running" }],
-    invokePluginRpc,
-  };
-  await createCaptureSubmitter()(
-    client as unknown as DaemonClient,
-    {
-      key: "capture",
-      deviceId: "mac",
-      text: "Ma demande",
-      ocr: "Texte visible",
-      context: { directoryPath: "/Users/test/Dossier" },
-      config: { provider: "codex" },
-      autoModel: false,
-      images: [],
-    },
-    async () => "/PARA",
-  );
-  const sent = invokePluginRpc.mock.calls[0][2] as unknown as { text: string; agentPrompt: string };
-  expect(sent.text).toBe("Ma demande");
-  expect(sent.agentPrompt).toContain('"directoryPath": "/Users/test/Dossier"');
-  expect(sent.agentPrompt).toContain('"screenText": "Texte visible"');
 });

@@ -62,7 +62,6 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
       ipcRenderer.on("paseo:desktop-capture:gesture", listener);
       return () => ipcRenderer.removeListener("paseo:desktop-capture:gesture", listener);
     },
-    ensurePara: () => ipcRenderer.invoke("paseo:desktop-capture:para"),
     device: () => ipcRenderer.invoke("paseo:desktop-capture:device"),
     execute: (request: unknown) => ipcRenderer.invoke("paseo:desktop-capture:execute", request),
     revoke: (sessionId: string) => ipcRenderer.invoke("paseo:desktop-capture:revoke", sessionId),
@@ -73,8 +72,6 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
     },
     getDraft: () => ipcRenderer.invoke("paseo:desktop-capture:get"),
     cancel: () => ipcRenderer.invoke("paseo:desktop-capture:cancel"),
-    complete: (target: unknown) => ipcRenderer.invoke("paseo:desktop-capture:complete", target),
-    open: () => ipcRenderer.invoke("paseo:desktop-capture:open"),
     onUpdate: (handler: (value: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, value: unknown) => handler(value);
       ipcRenderer.on("paseo:desktop-capture:update", listener);

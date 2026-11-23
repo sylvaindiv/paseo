@@ -4,6 +4,7 @@ import type { Task } from "./priority-prototype.js";
 export interface FolderBoard {
   projectStatuses?: Record<string, string>;
   items: Task[];
+  recordedCaptures?: Record<string, string>;
   phases: FolderPhase[][];
 }
 type Edit = (board: FolderBoard) => FolderBoard;
