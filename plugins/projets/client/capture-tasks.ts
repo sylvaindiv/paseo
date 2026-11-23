@@ -1,9 +1,10 @@
+import { boardProjects } from "./things-board.js";
 import type { CaptureReply } from "../shared/task-capture.js";
 import type { FolderBoard } from "./folder-store.js";
-import { projects, makeTask, newFolderId, type Task } from "./priority-prototype.js";
+import { makeTask, newFolderId, type Task } from "./priority-prototype.js";
 
 export function captureContext(board: FolderBoard) {
-  return projects.map((p, project) => ({
+  return boardProjects(board).map((p, project) => ({
     project,
     name: p.name,
     phases: board.phases[project],

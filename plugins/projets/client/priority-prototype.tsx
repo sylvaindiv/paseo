@@ -27,6 +27,8 @@ import {
 } from "./folder-phase-board.js";
 import { priorityCss } from "./priority-prototype-style.js";
 
+import { boardProjects, updateProjectMetadata } from "./things-board.js";
+import { ThingsConnection } from "./things-connection.js";
 import { createFolderStore } from "./folder-store.js";
 import {
   FolderDispatch,
@@ -38,7 +40,7 @@ import {
 
 import { FolderOverview } from "./folder-overview.js";
 
-export const projects = [
+export const initialProjects = [
   { name: "CVC Detailing", phases: ["Contrôle du site", "Photos"] },
   { name: "Nature et Création", phases: ["Première vitrine", "Référencement"] },
   { name: "Pars Agere", phases: ["Cadrage", "Accueil HTML", "Poseidon"] },
@@ -316,6 +318,7 @@ function TaskExtras({ task, change }: { task: Task; change(patch: Partial<Task>)
 
 function ProjectCard({
   project,
+  name,
   hostId,
   projectId,
   first,
@@ -323,6 +326,7 @@ function ProjectCard({
   onAddPhase,
 }: {
   project: number;
+  name: string;
   hostId: string;
   projectId?: string;
   first: boolean;
@@ -344,7 +348,7 @@ function ProjectCard({
             ref={setActivatorNodeRef}
             {...attributes}
             {...listeners}
-            aria-label={"Déplacer " + projects[project].name}
+            aria-label={"Déplacer " + name}
             className="projectTitle projets-title-drag-region"
           >
             {projectId && (
@@ -352,14 +356,14 @@ function ProjectCard({
                 <ProjectIcon serverId={hostId} projectId={projectId} size={23} />
               </span>
             )}
-            <span className="projectName">{projects[project].name}</span>
+            <span className="projectName">{name}</span>
           </button>
         </h2>
         {onAddPhase && (
           <button
             type="button"
             className="folderAction folderAdd"
-            aria-label={"Ajouter une phase à " + projects[project].name}
+            aria-label={"Ajouter une phase à " + name}
             title="Ajouter une phase"
             onClick={onAddPhase}
           >
@@ -377,7 +381,7 @@ export function newFolderId() {
   return (hi! & 0x1fffff) * 0x100000000 + lo!;
 }
 
-const projectKeys = [
+export const initialKeys = [
   "remote:github.com/sylvaindiv/cvc-detailing",
   "remote:github.com/sylvaindiv/studio-nature-et-creation-v2",
   "Pars-agere",
@@ -385,7 +389,7 @@ const projectKeys = [
 const emptyTaskIds: string[] = [];
 export const initialBoard = {
   items: tasks,
-  phases: projects.map((p) => p.phases.map((name, id) => ({ name, id }))),
+  phases: initialProjects.map((p) => p.phases.map((name, id) => ({ name, id }))),
 };
 
 export function ProjectsBoard({
@@ -400,13 +404,21 @@ export function ProjectsBoard({
   const directory = useProjects();
   const store = useMemo(() => createFolderStore(hostId, initialBoard), [hostId]);
   const saved = useSyncExternalStore(store.subscribe, store.get);
+  const projects = useMemo(() => boardProjects(saved.board), [saved.board]);
+  const projectKeys = useMemo(() => projects.map((p) => p.workspace || p.id), [projects]);
   const { items, phases: phaseLists } = saved.board;
   const record = useFolderTracking(saved.board.items, store);
   function setItems(edit: (all: Task[]) => Task[]) {
     store.edit((board) => ({ ...board, items: edit(board.items) }));
   }
   const [phaseAction, setPhaseAction] = useState<PhaseAction | null>(null);
-  const [order, setOrder] = useState(() => projects.map((_, i) => i));
+  const [manualOrder, setOrder] = useState<number[]>([]);
+  const order = useMemo(
+    () => [
+      ...new Set([...manualOrder.filter((i) => i < projects.length), ...projects.map((_, i) => i)]),
+    ],
+    [manualOrder, projects],
+  );
   const keys = useMemo(() => order.map(String), [order]);
   const taskIdsByPhase = useMemo(() => {
     const groups = new Map<string, string[]>();
@@ -424,9 +436,7 @@ export function ProjectsBoard({
   const row = useRef<HTMLDivElement>(null);
   const active = items.find((t) => t.id === opened);
   function reorder(from: string, to: string) {
-    setOrder((current) =>
-      arrayMove(current, current.indexOf(Number(from)), current.indexOf(Number(to))),
-    );
+    setOrder(() => arrayMove(order, order.indexOf(Number(from)), order.indexOf(Number(to))));
   }
   function update(id: number, patch: Partial<Task>) {
     setItems((current) =>
@@ -620,12 +630,39 @@ export function ProjectsBoard({
         {cardCss}
       </style>
       {saved.error && <p role="alert">{saved.error}</p>}
+      <ThingsConnection store={store} hostId={hostId} />
+      {projects.map(
+        (p) =>
+          (p.id.startsWith("p:things:") || p.id.startsWith("p:local:")) && (
+            <label key={p.id}>
+              {p.name} · Espace de travail{" "}
+              <select
+                value={p.workspace ?? ""}
+                onChange={(event) => {
+                  const workspace = event.currentTarget.value;
+                  store.edit((board) => ({
+                    ...board,
+                    thingsProjects: updateProjectMetadata(board, p.id, { workspace }),
+                  }));
+                }}
+              >
+                <option value="">Choisir un projet Paseo</option>
+                {directory.projects
+                  .filter((entry) => entry.hosts.some((h) => h.serverId === hostId))
+                  .map((entry) => (
+                    <option key={entry.viewKey} value={entry.viewKey}>
+                      {entry.projectName}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          ),
+      )}
       <FolderOverview
         hostId={hostId}
         board={saved.board}
         store={store}
         projects={projects}
-        projectKeys={projectKeys}
         order={order}
       />
       <div
@@ -651,6 +688,7 @@ export function ProjectsBoard({
                   hostId={hostId}
                   projectId={target?.projectId}
                   onAddPhase={() => setPhaseAction({ project: p, mode: "add" })}
+                  name={projects[p]!.name}
                   project={p}
                   first={i === 0}
                   key={p}

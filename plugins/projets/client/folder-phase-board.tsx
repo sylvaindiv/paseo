@@ -15,6 +15,7 @@ import {
 import { collisionsUnderPointer, taskBoardKeyboardCoordinates } from "./task-drag.js";
 
 export interface FolderPhase {
+  thingsKey?: string;
   id: number;
   name: string;
 }

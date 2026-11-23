@@ -1,3 +1,4 @@
+import { boardProjects } from "./things-board.js";
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop -- Local form events. */
 import {
   getPaseoClient,
@@ -11,7 +12,7 @@ import { createPortal } from "react-dom";
 import { captureReply, captureSession, type CaptureReply } from "../shared/task-capture.js";
 import { addCapturedTasks, captureContext } from "./capture-tasks.js";
 import { createFolderStore } from "./folder-store.js";
-import { projects, initialBoard } from "./priority-prototype.js";
+import { initialBoard } from "./priority-prototype.js";
 import { encodeImage } from "./folder-dispatch.js";
 
 interface Line {
@@ -72,6 +73,7 @@ export function TaskCapture({
   const history = useRef<HTMLDivElement>(null);
   const store = useMemo(() => createFolderStore(hostId, initialBoard), [hostId]);
   const saved = useSyncExternalStore(store.subscribe, store.get);
+  const projects = boardProjects(saved.board);
   const [manual, setManual] = useState<PluginDesktopCaptureFields>({
     project: "",
     text: "",

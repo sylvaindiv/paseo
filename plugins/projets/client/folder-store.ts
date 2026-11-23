@@ -2,6 +2,8 @@ import type { FolderPhase } from "./folder-phase-board.js";
 import type { Task } from "./priority-prototype.js";
 
 export interface FolderBoard {
+  thingsBase?: import("../shared/things.js").Rows;
+  thingsProjects?: { id: string; name: string; notes?: string; workspace: string }[];
   projectStatuses?: Record<string, string>;
   items: Task[];
   recordedCaptures?: Record<string, string>;
@@ -88,6 +90,10 @@ export function createFolderStore(host: string, initial: FolderBoard) {
   }
   return {
     get: () => snapshot,
+    read: async () => {
+      const board = await transaction();
+      return { board, persisted: board !== initial };
+    },
     subscribe(listener: () => void) {
       listeners.add(listener);
       if (listeners.size === 1) {

@@ -12,7 +12,9 @@ import { useCallback, useMemo, useState } from "react";
 import { createProjectsScreen } from "./client/projects-screen.js";
 import { createBatchTracking } from "./client/batch-tracking.js";
 
-import { ProjectsBoard } from "./client/priority-prototype.js";
+import { ThingsConnection } from "./client/things-connection.js";
+import { createFolderStore } from "./client/folder-store.js";
+import { ProjectsBoard, initialBoard } from "./client/priority-prototype.js";
 import { BoardWindow, BoardWindowButton } from "./client/board-window.js";
 
 const rowStyle = `
@@ -34,6 +36,7 @@ function ProjectsIcon() {
 
 function ProjectsRow({ currentScreen, openScreen, host, layout }: PluginSidebarItemProps) {
   const active = currentScreen?.screenId === "main";
+  const store = useMemo(() => createFolderStore(host.id, initialBoard), [host.id]);
   const web = layout.platform === "web";
   const [show, setShow] = useState(false);
   const openCapture = useCallback(() => setShow(true), []);
@@ -63,6 +66,7 @@ function ProjectsRow({ currentScreen, openScreen, host, layout }: PluginSidebarI
   return (
     <div className="projectsCaptureRow">
       <style>{rowStyle}</style>
+      {!active && <ThingsConnection store={store} hostId={host.id} silent />}
       <SidebarRow icon={ProjectsIcon} active={active} onPress={open} trailing={actions} />
       {show && <TaskCapture key={host.id} hostId={host.id} close={closeCapture} />}
     </div>

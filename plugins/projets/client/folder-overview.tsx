@@ -3,6 +3,7 @@ import { TaskCapture } from "./task-capture.js";
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { currentProjectPhase, type OverviewPhase } from "../shared/project-todos.js";
+import { boardProjects, projectStatusKey, updateProjectMetadata } from "./things-board.js";
 import type { FolderBoard, FolderStore } from "./folder-store.js";
 
 const statusChoices = ["À planifier", "En cours", "En attente", "Terminé"];
@@ -40,14 +41,12 @@ export function FolderOverview({
   board,
   store,
   projects,
-  projectKeys,
   order,
 }: {
   hostId: string;
   board: FolderBoard;
   store: FolderStore;
-  projects: readonly { name: string }[];
-  projectKeys: readonly string[];
+  projects: ReturnType<typeof boardProjects>;
   order: readonly number[];
 }) {
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -123,13 +122,65 @@ export function FolderOverview({
             ×
           </button>
         </div>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            const input = event.currentTarget.elements.namedItem("name") as HTMLInputElement;
+            const name = input.value.trim();
+            if (!name) return;
+            const id = "p:local:" + crypto.randomUUID();
+            store.edit((current) => ({
+              ...current,
+              thingsProjects: [...boardProjects(current), { id, name, workspace: "" }],
+              phases: [...current.phases, []],
+            }));
+            input.value = "";
+          }}
+        >
+          <input name="name" aria-label="Nouveau projet" placeholder="Nouveau projet" required />
+          <button type="submit">Ajouter</button>
+        </form>
         {order.map((project) => {
-          const key = projectKeys[project];
+          const key = projectStatusKey(boardProjects(board)[project]!);
           const status = board.projectStatuses?.[key] ?? "";
           return (
             <div className="overviewRow" key={key}>
               <div>
-                <strong>{projects[project].name}</strong>
+                <input
+                  aria-label={"Nom du projet " + projects[project].name}
+                  key={projects[project].name}
+                  defaultValue={projects[project].name}
+                  onBlur={(event) => {
+                    const name = event.currentTarget.value.trim();
+                    if (!name || name === projects[project].name) {
+                      event.currentTarget.value = projects[project].name;
+                      return;
+                    }
+                    store.edit((current) => ({
+                      ...current,
+                      thingsProjects: updateProjectMetadata(current, projects[project]!.id, {
+                        name,
+                      }),
+                    }));
+                  }}
+                />
+                <textarea
+                  aria-label={"Note du projet " + projects[project]!.name}
+                  placeholder="Note du projet"
+                  key={projects[project]!.id + (projects[project]!.notes ?? "")}
+                  defaultValue={projects[project]!.notes ?? ""}
+                  rows={1}
+                  onBlur={(event) => {
+                    const notes = event.currentTarget.value;
+                    if (notes === (projects[project]!.notes ?? "")) return;
+                    store.edit((current) => ({
+                      ...current,
+                      thingsProjects: updateProjectMetadata(current, projects[project]!.id, {
+                        notes,
+                      }),
+                    }));
+                  }}
+                />
                 <PhaseSummary board={board} project={project} />
               </div>
               <select

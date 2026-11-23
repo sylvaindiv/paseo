@@ -335,3 +335,39 @@ test("only the initial turn settles a lot and unsuccessful tasks can be requeued
   expect(store.read("a").dispatch).toMatchObject({ queue: ["retry"], batches: [] });
   expect(store.read("a").tasks[0]).toMatchObject({ id: "review", completed: true, stage: null });
 });
+
+test("Things merges independent fields and retains both versions of a conflicting title", async () => {
+  const { pullThings } = await import("./things-sync.js");
+  const p = { id: "p:1", kind: "project" as const, parent: null, title: "Projet", done: false };
+  const t = {
+    id: "t:1",
+    kind: "task" as const,
+    parent: p.id,
+    title: "Base",
+    notes: "",
+    done: false,
+  };
+  const state: Parameters<typeof pullThings>[0] = {
+    rows: { [p.id]: p, [t.id]: { ...t, title: "Paseo" } },
+    base: { [p.id]: p, [t.id]: t },
+    links: {},
+    detached: [],
+    conflicts: [],
+    pending: {},
+    area: "scope",
+  };
+  pullThings(state, { [p.id]: p, [t.id]: { ...t, notes: "Things", done: true } });
+  expect(state.rows[t.id]).toEqual({ ...t, title: "Paseo", notes: "Things", done: true });
+  pullThings(state, { [p.id]: p, [t.id]: { ...t, title: "Renommé", notes: "Things", done: true } });
+  expect(state.conflicts).toMatchObject([{ field: "title", paseo: "Paseo", things: "Renommé" }]);
+  pullThings(state, {});
+  expect(state.detached).toEqual([p.id]);
+  expect(state.rows[t.id]?.title).toBe("Paseo");
+});
+
+test("manual reordering produces no Things edits", async () => {
+  const { diffRows } = await import("../shared/things.js");
+  const a = { id: "a", kind: "child" as const, parent: "t", title: "A", done: true };
+  const b = { ...a, id: "b", title: "B", done: false };
+  expect(diffRows({ a, b }, { b, a })).toEqual([]);
+});
