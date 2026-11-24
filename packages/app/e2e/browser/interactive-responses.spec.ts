@@ -337,6 +337,53 @@ draw();paseo.on('add','click',()=>{count++;paseo.setState({count});draw()});
   }
 });
 
+test("defaults to the first successful proposal live and after reopening", async ({ page }) => {
+  const failed = {
+    title: "Failed proposal",
+    summary: "",
+    source: 'root = HtmlArtifact("<p>Failed</p>", "invalid name")',
+  };
+  const successful = [
+    "Confirmation directe",
+    "Réglages avant le lancement",
+    "Lancer, puis partager",
+  ].map((title, index) => ({
+    title,
+    summary: "",
+    source: `root = HtmlArtifact("<p>${title}</p>", "popup-lancement-${index + 1}")`,
+  }));
+  const session = await seedMockAgentWorkspace({
+    repoPrefix: "interactive-recovery-",
+    title: "Proposal recovery",
+    initialPrompt: `Render synthetic interactive response: ${JSON.stringify(failed)}`,
+  });
+  const client = await connectDaemonClient<DaemonClient>({
+    clientIdPrefix: "interactive-recovery",
+  });
+  try {
+    await openAgentRoute(page, session);
+    const failure = "Interactive response generation failed.";
+    await expect(page.getByText(failure, { exact: true })).toBeVisible();
+    await client.sendAgentMessage(
+      session.agentId,
+      `Render synthetic interactive response: ${JSON.stringify([failed, failed, failed, ...successful])}`,
+    );
+    const rail = page.getByTestId("interactive-response-rail").last();
+    const first = rail.getByRole("button", { name: successful[0]!.title, exact: true });
+    const third = rail.getByRole("button", { name: successful[2]!.title, exact: true });
+    await expect(first).toHaveAttribute("aria-pressed", "true");
+    await third.click();
+    await expect(third).toHaveAttribute("aria-pressed", "true");
+    await rail.getByRole("button", { name: "Proposal 1", exact: true }).click();
+    await expect(rail.getByText(failure, { exact: true }).filter({ visible: true })).toBeVisible();
+    await page.reload();
+    await expect(first).toHaveAttribute("aria-pressed", "true");
+  } finally {
+    await client.close();
+    await session.cleanup();
+  }
+});
+
 test("shows the update message when a host lacks interactive responses", async ({ page }) => {
   await page.routeWebSocket(daemonWsRoutePattern(), (socket) => {
     const server = socket.connectToServer();

@@ -77,10 +77,11 @@ export function InteractiveResponseCard({
       },
     })),
   );
-  const activeIndex = Math.max(
-    0,
-    proposals.findIndex(({ id }) => id === selectedId),
+  const selectedIndex = proposals.findIndex(({ id }) => id === selectedId);
+  const firstSuccessIndex = proposals.findIndex(
+    ({ documentId, status }) => documentId && status === "completed",
   );
+  const activeIndex = selectedIndex >= 0 ? selectedIndex : Math.max(0, firstSuccessIndex);
   const multiple = proposals.length > 1;
   if (!context?.supported) return <Text style={styles.error}>{t("interactive.updateHost")}</Text>;
 

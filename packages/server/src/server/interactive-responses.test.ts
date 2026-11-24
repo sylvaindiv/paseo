@@ -90,3 +90,30 @@ it("restores submitted display text by provider identity without crossing agents
   expect(await restarted.submittedMessages("agent")).toEqual({ provider: message });
   expect(await restarted.submittedMessages("other")).toEqual({});
 });
+
+it("normalizes only quoted HtmlArtifact names before validating and persisting them", async () => {
+  directory = await mkdtemp(path.join(os.tmpdir(), "paseo-ui-names-"));
+  const store = new InteractiveResponseStore(directory);
+  const html = "<div id='popup-lancement-1'>HtmlArtifact('demo', 'keep-me')</div>";
+  const source = `root = Layout([preview, Text("popup-lancement-1")])
+preview = HtmlArtifact((${JSON.stringify(html)}), ('popup-lancement-1'),)`;
+  const input = { title: "Confirmation directe", summary: "Choose", source };
+  const document = await store.create("agent", input);
+  expect((await store.get("agent", document.id)).source).toBe(
+    source.replace("'popup-lancement-1')", "'popup_lancement_1')"),
+  );
+  expect((await store.update("agent", document.id, 0, { popup_lancement_1: "{}" })).state).toEqual({
+    popup_lancement_1: "{}",
+  });
+
+  await expect(
+    store.create("agent", {
+      ...input,
+      source:
+        'root = Layout([HtmlArtifact("<p>A</p>", "popup-lancement-1"), Input("popup_lancement_1", "B")])',
+    }),
+  ).rejects.toThrow("Duplicate field name");
+  await expect(
+    store.create("agent", { ...input, source: 'root = Input("popup-lancement-1", "B")' }),
+  ).rejects.toThrow();
+});

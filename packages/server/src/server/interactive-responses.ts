@@ -13,6 +13,13 @@ import { AgentTimelineItemPayloadSchema } from "@getpaseo/protocol/messages";
 import type { AgentTimelineItem } from "./agent/agent-sdk-types.js";
 import { writeJsonFileAtomic } from "./atomic-file.js";
 
+const openUIString = String.raw`"(?:[^"\\]|\\[\s\S])*(?:"|$)|'(?:[^'\\]|\\[\s\S])*(?:'|$)`;
+// Consume entire string literals so call-like text inside HTML is left intact.
+const artifactNameArgument = new RegExp(
+  String.raw`(\bHtmlArtifact\s*\(\s*(?:\(\s*)*(?:${openUIString}|[a-zA-Z_][a-zA-Z0-9_]*)(?:\s*\))*\s*,\s*(?:\(\s*)*)(["'])([a-zA-Z][a-zA-Z0-9_-]{0,63})\2(?=(?:\s*\))*\s*(?:,\s*)?\))|${openUIString}`,
+  "g",
+);
+
 export class InteractiveResponseStore {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(private readonly directory: string) {}
@@ -41,9 +48,13 @@ export class InteractiveResponseStore {
     agentId: string,
     input: Pick<InteractiveDocument, "title" | "summary" | "source">,
   ): Promise<InteractiveDocument> {
-    validateInteractiveSource(input.source);
+    const source = input.source.replace(artifactNameArgument, (match, prefix, quote, name) =>
+      name ? `${prefix}${quote}${name.replaceAll("-", "_")}${quote}` : match,
+    );
+    validateInteractiveSource(source);
     const document = InteractiveDocumentSchema.parse({
       ...input,
+      source,
       agentId,
       id: randomUUID(),
       state: {},

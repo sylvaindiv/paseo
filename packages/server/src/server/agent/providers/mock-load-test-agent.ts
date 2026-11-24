@@ -1360,18 +1360,31 @@ export class MockLoadTestAgentSession implements AgentSession {
             detail: { type: "unknown", input, output: null },
           }),
         );
-        const result = await this.paseoTools.executeTool(name, proposal);
-        if (this.activeTurn !== turn) return;
-        if (result.isError) throw new Error(JSON.stringify(result));
-        this.emitTimeline(
-          turn.turnId,
-          createToolCall({
+        try {
+          const result = await this.paseoTools.executeTool(name, proposal);
+          if (this.activeTurn !== turn) return;
+          if (result.isError) throw new Error(JSON.stringify(result));
+          this.emitTimeline(
+            turn.turnId,
+            createToolCall({
+              callId,
+              name,
+              status: "completed",
+              detail: { type: "unknown", input, output: JSON.stringify(result) },
+            }),
+          );
+        } catch (error) {
+          if (!Array.isArray(parsed)) throw error;
+          if (this.activeTurn !== turn) return;
+          this.emitTimeline(turn.turnId, {
+            type: "tool_call",
             callId,
             name,
-            status: "completed",
-            detail: { type: "unknown", input, output: JSON.stringify(result) },
-          }),
-        );
+            status: "failed",
+            error: String(error),
+            detail: { type: "unknown", input, output: String(error) },
+          });
+        }
       }
       this.emitSettledAssistantTurn(turn, "Choose an option in the interactive response.");
     } catch (error) {
