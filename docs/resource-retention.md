@@ -26,9 +26,13 @@ no other loaded thread before Paseo releases the runtime. Pending work, a reader
 an active workspace terminal or an incomplete response retains it. **Put to sleep** in host diagnostics skips the inactivity
 delay and uses the same proof and durable save. It requires workspace write access.
 
-On macOS, memory pressure defers new agent launches and runs the inactivity check
-without the 15-minute delay. Active sessions continue. After 30 seconds of normal pressure,
-Paseo starts waiting launches one at a time and samples pressure before each one.
+On macOS, a memory warning lets one agent start immediately and starts waiting agents one
+at a time while the warning persists. Critical pressure queues launches in order and checks
+once a second. The first waiting launch can start as soon as a reading reports warning or normal
+pressure. Paseo checks pressure before each launch. An unavailable reading keeps a confirmed
+critical state in effect until a new reading clears it.
+
+Warning and critical pressure trigger the same safe inactivity check without the 15-minute delay.
 A connected creation client resubmits waiting creation receipts after a daemon restart.
 
 Paseo gives Codex a dedicated, named agent-browser session. Browse on demand and use the integrated

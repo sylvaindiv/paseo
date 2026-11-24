@@ -331,7 +331,7 @@ test("observer failures are logged without failing creation", async () => {
 test("replays a memory-blocked creation after restart using the same receipt", async () => {
   const f = await fixture();
   const gate = new AgentLaunchPressure(
-    async () => true,
+    async () => "critical",
     () => {},
   );
   const service = new CreationService(

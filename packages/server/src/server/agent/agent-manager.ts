@@ -1,4 +1,4 @@
-import { AgentLaunchPressure } from "./agent-launch-pressure.js";
+import { AgentLaunchPressure, type MacMemoryPressure } from "./agent-launch-pressure.js";
 import type { ResourceMemorySample } from "../resource-retention.js";
 import { DaemonBusyError } from "../lifecycle-reasons.js";
 import { closeAgentBrowser } from "../agent-browser.js";
@@ -374,7 +374,7 @@ export interface AgentManagerOptions {
   onWorkspaceStateMayHaveChanged?: (params: { cwd: string }) => void;
   durableTimelineStore?: AgentTimelineStore;
   terminalManager?: TerminalManager | null;
-  readMemoryPressure?: () => Promise<boolean | null>;
+  readMemoryPressure?: () => Promise<MacMemoryPressure | null>;
   mcpBaseUrl?: string;
   mcpAuthToken?: string;
   paseoToolsEnabled?: boolean;
@@ -796,6 +796,7 @@ export class AgentManager {
   private readonly timelineReaders = new Map<object, Set<string> | "all">();
   private readonly inactiveSince = new Map<string, { since: number; updatedAt: number }>();
   private inactivitySweep: Promise<Record<string, number>> | null = null;
+  private inactivitySweepUnderPressure = false;
   private releasedInactiveSessions = 0;
 
   setTimelineReaders(owner: object, agentIds: Iterable<string> | "all"): void {
@@ -856,7 +857,12 @@ export class AgentManager {
     now = Date.now(),
     underPressure = false,
   ): Promise<Record<string, number>> {
-    if (this.inactivitySweep) return this.inactivitySweep;
+    if (this.inactivitySweep) {
+      if (underPressure && !this.inactivitySweepUnderPressure)
+        return this.inactivitySweep.then(() => this.hibernateInactiveAgents(now, true));
+      return this.inactivitySweep;
+    }
+    this.inactivitySweepUnderPressure = underPressure;
     const sweep = async () => {
       const reasons: Record<string, number> = {};
       const count = (reason: string) => {
@@ -1046,7 +1052,10 @@ export class AgentManager {
 
   async sweepInactiveAgents(): Promise<Record<string, number>> {
     const pressure = await this.launchPressure?.observe();
-    return this.hibernateInactiveAgents(Date.now(), pressure === true);
+    return this.hibernateInactiveAgents(
+      Date.now(),
+      pressure === "warning" || pressure === "critical",
+    );
   }
 
   launchCreation<T>(agentId: string, launch: () => Promise<T>, onWaiting: () => void): Promise<T> {

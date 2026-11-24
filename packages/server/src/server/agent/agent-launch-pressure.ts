@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { performance } from "node:perf_hooks";
 
-export function readMacMemoryPressure(): Promise<boolean | null> {
+export type MacMemoryPressure = "normal" | "warning" | "critical";
+
+export function readMacMemoryPressure(): Promise<MacMemoryPressure | null> {
   return new Promise((resolve) => {
     execFile(
       "/usr/sbin/sysctl",
@@ -13,8 +14,9 @@ export function readMacMemoryPressure(): Promise<boolean | null> {
         const level = stdout.trim();
         // The kernel exposes dispatch pressure flags through this sysctl.
         if (error) return resolve(null);
-        if (level === "2" || level === "4") return resolve(true);
-        return resolve(level === "1" ? false : null);
+        if (level === "4") return resolve("critical");
+        if (level === "2") return resolve("warning");
+        return resolve(level === "1" ? "normal" : null);
       },
     );
   });
@@ -33,17 +35,16 @@ interface WaitingLaunch {
 
 export class AgentLaunchPressure {
   private readonly waiting: WaitingLaunch[] = [];
-  private normalSince: number | null = null;
-  private recovering = false;
+  private lastPressure: MacMemoryPressure | null = null;
+  private starting = 0;
   private checking = false;
-  private reading: Promise<boolean | null> | undefined;
+  private reading: Promise<MacMemoryPressure | null> | undefined;
   private stopped = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
-    private readonly readPressure: () => Promise<boolean | null>,
+    private readonly readPressure: () => Promise<MacMemoryPressure | null>,
     private readonly onPressure: () => void,
-    private readonly now = () => performance.now(),
   ) {}
 
   launch<T>(
@@ -75,6 +76,10 @@ export class AgentLaunchPressure {
       this.waiting.splice(this.waiting.indexOf(launch), 1);
       launch.reject(new Error("Agent launch canceled"));
     }
+    if (!this.waiting.length) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
   }
 
   stop(): void {
@@ -84,19 +89,19 @@ export class AgentLaunchPressure {
       launch.reject(new AgentLaunchStoppedError("Daemon is shutting down"));
   }
 
-  observe(): Promise<boolean | null> {
+  observe(): Promise<MacMemoryPressure | null> {
     this.reading ??= Promise.resolve()
       .then(this.readPressure)
       .catch(() => null)
       .then((pressure) => {
-        if (pressure === true) {
-          if (!this.recovering) this.onPressure();
-          this.recovering = true;
-          this.normalSince = null;
-        } else if (this.recovering) {
-          this.normalSince = pressure === false ? (this.normalSince ?? this.now()) : null;
-        }
-        return pressure;
+        const previous = this.lastPressure;
+        if (pressure !== null) this.lastPressure = pressure;
+        if (
+          (pressure === "warning" || pressure === "critical") &&
+          (previous === null || previous === "normal")
+        )
+          this.onPressure();
+        return this.lastPressure === "critical" ? "critical" : pressure;
       })
       .finally(() => {
         this.reading = undefined;
@@ -109,12 +114,10 @@ export class AgentLaunchPressure {
     this.checking = true;
     try {
       while (this.waiting.length > 0 && !this.stopped) {
-        await this.observe();
+        const pressure = await this.observe();
         if (this.stopped) break;
-        if (
-          this.recovering &&
-          (this.normalSince === null || this.now() - this.normalSince < 30_000)
-        ) {
+        if (!this.waiting.length) break;
+        if (pressure === "critical" || (pressure === "warning" && this.starting > 0)) {
           for (const launch of this.waiting) {
             launch.onWaiting?.();
             launch.onWaiting = undefined;
@@ -128,12 +131,15 @@ export class AgentLaunchPressure {
         }
         const launch = this.waiting.shift();
         if (!launch) break;
-        const started = launch.start();
-        if (this.recovering) await started;
-      }
-      if (this.normalSince !== null && this.now() - this.normalSince >= 30_000) {
-        this.recovering = false;
-        this.normalSince = null;
+        this.starting++;
+        void launch.start().finally(() => {
+          this.starting--;
+          if (this.starting === 0 && this.lastPressure !== "critical") {
+            clearTimeout(this.timer);
+            this.timer = undefined;
+            void this.check();
+          }
+        });
       }
     } finally {
       this.checking = false;
