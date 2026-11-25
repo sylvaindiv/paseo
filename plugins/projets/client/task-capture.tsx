@@ -1,4 +1,3 @@
-import { boardProjects } from "./things-board.js";
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop -- Local form events. */
 import {
   getPaseoClient,
@@ -7,15 +6,16 @@ import {
   type PluginDesktopCapture,
   type PluginDesktopCaptureFields,
 } from "@getpaseo/plugin/client";
-import { useEffect, useRef, useState, useMemo, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { captureReply, captureSession, type CaptureReply } from "../shared/task-capture.js";
-import { addCapturedTasks, captureContext } from "./capture-tasks.js";
-import { createFolderStore } from "./folder-store.js";
-import { initialBoard } from "./priority-prototype.js";
+import { useQuery } from "@tanstack/react-query";
+import { captureReply, captureSession } from "../shared/task-capture.js";
+import { captureContext, captureDrafts } from "./capture-tasks.js";
+import { useSequence } from "./use-sequence.js";
+import type { Sequence, SequenceRequest } from "../shared/sequence.js";
 import { encodeImage } from "./folder-dispatch.js";
 
-interface Line {
+export interface Line {
   id: string;
   kind: "you" | "answer";
   text: string;
@@ -26,7 +26,7 @@ function errorMessage(cause: unknown) {
     return "Réponse illisible. Réessaie.";
   return cause.message;
 }
-const css = `
+export const captureStyles = `
 .taskCapture{position:fixed;inset:0 0 0 auto;margin:0;padding:0;width:min(410px,100vw);height:100dvh;max-height:100dvh;max-width:100vw;box-sizing:border-box;border:0;border-left:1px solid #dcdcd7;background:#fafaf9;color:#363631;font:14px/1.45 system-ui;box-shadow:-5px 0 28px #0001}
 .desktopTaskCapture{inset:0;width:100vw;border-left:0}
 .taskCapture .captureImages{display:flex;gap:8px;min-height:0}
@@ -53,6 +53,7 @@ const css = `
 .taskCapture .attach{font-size:13px;cursor:pointer}.taskCapture .attach input{width:1px;opacity:0}
 .taskCapture .files{font-size:12px;overflow-wrap:anywhere}
 `;
+// oxlint-disable-next-line complexity -- Desktop capture and the sidebar share the same form.
 export function TaskCapture({
   hostId,
   close,
@@ -71,9 +72,21 @@ export function TaskCapture({
   const locked = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const history = useRef<HTMLDivElement>(null);
-  const store = useMemo(() => createFolderStore(hostId, initialBoard), [hostId]);
-  const saved = useSyncExternalStore(store.subscribe, store.get);
-  const projects = boardProjects(saved.board);
+  const { query, rpc: sequenceRpc } = useSequence(hostId);
+  const snapshot = useRef<Sequence | undefined>(undefined);
+  const pending = useRef<Extract<SequenceRequest, { action: "capture" }> | undefined>(undefined);
+  const [retrying, setRetrying] = useState(false);
+  const [recordedSummary, setRecorded] = useState<string>();
+  const captureId = capture?.id;
+  const receipt = useQuery({
+    queryKey: ["projets", "sequence-capture", hostId, captureId],
+    queryFn: () => (captureId ? sequenceRpc({ action: "capture", id: captureId }) : null),
+    enabled: Boolean(captureId),
+    retry: false,
+  });
+  const recorded = recordedSummary ?? receipt.data?.receipt?.summary;
+  const sequence = snapshot.current ?? query.data;
+  const projects = sequence?.projects ?? [];
   const [manual, setManual] = useState<PluginDesktopCaptureFields>({
     project: "",
     text: "",
@@ -81,10 +94,10 @@ export function TaskCapture({
   });
   const { project, text, files } = capture?.fields ?? manual;
   function update(changes: Partial<PluginDesktopCaptureFields>) {
+    snapshot.current ??= query.data;
     if (capture) capture.update(changes);
     else setManual((current) => ({ ...current, ...changes }));
   }
-  const recorded = capture ? saved.board.recordedCaptures?.[capture.id] : undefined;
   const library = useRef<File[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
   const [busy, setBusy] = useState(false);
@@ -137,65 +150,131 @@ export function TaskCapture({
       throw cause;
     }
   }
-  async function applyReply(reply: CaptureReply, selected: number | null) {
-    if (!reply.tasks.length) {
-      return capture && selected === null ? "Quel projet ?" : reply.message;
+  async function commit(request: Extract<SequenceRequest, { action: "capture" }>) {
+    const result = await sequenceRpc(request);
+    if (result.stale) {
+      pending.current = undefined;
+      setRetrying(false);
+      const fresh = await query.refetch();
+      update({ project: "" });
+      snapshot.current = fresh.data;
+      throw new Error(result.error);
     }
-    const summary = reply.tasks
-      .map((task) => projects[task.project]?.name + " · " + task.title)
-      .join("\n");
-    await store.write((board) => {
-      if (!capture) return addCapturedTasks(board, reply, selected, library.current);
-      if (board.recordedCaptures?.[capture.id]) return board;
-      const images = files.map((_, index) => index);
-      const withImages = { ...reply, tasks: reply.tasks.map((task) => ({ ...task, images })) };
-      const next = addCapturedTasks(board, withImages, selected, files);
-      return { ...next, recordedCaptures: { ...board.recordedCaptures, [capture.id]: summary } };
+    if (!result.receipt) throw new Error(result.error ?? "Enregistrement à confirmer. Réessaie.");
+    const { summary } = result.receipt;
+    pending.current = undefined;
+    snapshot.current = undefined;
+    setRetrying(false);
+    void query.refetch();
+    if (capture) setRecorded(summary);
+    else {
+      update({ text: "", files: [] });
+      snapshot.current = undefined;
+      setLines((current) => [
+        ...current,
+        { id: crypto.randomUUID(), kind: "answer", text: "Enregistré\n" + summary },
+      ]);
+    }
+  }
+  async function interpret(source: Sequence, selected: number | null, message: string) {
+    const attachments = await Promise.all(files.map(encodeImage));
+    if (!alive.current) return;
+    await ensureSession();
+    if (!alive.current) return;
+    const offset = capture ? 0 : library.current.length;
+    if (!capture) library.current.push(...files);
+    const input = JSON.stringify({
+      projetChoisi: selected,
+      tableau: captureContext(source),
+      message,
+      observationsEcran: capture && { ...capture.context, texte: capture.ocr.slice(0, 32000) },
+      imagesJointes: files.map((f, i) => ({ index: offset + i, nom: f.name })),
     });
-    return capture ? "" : "Enregistré\n" + summary;
+    setLines((l) => [
+      ...l,
+      {
+        id: crypto.randomUUID(),
+        kind: "you",
+        text: [message, ...files.map((f) => f.name)].filter(Boolean).join("\n"),
+      },
+    ]);
+    const reply = await readReply(input, attachments);
+    if (!reply) return;
+    if (!reply.tasks.length) {
+      const response = capture && selected === null ? "Quel projet ?" : reply.message;
+      setLines((l) => [...l, { id: crypto.randomUUID(), kind: "answer", text: response }]);
+      return;
+    }
+    const originals = capture ? files : library.current;
+    const drafts = captureDrafts(
+      source,
+      reply,
+      selected,
+      capture ? files.map((_, i) => i) : undefined,
+    );
+    const indices = [...new Set(drafts.flatMap((draft) => draft.images))];
+    const images = await Promise.all(
+      indices.map(async (index) => {
+        const file = originals[index];
+        if (!file) throw new Error("Image introuvable.");
+        return (await encodeImage(file)).data;
+      }),
+    );
+    if (!alive.current) return;
+    pending.current = {
+      action: "capture",
+      id: capture?.id ?? crypto.randomUUID(),
+      tasks: drafts.map(
+        ({ project: target, section, existing, title, note, subtasks, images: attachmentIds }) => ({
+          project: target,
+          section,
+          existing,
+          title,
+          note,
+          subtasks,
+          images: attachmentIds.map((index) => indices.indexOf(index)),
+        }),
+      ),
+      images,
+    };
+    setRetrying(true);
+    await commit(pending.current);
   }
   async function send(e: FormEvent) {
     e.preventDefault();
-    if (recorded || locked.current || !saved.ready || (!text.trim() && !files.length)) return;
+    if (
+      recorded ||
+      locked.current ||
+      !sequence ||
+      (!pending.current && !text.trim() && !files.length)
+    )
+      return;
     locked.current = true;
     setBusy(true);
     setError("");
     const message = text.trim();
-    const selected = project === "" ? null : Number(project);
+    const projectIndex = sequence.projects.findIndex((row) => row.id === project);
+    const selected = project ? projectIndex : null;
     try {
-      const attachments = await Promise.all(files.map(encodeImage));
-      if (!alive.current) return;
-      await ensureSession();
-      if (!alive.current) return;
-      const offset = capture ? 0 : library.current.length;
-      if (!capture) library.current.push(...files);
-      const input = JSON.stringify({
-        projetChoisi: selected,
-        tableau: captureContext(store.get().board),
-        message,
-        observationsEcran: capture && { ...capture.context, texte: capture.ocr.slice(0, 32000) },
-        imagesJointes: files.map((f, i) => ({ index: offset + i, nom: f.name })),
-      });
-      setLines((l) => [
-        ...l,
-        {
-          id: crypto.randomUUID(),
-          kind: "you",
-          text: [message, ...files.map((f) => f.name)].filter(Boolean).join("\n"),
-        },
-      ]);
-      if (!capture) update({ text: "", files: [] });
-      const reply = await readReply(input, attachments);
-      if (!reply) return;
-      const response = await applyReply(reply, selected);
-      if (alive.current && response) {
-        setLines((l) => [...l, { id: crypto.randomUUID(), kind: "answer", text: response }]);
+      if (pending.current) {
+        await commit(pending.current);
+        return;
       }
+      if (capture) {
+        const result = await sequenceRpc({ action: "capture", id: capture.id });
+        if (result.receipt) {
+          setRecorded(result.receipt.summary);
+          return;
+        }
+        if (result.error) throw new Error(result.error);
+      }
+      if (selected === -1) {
+        update({ project: "" });
+        throw new Error("Le projet a changé. Choisis la destination.");
+      }
+      await interpret(sequence, selected, message);
     } catch (cause) {
-      if (alive.current) {
-        if (!capture) update({ text: message, files });
-        setError(errorMessage(cause));
-      }
+      if (alive.current) setError(errorMessage(cause));
     } finally {
       locked.current = false;
       if (alive.current) setBusy(false);
@@ -222,7 +301,7 @@ export function TaskCapture({
         }
       }}
     >
-      <style>{css}</style>
+      <style>{captureStyles}</style>
       <header>
         <h2 id="task-capture-heading">Ajouter des tâches</h2>
         <button
@@ -239,13 +318,13 @@ export function TaskCapture({
           Projet
           <select
             value={project}
-            disabled={busy}
+            disabled={busy || retrying}
             onChange={(e) => update({ project: e.target.value })}
           >
             <option value="">Préciser dans le message</option>
-            {projects.map((p, i) => (
-              <option key={p.name} value={i}>
-                {p.name}
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.title}
               </option>
             ))}
           </select>
@@ -261,12 +340,12 @@ export function TaskCapture({
       </div>
       {recorded ? null : (
         <form onSubmit={send}>
-          {(error || saved.error) && <p role="alert">{error || saved.error}</p>}
+          {(error || query.error) && <p role="alert">{error || query.error?.message}</p>}
           <textarea
             aria-label="Message"
             placeholder="Qu’y a-t-il à faire ?"
             value={text}
-            disabled={busy}
+            disabled={busy || retrying}
             onChange={(e) => update({ text: e.target.value })}
             onPaste={(e) => {
               if (e.clipboardData.files.length) {
@@ -289,7 +368,7 @@ export function TaskCapture({
                 type="file"
                 accept="image/*"
                 multiple
-                disabled={busy}
+                disabled={busy || retrying}
                 onChange={(e) => {
                   if (e.target.files) attach(e.target.files);
                   e.target.value = "";
@@ -298,10 +377,14 @@ export function TaskCapture({
             </label>
             <button
               className="send"
-              disabled={busy || !saved.ready || (!text.trim() && !files.length)}
+              disabled={
+                busy ||
+                !sequence ||
+                (!retrying && (!query.data || query.isError || (!text.trim() && !files.length)))
+              }
               type="submit"
             >
-              Envoyer
+              {retrying ? "Réessayer" : "Envoyer"}
             </button>
           </div>
         </form>
@@ -331,7 +414,7 @@ function CapturePreview({ capture }: { capture: PluginDesktopCapture }) {
   );
 }
 
-function CaptureConversation({
+export function CaptureConversation({
   lines,
   busy,
   warning,

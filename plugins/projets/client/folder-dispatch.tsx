@@ -213,7 +213,7 @@ export function FolderDispatch({
   );
 }
 
-async function defaultModel(hostId: string, workspaceId: string, provider: string) {
+export async function defaultModel(hostId: string, workspaceId: string, provider: string) {
   const api = getPaseoClient(hostId);
   const cwd = (await api.workspaces.ref(workspaceId).refresh())?.workspaceDirectory;
   if (!cwd) throw new Error("Espace indisponible.");
@@ -223,13 +223,13 @@ async function defaultModel(hostId: string, workspaceId: string, provider: strin
   if (!model) throw new Error("Aucun modèle disponible pour ce profil.");
   return model;
 }
-async function listDispatchProfiles(hostId: string) {
+export async function listDispatchProfiles(hostId: string) {
   const { config } = await getPaseoClient(hostId).config.get();
   return (config.agentProfiles ?? []).filter((p) => !/^workflow/i.test(p.name.trimStart()));
 }
 
 // The web app stores the default selected in Agent profiles per host, on this device.
-function defaultProfileForHost(hostId: string): string {
+export function defaultProfileForHost(hostId: string): string {
   try {
     const raw = window.localStorage.getItem("@paseo:create-agent-preferences");
     const id = raw && JSON.parse(raw)?.defaultAgentProfileByHost?.[hostId];

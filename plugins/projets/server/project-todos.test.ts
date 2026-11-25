@@ -1,8 +1,16 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { openProjectTodoStore } from "./project-todos.js";
+import {
+  sequenceActivity,
+  sequenceAssociation,
+  sequenceTracking,
+  type SequenceRun,
+} from "../shared/sequence.js";
+import { registerSequenceTracking } from "./sequence-tracking.js";
 import { agentPrompt } from "../shared/agent-prompt.js";
 
 let directory: string;
@@ -370,4 +378,93 @@ test("manual reordering produces no Things edits", async () => {
   const a = { id: "a", kind: "child" as const, parent: "t", title: "A", done: true };
   const b = { ...a, id: "b", title: "B", done: false };
   expect(diffRows({ a, b }, { b, a })).toEqual([]);
+});
+
+test("Sequence routes only to the linked project and persists tracking across reloads", async () => {
+  type TrackingInput = ReturnType<typeof sequenceTracking.input.parse>;
+  type LinkInput = ReturnType<typeof sequenceAssociation.input.parse>;
+  const context = {
+    paseo: {
+      workspaces: {
+        ref: (id: string) => ({
+          refresh: async () => ({
+            projectId: id === "test-workspace" ? "paseo-project" : "other-project",
+          }),
+        }),
+      },
+    },
+  };
+  let activity: () => ReturnType<typeof sequenceActivity.output.parse> = () => [];
+  let link: (input: LinkInput) => string | null = () => null;
+  let tracking: (
+    input: TrackingInput,
+    options: typeof context,
+  ) => Promise<SequenceRun | null> = async () => null;
+  const server = {
+    handle(rpc: { name: string }, handler: unknown) {
+      if (rpc.name === sequenceActivity.name) activity = handler as typeof activity;
+      else if (rpc.name === sequenceAssociation.name) link = handler as typeof link;
+      else tracking = handler as typeof tracking;
+    },
+    on() {
+      return () => {};
+    },
+  } as unknown as PluginServerContext;
+  const handle = (input: TrackingInput) => tracking(input, context);
+  const project = "things-project";
+  const task = "things-local-task";
+  const run: SequenceRun = {
+    id: "test-batch",
+    taskIds: [],
+    title: "Préparer le pinceau",
+    prompt: "Préparer le pinceau",
+    state: "launching",
+    destination: {
+      serverId: "test-host",
+      workspaceId: "test-workspace",
+      providerModel: "test/model",
+    },
+    profile: { id: "test-profile" },
+    images: [],
+  };
+  let stop = registerSequenceTracking(server, directory);
+  try {
+    const reserve = { action: "reserve" as const, task, project, run };
+    await expect(handle(reserve)).rejects.toThrow("projet associé");
+    expect(link({ action: "write", project, destination: "paseo-project" })).toBe("paseo-project");
+    await expect(
+      handle({
+        ...reserve,
+        run: { ...run, destination: { ...run.destination, workspaceId: "unrelated" } },
+      }),
+    ).rejects.toThrow("projet associé");
+    await expect(handle(reserve)).resolves.toMatchObject({ taskIds: [task] });
+    expect(activity()).toEqual([]);
+    await expect(handle(reserve)).rejects.toThrow("déjà été confiée");
+    await expect(
+      handle({ action: "observe", task, id: run.id, state: "running", turnId: "first" }),
+    ).resolves.toMatchObject({ state: "running" });
+    await expect(
+      handle({ action: "observe", task, id: run.id, state: "review", turnId: "follow-up" }),
+    ).resolves.toMatchObject({ state: "running" });
+    expect(activity()).toEqual([{ task, agentId: run.id, serverId: run.destination.serverId }]);
+    stop();
+    stop = registerSequenceTracking(server, directory);
+    expect(link({ action: "read", project })).toBe("paseo-project");
+    expect(link({ action: "read", project: "other" })).toBeNull();
+    expect(link({ action: "write", project, destination: null })).toBeNull();
+    expect(link({ action: "read", project })).toBeNull();
+    await expect(handle({ action: "read", task })).resolves.toMatchObject({
+      id: run.id,
+      taskIds: [task],
+      turnId: "first",
+    });
+    await expect(handle({ action: "read", task: "other-task" })).resolves.toBeNull();
+    await expect(
+      handle({ action: "observe", task, id: run.id, state: "review", turnId: "first" }),
+    ).resolves.toMatchObject({ state: "review" });
+    expect(activity()).toEqual([]);
+  } finally {
+    stop();
+  }
 });

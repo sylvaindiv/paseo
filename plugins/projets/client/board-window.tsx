@@ -1,6 +1,6 @@
 import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
 import { useCallback, useEffect, type ReactNode } from "react";
-import { Modal } from "react-native";
+import { createPortal } from "react-dom";
 
 const windows = new Map<string, Window>();
 export function BoardWindowButton({ hostId }: { hostId: string }) {
@@ -49,18 +49,17 @@ export function BoardWindow({ children }: { children: ReactNode }) {
       document.title = previous;
     };
   }, []);
-  return (
-    <Modal visible animationType="none">
-      <div className="projectsDetached">
-        <style>{`
-.projectsDetached { display:flex; flex-direction:column; height:100dvh; min-width:0; background:var(--colors-surface-sidebar,#eff0f3); }
+  return createPortal(
+    <div className="projectsDetached">
+      <style>{`
+.projectsDetached { position:fixed; inset:0; z-index:0; display:flex; flex-direction:column; height:100dvh; min-width:0; background:var(--colors-surface-sidebar,#eff0f3); }
 .projectsDetachedTitle { display:flex; align-items:center; gap:8px; min-height:38px; padding:0 14px 0 80px; font:600 14px system-ui; background:var(--colors-surface-0,#fff); color:var(--colors-foreground,#353531); -webkit-app-region:drag; }
 `}</style>
-        <div className="projectsDetachedTitle">
-          <span data-projects-window-title="">Projets</span>
-        </div>
-        {children}
+      <div className="projectsDetachedTitle">
+        <span data-projects-window-title="">Projets</span>
       </div>
-    </Modal>
+      {children}
+    </div>,
+    document.body,
   );
 }

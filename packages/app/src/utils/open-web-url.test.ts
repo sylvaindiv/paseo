@@ -9,6 +9,8 @@ vi.mock("@/desktop/daemon/desktop-daemon", () => ({
 import { openWorkspaceBrowser } from "@/workspace-tabs/browser";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { openWebUrl } from "./open-web-url";
+import { resolveWorkspaceServicePreview } from "./workspace-service-preview";
+import { normalizeBrowserUrl } from "@/desktop/browser/store/state";
 
 describe("workspace web link routing", () => {
   beforeEach(() => {
@@ -41,6 +43,16 @@ describe("workspace web link routing", () => {
       intent: "reveal",
       ...(preview ? { servicePreview: preview } : {}),
     });
+  });
+  it("routes an address entered without a scheme using the browser pane's workspace", async () => {
+    window.location.pathname = "/h/macbook/workspace/another-workspace";
+    const url = normalizeBrowserUrl("localhost:54566/");
+    await expect(
+      resolveWorkspaceServicePreview(url, { serverId: "mini", workspaceId: "work" }),
+    ).resolves.toEqual({ serverId: "mini", workspaceId: "work", origin: "http://localhost:54566" });
+    await expect(
+      resolveWorkspaceServicePreview(url, { serverId: "macbook", workspaceId: "local" }),
+    ).resolves.toBeUndefined();
   });
   it.each([{ metaKey: true }, { nativeEvent: { metaKey: true } }])(
     "captures Command from the click",

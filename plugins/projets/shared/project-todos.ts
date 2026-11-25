@@ -30,8 +30,8 @@ export const batchDestination = z.object({
   workspaceId: id,
   providerModel: z.string().min(1),
 });
-const batchObservation = z.enum(["running", "review", "failed", "unknown"]);
-const projectBatch = z.object({
+export const batchObservation = z.enum(["running", "review", "failed", "unknown"]);
+export const projectBatch = z.object({
   id,
   taskIds,
   destination: batchDestination,

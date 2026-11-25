@@ -6,13 +6,20 @@ import { useBrowserStore } from "./store";
 import type { ServicePreviewTarget } from "./store/state";
 
 const expired = { kind: "error", code: "expired" } as const;
-const partitions = new Map<string, Promise<string>>();
+interface PreviewPartition {
+  target: ServicePreviewTarget;
+  partition: Promise<string>;
+  isClosed(): boolean;
+  close(): Promise<void>;
+}
+const partitions = new Map<string, PreviewPartition>();
 
 function openPartition(browserId: string, target: ServicePreviewTarget): Promise<string> {
   const existing = partitions.get(browserId);
-  if (existing) return existing;
+  if (existing?.target === target && !existing.isClosed()) return existing.partition;
   const bridge = getDesktopHost()?.browser?.servicePreview;
   if (!bridge) return Promise.reject(new Error("Preview bridge unavailable"));
+  const previousClosed = existing?.close();
   const previewId = crypto.randomUUID();
   const open: PreviewOperation = {
     kind: "open",
@@ -60,25 +67,39 @@ function openPartition(browserId: string, target: ServicePreviewTarget): Promise
   });
 
   const unsubscribeStore = useBrowserStore.subscribe((state) => {
-    if (!state.browsersById[browserId]) close();
+    if (!state.browsersById[browserId]) void close();
   });
-  function close() {
-    if (closed) return;
+  let closing: Promise<void> | undefined;
+  function close(): Promise<void> {
+    if (closing) return closing;
     closed = true;
     unsubscribe();
     unsubscribeStore();
-    partitions.delete(browserId);
-    void bridge?.close(browserId).catch(() => undefined);
     void getHostRuntimeStore()
       .getClient(target.serverId)
       ?.exchangeServicePreview(previewId, { kind: "close" })
       .catch(() => undefined);
+    // Wait for a possibly pending open before closing the IPC registration for this browser ID.
+    closing = opened
+      .then(
+        () => bridge!.close(browserId),
+        () => undefined,
+      )
+      .catch(() => undefined)
+      .finally(() => {
+        if (partitions.get(browserId)?.partition === partition) partitions.delete(browserId);
+      });
+    return closing;
   }
-  const partition = bridge.open(browserId, target.origin).catch((error: unknown) => {
-    close();
+  const opened = Promise.resolve(previousClosed).then(() => {
+    if (closed) throw new Error("Preview closed");
+    return bridge.open(browserId, target.origin);
+  });
+  const partition = opened.catch((error: unknown) => {
+    void close();
     throw error;
   });
-  partitions.set(browserId, partition);
+  partitions.set(browserId, { target, partition, isClosed: () => closed, close });
   return partition;
 }
 
@@ -86,13 +107,20 @@ export function useServicePreviewPartition(
   browserId: string,
   target: ServicePreviewTarget | undefined,
 ) {
-  const [ready, setReady] = useState<{ browserId: string; partition: string } | null>(null);
+  const [ready, setReady] = useState<{
+    browserId: string;
+    target: ServicePreviewTarget;
+    partition: string;
+  } | null>(null);
   useEffect(() => {
-    if (!target) return;
+    if (!target) {
+      void partitions.get(browserId)?.close();
+      return;
+    }
     let active = true;
     void openPartition(browserId, target).then(
       (partition) => {
-        if (active) setReady({ browserId, partition });
+        if (active) setReady({ browserId, target, partition });
         return undefined;
       },
       () => {
@@ -107,5 +135,5 @@ export function useServicePreviewPartition(
       active = false;
     };
   }, [browserId, target]);
-  return ready?.browserId === browserId ? ready.partition : undefined;
+  return ready?.browserId === browserId && ready.target === target ? ready.partition : undefined;
 }

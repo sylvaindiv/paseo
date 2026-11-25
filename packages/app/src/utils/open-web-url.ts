@@ -1,5 +1,4 @@
-import { parseServicePreviewUrl } from "@getpaseo/protocol/service-preview";
-import { getDesktopDaemonStatus } from "@/desktop/daemon/desktop-daemon";
+import { resolveWorkspaceServicePreview } from "./workspace-service-preview";
 import { getIsElectron, isWeb } from "@/constants/platform";
 import { parseHostWorkspaceRouteFromPathname } from "@/utils/host-routes";
 import { isHttpUrl } from "@/utils/http-url";
@@ -25,12 +24,7 @@ export async function openWebUrl(url: string, event?: WebUrlClick): Promise<void
     const workspace = parseHostWorkspaceRouteFromPathname(window.location.pathname);
     const workspaceKey = workspace && buildWorkspaceTabPersistenceKey(workspace);
     if (workspace && workspaceKey) {
-      const localUrl = parseServicePreviewUrl(url);
-      const status = localUrl ? await getDesktopDaemonStatus().catch(() => null) : null;
-      const servicePreview =
-        localUrl && status?.serverId !== workspace.serverId
-          ? { ...workspace, origin: localUrl.origin }
-          : null;
+      const servicePreview = await resolveWorkspaceServicePreview(url, workspace);
       const result = openWorkspaceBrowser({
         workspaceKey,
         url,

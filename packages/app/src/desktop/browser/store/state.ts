@@ -27,9 +27,7 @@ export interface BrowserRecord {
   suspended?: boolean;
 }
 
-export type BrowserRecordPatch = Partial<
-  Omit<BrowserRecord, "browserId" | "createdAt" | "servicePreview">
->;
+export type BrowserRecordPatch = Partial<Omit<BrowserRecord, "browserId" | "createdAt">>;
 
 export interface BrowserIndexState {
   browsersById: Record<string, BrowserRecord>;
@@ -164,6 +162,7 @@ export function applyBrowserPatch<S extends BrowserIndexState>(
   };
 
   if (
+    nextRecord.servicePreview === existing.servicePreview &&
     nextRecord.suspended === existing.suspended &&
     nextRecord.url === existing.url &&
     nextRecord.title === existing.title &&

@@ -1,3 +1,7 @@
+import {
+  hasSameServicePreview,
+  resolveWorkspaceServicePreview,
+} from "@/utils/workspace-service-preview";
 import { useServicePreviewPartition } from "../service-preview.electron";
 import {
   useCallback,
@@ -620,6 +624,7 @@ export function BrowserPane({
   browserIdRef.current = browserId;
   const browserRef = useRef(browser);
   browserRef.current = browser;
+  const addressRequestRef = useRef(0);
   const pendingNavigationUrlRef = useRef<string | null>(null);
   const annotationMarkersRef = useRef<BrowserAnnotationMarker[]>([]);
   const [selectorMode, setSelectorMode] = useState<"annotate" | "screenshot" | null>(null);
@@ -962,15 +967,27 @@ export function BrowserPane({
   }, [browserId, browserViewport, isPresented]);
 
   const navigate = useCallback(
-    (nextUrl: string) => {
+    async (nextUrl: string) => {
+      const request = ++addressRequestRef.current;
+      const activeBrowserId = browserIdRef.current;
       const normalizedUrl = normalizeWorkspaceBrowserUrl(nextUrl);
-      const webview = webviewRef.current;
       const unsafeNavigationMessage = getUnsafeNavigationMessage(normalizedUrl, browserErrorLabels);
-      const previousUrl = browserRef.current?.url ?? initialUrlRef.current;
+      const servicePreview = unsafeNavigationMessage
+        ? undefined
+        : await resolveWorkspaceServicePreview(normalizedUrl, { serverId, workspaceId });
+      if (request !== addressRequestRef.current || browserIdRef.current !== activeBrowserId) return;
+      const record = useBrowserStore.getState().browsersById[activeBrowserId];
+      if (!record) return;
+      const previousUrl = record.url;
+      const changesPartition =
+        !unsafeNavigationMessage && !hasSameServicePreview(record.servicePreview, servicePreview);
+      if (changesPartition) removeResidentBrowserWebview(activeBrowserId);
+      const webview = webviewRef.current;
       pendingNavigationUrlRef.current = unsafeNavigationMessage ? null : normalizedUrl;
       updateBrowserRef.current(browserIdRef.current, {
         url: normalizedUrl,
         isLoading: unsafeNavigationMessage === null,
+        ...(changesPartition ? { servicePreview, canGoBack: false, canGoForward: false } : {}),
         ...(normalizedUrl !== previousUrl ? { faviconUrl: null } : {}),
         lastError: null,
       });
@@ -982,8 +999,10 @@ export function BrowserPane({
         });
         return;
       }
+      if (changesPartition) return;
       if (webview?.loadURL) {
         void webview.loadURL(normalizedUrl).catch((error: unknown) => {
+          if (request !== addressRequestRef.current || webviewRef.current !== webview) return;
           const message = getLoadUrlRejectionMessage(error, browserErrorLabels.failedToLoad);
           if (!message) {
             return;
@@ -999,7 +1018,7 @@ export function BrowserPane({
         webview.setAttribute("src", normalizedUrl);
       }
     },
-    [browserErrorLabels],
+    [browserErrorLabels, serverId, workspaceId],
   );
 
   const handleBack = useCallback(() => {
@@ -1078,7 +1097,7 @@ export function BrowserPane({
   }, [focusUrlBar, isInteractive]);
 
   const handleNavigateDraftUrl = useCallback(() => {
-    if (draftUrl.trim()) navigate(draftUrl);
+    if (draftUrl.trim()) void navigate(draftUrl);
   }, [draftUrl, navigate]);
 
   const addElementAttachment = useCallback(

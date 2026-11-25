@@ -1,46 +1,34 @@
 # Projets
 
-Chaque projet a une liste dans le fichier `projects-todos.sqlite3` du daemon Paseo.
-Sur le Mac, le chemin par défaut est `~/.paseo/projects-todos.sqlite3`. Un daemon démarré avec
-`PASEO_HOME` utilise ce dossier. Le plugin crée le fichier au premier accès.
+Projets affiche Séquence depuis la bibliothèque de Things Local sur le Mac du daemon.
+Garde les sources de Things Local dans `~/Applis/Perso/Things` et Xcode sélectionné.
+Le plugin compile son accès à la bibliothèque au premier usage après un rechargement.
+`PASEO_THINGS_SOURCE` permet d’indiquer un autre dossier de sources.
 
-La base contient les tâches, les sous-tâches, les phases, la file d’envoi et les lots suivis.
-L’ordre des projets et leur classement dans **Terminés** sont propres à l’appareil.
-Les To-do de workspace utilisent leur stockage Paseo habituel.
+Recharge avec `paseo plugin reload projets`. Le plugin utilise la bibliothèque
+`~/Library/Application Support/Things Local/Library.sqlite`, même si Things Local
+est fermé. Pour les tests, `PERSO_THINGS_DATABASE` permet de pointer le daemon
+vers une bibliothèque temporaire existante.
 
-Installe le répertoire avec `paseo plugin install /chemin/vers/plugins/projets` et recharge les
-changements avec `paseo plugin reload projets`. Une liste vide apparaît automatiquement pour
-chaque nouveau projet.
+Les captures, sous-tâches, notes et images sont enregistrées dans Things Local.
+Le suivi des envois aux agents est enregistré dans `projets-sequence.sqlite3`
+dans le dossier du daemon, par identifiant de tâche Things Local. Les listes
+To-do des espaces gardent leur stockage Paseo.
 
-Glisse une tâche dans **À envoyer** ou ajoute-la depuis son menu. **Envoyer** lance un agent
-dans l’espace choisi et place le lot **En cours**. Quand l’agent termine son premier tour, le lot
-passe **À vérifier**. Coche les tâches que tu as validées. Chaque tâche reste dans sa phase.
+## Coach
 
-Pour sauvegarder les listes, sauvegarde le fichier SQLite avec les données de ton daemon Paseo.
+Le bouton **Coach** ouvre un fil conservé sur le daemon. Il propose un planning à
+partir de Séquence et de l’agenda de Things Local. **Valider le planning** applique
+le brouillon affiché. Le bilan et la saison s’enregistrent dans Projets après
+confirmation. La revue distingue les réservations, les tâches terminées et les
+bilans déclarés.
 
-## Things sur Mac
+Le daemon utilise le lanceur `Tools/paseo-planning` de Things Local et
+l’application `Planning Things Local.app` dans `~/Library/Application Support/Things Local`.
+`PASEO_THINGS_PLANNING_APP` permet d’indiquer un autre emplacement pour
+l’application. Le Coach aide à prioriser les tâches quand l’agenda est
+inaccessible. Les horaires proposés se valident quand l’accès est disponible.
 
-Le tableau Dossiers peut partager ses projets avec un domaine Things. Chaque application conserve
-son ordre. Les notes, les cases et les déplacements entre sections suivent les modifications. Les
-images, les agents et les espaces de travail restent dans Paseo. Supprimer un projet dans Things
-délie sa carte. **Relier à Things** rétablit le lien. Les modifications simultanées du même champ
-se règlent dans le tableau.
-
-Installe [things-cli](https://github.com/ryanlewis/things-cli) (version testée 0.11.0) sur le Mac
-du daemon et active les URL Things dans les réglages de Things. Crée un domaine **Paseo**, récupère
-son identifiant avec `things --json areas`, puis enregistre dans `$PASEO_HOME/things-sync.json` :
-
-```json
-{ "binary": "/chemin/vers/things", "area": "identifiant-du-domaine" }
-```
-
-Pour ajouter une section à un projet existant depuis Paseo, signe le raccourci
-`mac/Paseo - Créer une section.shortcut` avec `shortcuts sign` et importe-le dans Raccourcis.
-Ajoute son identifiant (`shortcuts list --show-identifiers`) au réglage `headingShortcut`.
-macOS demande l’autorisation de transmettre le projet et le nom de section à Things.
-Recharge ensuite le plugin sur le daemon configuré.
-
-Le Mac écoute les changements de la base Things et la lit en lecture seule. Les écritures passent
-par Things. Une modification du contenu d’une checklist peut renouveler les identifiants Things
-de ses lignes. Paseo conserve leur correspondance et l’ordre local de chaque application.
-Sauvegarde `projects-todos.sqlite3` avec le profil de Paseo Dev qui contient le tableau.
+Things vérifie les créneaux et les versions des blocs à l’écriture. Le Coach
+conserve le même identifiant de demande en cas de réponse interrompue. Si
+Things signale un conflit, le Coach relit l’agenda et soumet un autre brouillon.

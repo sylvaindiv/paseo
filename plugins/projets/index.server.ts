@@ -1,59 +1,19 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { registerThings } from "./server/things-sync.js";
+import { registerCoach } from "./server/coach.js";
 import { registerTaskCapture } from "./server/task-capture.js";
-import { homedir } from "node:os";
-import path from "node:path";
-import { openProjectTodoStore } from "./server/project-todos.js";
-import {
-  batchLabel,
-  readProjectTodos,
-  readProjectsOverview,
-  writeProjectTodo,
-} from "./shared/project-todos.js";
+import { registerSequence } from "./server/sequence.js";
+
+import { registerSequenceTracking } from "./server/sequence-tracking.js";
 
 export default function contribute(server: PluginServerContext) {
-  const stopThings = registerThings(
-    server,
-    process.env.PASEO_HOME ?? path.join(homedir(), ".paseo"),
-  );
-  const stopCapture = registerTaskCapture(server);
-  let store: ReturnType<typeof openProjectTodoStore> | undefined;
-  function getStore() {
-    const home = process.env.PASEO_HOME ?? path.join(homedir(), ".paseo");
-    store ??= openProjectTodoStore(path.join(home, "projects-todos.sqlite3"));
-    return store;
-  }
-
-  server.handle(readProjectTodos, ({ projectKey }) => getStore().read(projectKey));
-  server.handle(readProjectsOverview, ({ projectKeys }) => getStore().readOverview(projectKeys));
-  server.handle(writeProjectTodo, ({ projectKey, change }) => {
-    const list = getStore().write(projectKey, change);
-    if (change.operation === "batch-reserve" || change.operation === "batch-observe") {
-      return {
-        ok: true as const,
-        batch: list.dispatch?.batches.find((batch) => batch.id === change.batchId),
-      };
-    }
-    return { ok: true as const };
-  });
-  const offStart = server.on("agent.turn_started", ({ agent, turnId }) => {
-    if (agent.labels[batchLabel] === agent.id)
-      getStore().observeAgent(agent.id, "running", turnId ?? undefined);
-  });
-  const offEnd = server.on("agent.turn_ended", ({ agent, turnId, outcome }) => {
-    if (agent.labels[batchLabel] === agent.id) {
-      getStore().observeAgent(
-        agent.id,
-        outcome.kind === "completed" ? "review" : "failed",
-        turnId ?? undefined,
-      );
-    }
-  });
+  const sequence = registerSequence(server);
+  const stopTracking = registerSequenceTracking(server);
+  const capture = registerTaskCapture(server);
+  const stopCoach = registerCoach(server, sequence.read, capture.open);
   return async () => {
-    await stopThings();
-    await stopCapture();
-    offStart();
-    offEnd();
-    store?.close();
+    await stopCoach();
+    await sequence.stop();
+    await capture.stop();
+    stopTracking();
   };
 }

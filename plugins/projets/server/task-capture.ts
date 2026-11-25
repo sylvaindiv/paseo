@@ -18,7 +18,12 @@ export function registerTaskCapture(server: PluginServerContext) {
     string,
     { agent: Promise<Agent>; expires: number; closing?: Promise<void> }
   >();
-  async function open(id: string, api: Api) {
+  async function open(
+    id: string,
+    api: Api,
+    title = "Ajout de tâches",
+    systemPrompt = captureInstructions,
+  ) {
     const config = await settings.read();
     if (config.status !== "ready") throw new Error("Profil d’ajout indisponible.");
     const { profileId } = config.values;
@@ -28,10 +33,7 @@ export function registerTaskCapture(server: PluginServerContext) {
       (profileId === captureProfile.id ? captureProfile : undefined);
     if (!profile || /^workflow/i.test(profile.name.trimStart()))
       throw new Error("Choisis un profil dans les réglages de Projets.");
-    const cwd = path.join(
-      process.env.PASEO_HOME ?? path.join(homedir(), ".paseo"),
-      "Ajout de tâches",
-    );
+    const cwd = path.join(process.env.PASEO_HOME ?? path.join(homedir(), ".paseo"), title);
     await mkdir(cwd, { recursive: true });
     const workspace = await api.workspaces.open(cwd);
     let model = profile.model?.trim();
@@ -44,16 +46,16 @@ export function registerTaskCapture(server: PluginServerContext) {
     return workspace.agents.create({
       agentId: id,
       idempotencyKey: id,
-      title: "Ajout de tâches",
+      title,
       launchProfileId: profile.id,
-      labels: { "projets.capture": id },
+      labels: { [title === "Coach" ? "projets.coach" : "projets.capture"]: id },
       config: {
         provider: profile.provider + "/" + model,
         modeId: "modeId" in profile ? profile.modeId : undefined,
         thinkingOptionId: profile.thinkingOptionId,
         featureValues: profile.featureValues,
         writePolicy: "read_only",
-        systemPrompt: captureInstructions,
+        systemPrompt,
       },
     });
   }
@@ -98,8 +100,11 @@ export function registerTaskCapture(server: PluginServerContext) {
     }
     return { ok: true };
   });
-  return async () => {
-    clearInterval(timer);
-    await Promise.allSettled([...sessions.keys()].map(close));
+  return {
+    open,
+    stop: async () => {
+      clearInterval(timer);
+      await Promise.allSettled([...sessions.keys()].map(close));
+    },
   };
 }

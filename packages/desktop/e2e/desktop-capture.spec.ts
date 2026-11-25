@@ -2,6 +2,7 @@ import path from "node:path";
 import { cp, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { test, expect, type Page } from "../../app/e2e/support/fixtures";
+import { sequenceAction, sequenceTracking } from "../../../plugins/projets/shared/sequence";
 import { installDesktopRuntime } from "./support/runtime";
 import { getE2EDaemonPort, daemonWsRoutePattern } from "../../app/e2e/support/helpers/daemon-port";
 
@@ -142,84 +143,31 @@ async function setupCapture(page: Page) {
   return { id, serverId };
 }
 
-async function readBoard(page: Page, serverId: string) {
-  return page.evaluate(async (host) => {
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const open = indexedDB.open("projets-dossiers", 1);
-      open.onsuccess = () => resolve(open.result);
-      open.addEventListener("error", () => reject(open.error));
-    });
-    try {
-      return await new Promise<{
-        items: Array<{
-          id: number;
-          project: number;
-          title: string;
-          note?: string;
-          images?: Array<{ name: string; size: number }>;
-        }>;
-        recordedCaptures?: Record<string, string>;
-      } | null>((resolve, reject) => {
-        if (!database.objectStoreNames.contains("boards")) {
-          reject(new Error("Projets board store not initialized"));
-          return;
-        }
-        const read = database.transaction("boards").objectStore("boards").get(host);
-        read.onsuccess = () => {
-          const board = read.result;
-          resolve(
-            board
-              ? {
-                  recordedCaptures: board.recordedCaptures,
-                  items: board.items.map(
-                    ({
-                      id,
-                      project,
-                      title,
-                      note,
-                      images,
-                    }: {
-                      id: number;
-                      project: number;
-                      title: string;
-                      note?: string;
-                      images?: Array<{ file: File }>;
-                    }) => ({
-                      id,
-                      project,
-                      title,
-                      note,
-                      images: images?.map(({ file }) => ({ name: file.name, size: file.size })),
-                    }),
-                  ),
-                }
-              : null,
-          );
-        };
-        read.addEventListener("error", () => reject(read.error));
-      });
-    } finally {
-      database.close();
-    }
-  }, serverId);
-}
-
-test.use({ e2eDaemonConfig: { version: 1, pluginsEnabled: true } });
-
-test("release opens a draft and saves one task after clarification and confirmation", async ({
-  page,
-  e2eWorkerClient,
-}, testInfo) => {
+async function copyCapturePlugin() {
   const repo = path.resolve(__dirname, "../../..");
   const fixtures = path.join(repo, ".dev");
   await mkdir(fixtures, { recursive: true });
   const source = await mkdtemp(path.join(fixtures, "projets-capture-e2e-"));
-  try {
-    await cp(path.join(repo, "plugins/projets"), source, { recursive: true });
-    await copyFile(
-      path.join(__dirname, "support/projets-capture.server.mjs"),
-      path.join(source, "index.server.ts"),
+  await cp(path.join(repo, "plugins/projets"), source, { recursive: true });
+  await copyFile(
+    path.join(__dirname, "support/projets-capture.server.mjs"),
+    path.join(source, "index.server.ts"),
+  );
+  return source;
+}
+
+test.use({ e2eDaemonConfig: { version: 1, pluginsEnabled: true } });
+
+test("release opens a draft and saves tasks once after an interrupted confirmation", async ({
+  page,
+  e2eWorkerClient,
+}, testInfo) => {
+  const source = await copyCapturePlugin();
+  const invoke = async (input: Parameters<typeof sequenceAction.input.parse>[0]) =>
+    sequenceAction.output.parse(
+      await e2eWorkerClient.invokePluginRpc("projets", sequenceAction.name, input),
     );
+  try {
     await e2eWorkerClient.installPluginSource({ source });
     const { id, serverId } = await setupCapture(page);
     const editor = page.getByRole("textbox", { name: "Message", exact: true });
@@ -229,7 +177,7 @@ test("release opens a draft and saves one task after clarification and confirmat
     await expect(editor).toHaveValue(message);
     await expect(send).toBeEnabled();
     await expect(page.getByRole("img", { name: "Capture.png" })).toBeVisible();
-    expect(await readBoard(page, serverId)).toBeNull();
+    expect((await invoke({ action: "read" })).sequence?.rows).toEqual([]);
     expect((await e2eWorkerClient.fetchAgents({ scope: "active" })).entries).toHaveLength(0);
 
     await e2eWorkerClient.disablePlugin("projets");
@@ -240,7 +188,7 @@ test("release opens a draft and saves one task after clarification and confirmat
     await send.click();
     await expect(page.getByText("Quel projet ?", { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(editor).toHaveValue(message);
-    expect(await readBoard(page, serverId)).toBeNull();
+    expect((await invoke({ action: "read" })).sequence?.rows).toEqual([]);
 
     await editor.fill(
       "Ajouter une tâche de vérification du bouton Ajouter. J’ai vu ce souci sur CVC Detailing.",
@@ -251,28 +199,117 @@ test("release opens a draft and saves one task after clarification and confirmat
     await expect(page.getByRole("img", { name: "Capture.png" })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("capture-brouillon.png") });
     await send.dblclick();
+    await expect(page.getByRole("alert")).toContainText("Réponse perdue.");
+    await expect(editor).toHaveValue(/Ajouter une tâche/);
+    const beforeRetry = await invoke({ action: "capture", id });
+    expect(beforeRetry.receipt?.ids).toHaveLength(2);
+    await page.getByRole("button", { name: "Réessayer", exact: true }).click();
     await expect(page.getByText(/Enregistré.*Nature et Création/s)).toBeVisible({
       timeout: 15_000,
     });
-    const board = await readBoard(page, serverId);
-    const added = board?.items.filter((task) =>
-      task.images?.some(({ name }) => name === "Capture.png"),
-    );
-    expect(added).toHaveLength(1);
-    expect(added?.[0]).toMatchObject({
-      project: 1,
-      note: "Bouton inactif",
-      images: [{ name: "Capture.png", size: expect.any(Number) }],
-    });
-    expect(added![0].images![0].size).toBeGreaterThan(0);
-    expect(board?.recordedCaptures?.[id]).toContain(projectName);
+    const board = (await invoke({ action: "read" })).sequence;
+    expect(board?.rows).toHaveLength(2);
+    expect(board?.rows.map((row) => row.id)).toEqual(beforeRetry.receipt?.ids);
+    expect(board?.rows[0]).toMatchObject({ parent: "project-1", notes: "Bouton inactif" });
+    expect(board?.rows[1]?.checklist[0]?.title).toBe("Relire");
+    const image = board?.rows[0]?.images[0];
+    expect(image).toBeDefined();
+    expect((await invoke({ action: "image", id: image })).image?.length).toBeGreaterThan(0);
     await page.screenshot({ path: testInfo.outputPath("capture-enregistree.png") });
 
     await page.reload();
     await expect(page.getByText(/Enregistré.*Nature et Création/s)).toBeVisible();
-    expect(await readBoard(page, serverId)).toEqual(board);
+    expect((await invoke({ action: "read" })).sequence).toEqual(board);
     const agents = await e2eWorkerClient.fetchAgents({ scope: "active" });
     expect(agents.entries.every(({ agent }) => agent.title === "Ajout de tâches")).toBe(true);
+
+    await e2eWorkerClient.patchDaemonConfig({
+      agentProfiles: [
+        { id: "sequence-test", name: "Séquence test", provider: "capture-test", model: "fixture" },
+      ],
+    });
+    const taskId = beforeRetry.receipt!.ids[0]!;
+    await page.goto(`/h/${serverId}/plugin/projets/surface/main`);
+    const openTask = page.getByRole("button", { name: "Vérifier le bouton Ajouter", exact: true });
+    const details = page.getByRole("dialog");
+    await openTask.click();
+    await details.getByRole("button", { name: "Confier à un agent", exact: true }).click();
+    await expect(details.getByRole("button", { name: "Projet Paseo: Associer…" })).toBeVisible();
+    await expect(details.getByRole("button", { name: "Envoyer", exact: true })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(details).toBeHidden();
+    const openProject = page.getByRole("button", { name: projectName, exact: true });
+    await openProject.click();
+    await expect(details).toBeVisible();
+    await page.mouse.click(8, 8);
+    await expect(details).toBeHidden();
+    await openProject.click();
+    const projectPicker = details.getByRole("button", { name: "Projet Paseo: Associer…" });
+    await projectPicker.click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menuitem", { name: "Ajout de tâches", exact: true })).toBeHidden();
+    await expect(details).toBeVisible();
+    await projectPicker.click();
+    await page.getByRole("menuitem", { name: "Ajout de tâches", exact: true }).click();
+    await expect(
+      details.getByRole("button", { name: "Projet Paseo: Ajout de tâches" }),
+    ).toBeVisible();
+    await page.reload();
+    await openTask.click();
+    await details.getByRole("button", { name: "Confier à un agent", exact: true }).click();
+    const sendTask = details.getByRole("button", { name: "Envoyer", exact: true });
+    await expect(sendTask).toBeDisabled();
+    await details.getByRole("button", { name: "Espace: Choisir…" }).click();
+    const workspaces = await e2eWorkerClient.fetchWorkspaces();
+    const destination = workspaces.entries.find(
+      (entry) =>
+        entry.workspaceDirectory === path.join(process.env.E2E_PASEO_HOME!, "Ajout de tâches"),
+    )!;
+    await page.getByRole("menuitem", { name: destination.name, exact: true }).click();
+    await expect(sendTask).toBeDisabled();
+    await details.getByRole("button", { name: "Profil: Choisir…" }).click();
+    await page.getByRole("menuitem", { name: "Séquence test", exact: true }).click();
+    await sendTask.click();
+    await expect(details.getByText("Agent en cours", { exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    const today = page.locator(".sequenceToday").filter({ has: openTask });
+    const runningAgent = today.getByRole("button", { name: "Agent en cours · Ouvrir l’agent" });
+    await expect(runningAgent).toBeVisible();
+    const indicator = runningAgent.locator("span").first();
+    await expect(indicator).toHaveCSS("animation-name", "sequence-agent-spin");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(indicator).toHaveCSS("animation-name", "none");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await today.screenshot({ path: testInfo.outputPath("agent-en-cours.png") });
+    await runningAgent.click();
+    await expect(page).toHaveURL(new RegExp("/workspace/" + destination.id));
+    await expect(
+      page.getByText("Projet · Nature et Création", { exact: false }).first(),
+    ).toBeVisible();
+    await e2eWorkerClient.invokePluginRpc("projets", "fixture.finish-dispatch", {});
+    await page.goto(`/h/${serverId}/plugin/projets/surface/main`);
+    await openTask.click();
+    await expect(details.getByText("À vérifier", { exact: true })).toBeVisible();
+    const tracking = sequenceTracking.output.parse(
+      await e2eWorkerClient.invokePluginRpc("projets", sequenceTracking.name, {
+        action: "read",
+        task: taskId,
+      }),
+    );
+    expect(tracking).toMatchObject({
+      taskIds: [taskId],
+      state: "review",
+      destination: { workspaceId: destination.id },
+    });
+    expect(tracking?.id).toBeTruthy();
+    await page.keyboard.press("Escape");
+    await expect(runningAgent).toBeHidden();
+    await page.reload();
+    await openTask.click();
+    await expect(details.getByText("À vérifier", { exact: true })).toBeVisible();
+    await expect(
+      details.getByRole("button", { name: "Ouvrir l’agent", exact: true }),
+    ).toBeVisible();
   } finally {
     await page.close();
     await e2eWorkerClient.removePlugin("projets");
@@ -289,10 +326,9 @@ test("Escape cancels the hold and the manual plus starts empty", async ({
   page,
   e2eWorkerClient,
 }) => {
-  await e2eWorkerClient.installPluginSource({
-    source: path.resolve(__dirname, "../../../plugins/projets"),
-  });
+  const source = await copyCapturePlugin();
   try {
+    await e2eWorkerClient.installPluginSource({ source });
     const { serverId } = await setupCapture(page);
     await page.evaluate(() => Reflect.get(window, "captureHold")("cancelled"));
     await expect(page.getByText("Prêt à capturer", { exact: true })).toBeVisible();
@@ -305,8 +341,13 @@ test("Escape cancels the hold and the manual plus starts empty", async ({
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("");
     await expect(page.getByRole("button", { name: "Envoyer", exact: true })).toBeDisabled();
     await expect(page.getByRole("img", { name: "Capture.png" })).toBeHidden();
+    const board = sequenceAction.output.parse(
+      await e2eWorkerClient.invokePluginRpc("projets", sequenceAction.name, { action: "read" }),
+    );
+    expect(board.sequence?.rows).toEqual([]);
   } finally {
     await page.close();
     await e2eWorkerClient.removePlugin("projets");
+    await rm(source, { recursive: true, force: true });
   }
 });
