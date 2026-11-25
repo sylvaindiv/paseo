@@ -1,3 +1,5 @@
+import { getBrowserRecord } from "@/desktop/browser/store";
+import { parseServicePreviewUrl } from "@getpaseo/protocol/service-preview";
 import { useAgentBrowser } from "./use-agent-browser";
 import { isAgentBrowserTab, selectClassicBrowser } from "@/workspace-tabs/agent-browser";
 import { WorkspaceTodosHost, WorkspaceTodosButton } from "@/workspace-todos";
@@ -2703,7 +2705,11 @@ function WorkspaceScreenContent({
         workspaceLayout: useWorkspaceLayoutStore.getState().layoutByWorkspace[persistenceKey],
       });
       if (!source) return;
+      const preview = getBrowserRecord(request.sourceBrowserId)?.servicePreview;
+      const loopback = parseServicePreviewUrl(request.url);
+      if (preview && loopback && loopback.origin !== preview.origin) return;
       openManualBrowser({
+        ...(preview && loopback ? { servicePreview: preview } : {}),
         workspaceKey: persistenceKey,
         url: request.url,
         ...(request.url === "about:blank" ? { state: { browserAddressFocusPending: true } } : {}),

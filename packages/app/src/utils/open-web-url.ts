@@ -1,3 +1,5 @@
+import { parseServicePreviewUrl } from "@getpaseo/protocol/service-preview";
+import { getDesktopDaemonStatus } from "@/desktop/daemon/desktop-daemon";
 import { getIsElectron, isWeb } from "@/constants/platform";
 import { parseHostWorkspaceRouteFromPathname } from "@/utils/host-routes";
 import { isHttpUrl } from "@/utils/http-url";
@@ -22,8 +24,19 @@ export async function openWebUrl(url: string, event?: WebUrlClick): Promise<void
   if (isWeb && getIsElectron() && !isSystemBrowserClick(event)) {
     const workspace = parseHostWorkspaceRouteFromPathname(window.location.pathname);
     const workspaceKey = workspace && buildWorkspaceTabPersistenceKey(workspace);
-    if (workspaceKey) {
-      const result = openWorkspaceBrowser({ workspaceKey, url, intent: "reveal" });
+    if (workspace && workspaceKey) {
+      const localUrl = parseServicePreviewUrl(url);
+      const status = localUrl ? await getDesktopDaemonStatus().catch(() => null) : null;
+      const servicePreview =
+        localUrl && status?.serverId !== workspace.serverId
+          ? { ...workspace, origin: localUrl.origin }
+          : null;
+      const result = openWorkspaceBrowser({
+        workspaceKey,
+        url,
+        intent: "reveal",
+        ...(servicePreview ? { servicePreview } : {}),
+      });
       if (!result.ok) throw new Error(`Unable to open workspace browser: ${result.code}`);
       return;
     }

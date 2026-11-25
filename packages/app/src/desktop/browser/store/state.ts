@@ -6,7 +6,14 @@ export type BrowserViewport =
 
 export const RESPONSIVE_BROWSER_VIEWPORT: BrowserViewport = { mode: "responsive" };
 
+export interface ServicePreviewTarget {
+  origin: string;
+  serverId: string;
+  workspaceId: string;
+}
+
 export interface BrowserRecord {
+  servicePreview?: ServicePreviewTarget;
   browserId: string;
   url: string;
   title: string;
@@ -20,7 +27,9 @@ export interface BrowserRecord {
   suspended?: boolean;
 }
 
-export type BrowserRecordPatch = Partial<Omit<BrowserRecord, "browserId" | "createdAt">>;
+export type BrowserRecordPatch = Partial<
+  Omit<BrowserRecord, "browserId" | "createdAt" | "servicePreview">
+>;
 
 export interface BrowserIndexState {
   browsersById: Record<string, BrowserRecord>;
@@ -36,6 +45,9 @@ const BrowserViewportSchema = z.discriminatedUnion("mode", [
 ]);
 
 const BrowserRecordSchema = z.strictObject({
+  servicePreview: z
+    .strictObject({ origin: z.string(), serverId: z.string(), workspaceId: z.string() })
+    .optional(),
   browserId: z.string(),
   url: z.string(),
   title: z.string(),
@@ -110,6 +122,7 @@ export function createBrowserRecord(input: {
   browserId: string;
   initialUrl: string | null | undefined;
   now: number;
+  servicePreview?: ServicePreviewTarget;
 }): BrowserRecord {
   return {
     browserId: input.browserId,
@@ -122,6 +135,7 @@ export function createBrowserRecord(input: {
     lastError: null,
     viewport: RESPONSIVE_BROWSER_VIEWPORT,
     createdAt: input.now,
+    ...(input.servicePreview ? { servicePreview: input.servicePreview } : {}),
   };
 }
 

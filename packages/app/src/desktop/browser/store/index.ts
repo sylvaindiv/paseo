@@ -1,3 +1,4 @@
+import type { ServicePreviewTarget } from "./state";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BrowserAutomationBrowserIdSchema } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
@@ -29,9 +30,15 @@ export {
 interface BrowserStoreState extends BrowserIndexState {
   lastClosedByWorkspace: Record<
     string,
-    { url: string; viewport: BrowserViewport; paneId: string | null; state?: JsonValue }
+    {
+      url: string;
+      viewport: BrowserViewport;
+      paneId: string | null;
+      state?: JsonValue;
+      servicePreview?: ServicePreviewTarget;
+    }
   >;
-  createBrowser: (input?: { initialUrl?: string }) => string;
+  createBrowser: (input?: { initialUrl?: string; servicePreview?: ServicePreviewTarget }) => string;
   updateBrowser: (browserId: string, patch: BrowserRecordPatch) => void;
   setBrowserViewport: (browserId: string, viewport: BrowserViewport) => void;
   removeBrowser: (browserId: string) => void;
@@ -58,6 +65,7 @@ export const useBrowserStore = create<BrowserStoreState>()(
         const record = createBrowserRecord({
           browserId,
           initialUrl: input?.initialUrl,
+          servicePreview: input?.servicePreview,
           now: Date.now(),
         });
 
@@ -100,7 +108,10 @@ export function getBrowserRecord(browserId: string): BrowserRecord | null {
   return useBrowserStore.getState().browsersById[normalizedBrowserId] ?? null;
 }
 
-export function createWorkspaceBrowser(input?: { initialUrl?: string }): {
+export function createWorkspaceBrowser(input?: {
+  initialUrl?: string;
+  servicePreview?: ServicePreviewTarget;
+}): {
   browserId: string;
   url: string;
 } {

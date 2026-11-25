@@ -176,6 +176,17 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
       ipcRenderer.invoke("paseo:menu:set-capturing-shortcut", capturing),
   },
   browser: {
+    servicePreview: {
+      open: (browserId: string, origin: string) =>
+        ipcRenderer.invoke("paseo:preview:open", browserId, origin),
+      close: (browserId: string) => ipcRenderer.invoke("paseo:preview:close", browserId),
+      onExchange: (handler: (input: unknown) => void) => {
+        const listener = (_event: unknown, input: unknown) => handler(input);
+        ipcRenderer.on("paseo:preview:exchange", listener);
+        return () => ipcRenderer.removeListener("paseo:preview:exchange", listener);
+      },
+      reply: (id: string, result: unknown) => ipcRenderer.send("paseo:preview:reply", id, result),
+    },
     onDiscarded: (listener: (payload: { browserId: string; url: string }) => void) => {
       const handler = (_event: unknown, payload: { browserId: string; url: string }) =>
         listener(payload);

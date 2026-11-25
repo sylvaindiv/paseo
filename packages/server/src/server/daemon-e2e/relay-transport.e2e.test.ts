@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
+import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
+import { DaemonClient } from "../test-utils/daemon-client.js";
 import pino from "pino";
 import { Writable } from "node:stream";
 import net from "node:net";
@@ -21,6 +24,11 @@ import {
 import { buildRelayWebSocketUrl } from "@getpaseo/protocol/daemon-endpoints";
 import { ConnectionOfferSchema } from "@getpaseo/protocol/connection-offer";
 import { WSOutboundMessageSchema } from "@getpaseo/protocol/messages";
+
+function echoPreviewFrame(socket: WebSocket) {
+  socket.on("message", (data) => socket.send(data.toString()));
+  socket.send("ready");
+}
 
 const nodeMajor = Number((process.versions.node ?? "0").split(".")[0] ?? "0");
 const shouldRunRelayE2e = process.env.FORCE_RELAY_E2E === "1" || nodeMajor < 25;
@@ -240,6 +248,119 @@ async function waitForCapturedLog(
     relayProcess.kill("SIGTERM");
     relayProcess = null;
   };
+
+  test("private previews carry HTTP and WebSockets and reopen after relay reconnect", async () => {
+    await startRelay({ useLocalRelay: true });
+    const endpoint = `127.0.0.1:${relayPort}`;
+    const daemon = await createTestPaseoDaemon({
+      listen: "127.0.0.1",
+      relayEnabled: true,
+      relayEndpoint: endpoint,
+      relayUseTls: false,
+    });
+    const service = createServer((req, res) => res.end(`mini:${req.url}`));
+    const hmr = new WebSocketServer({ server: service });
+    hmr.on("connection", echoPreviewFrame);
+    const clients: DaemonClient[] = [];
+    try {
+      await new Promise<void>((resolve) => service.listen(0, "127.0.0.1", resolve));
+      const address = service.address();
+      if (!address || typeof address === "string")
+        throw new Error("Preview test service unavailable");
+      const { serverId, daemonPublicKeyB64 } = decodeOfferFromFragmentUrl(
+        await getPairingOfferUrl({
+          paseoHome: daemon.paseoHome,
+          relayEnabled: true,
+          relayEndpoint: endpoint,
+        }),
+      );
+      async function connect(clientId: string) {
+        const client = new DaemonClient({
+          clientId,
+          url: buildRelayWebSocketUrl({ endpoint, useTls: false, serverId, role: "client" }),
+          e2ee: { enabled: true, daemonPublicKeyB64 },
+          reconnect: { enabled: false },
+        });
+        clients.push(client);
+        await client.connect();
+        return client;
+      }
+      const first = await connect("preview-client");
+      const second = await connect("preview-other-client");
+      expect(first.getLastServerInfoMessage()?.features?.privateServicePreview).toBe(true);
+      const workspace = await first.createWorkspace({
+        source: { kind: "directory", path: daemon.paseoHome },
+      });
+      expect(workspace.workspace).toBeTruthy();
+      const previewId = randomUUID();
+      const socketId = randomUUID();
+      const open = {
+        kind: "open",
+        origin: `http://localhost:${address.port}`,
+        workspaceId: workspace.workspace!.id,
+      } as const;
+      const get = { kind: "http" as const, method: "GET", path: "/app?a=1", headers: [], body: "" };
+      const exchange = (
+        client: DaemonClient,
+        operation: Parameters<DaemonClient["exchangeServicePreview"]>[1],
+      ) => client.exchangeServicePreview(previewId, operation);
+      expect(await exchange(first, { ...open, origin: "http://192.0.2.7" })).toMatchObject({
+        kind: "error",
+      });
+      expect(await exchange(first, open)).toEqual({ kind: "ok" });
+      expect(await exchange(second, get)).toEqual({
+        kind: "error",
+        code: "expired",
+      });
+      expect(await exchange(first, { ...get, path: "//other.test/" })).toMatchObject({
+        kind: "error",
+      });
+      expect(await exchange(first, get)).toMatchObject({
+        kind: "http",
+        status: 200,
+        body: Buffer.from("mini:/app?a=1").toString("base64"),
+      });
+      expect(
+        await exchange(first, {
+          kind: "ws-open",
+          socketId,
+          protocols: ["vite-hmr"],
+          headers: [],
+          path: "/hmr",
+        }),
+      ).toEqual({ kind: "ws-open", protocol: "vite-hmr" });
+      expect(await exchange(first, { kind: "ws-read", socketId })).toMatchObject({
+        kind: "ws-read",
+        frames: [{ binary: false, data: Buffer.from("ready").toString("base64") }],
+      });
+      const frame = { binary: false, data: Buffer.from("reload").toString("base64") };
+      expect(await exchange(first, { kind: "ws-send", socketId, frame })).toEqual({ kind: "ok" });
+      expect(await exchange(first, { kind: "ws-read", socketId })).toMatchObject({
+        frames: [frame],
+      });
+      await first.close();
+      const reconnected = await connect("preview-client");
+      expect(await exchange(reconnected, get)).toEqual({
+        kind: "error",
+        code: "expired",
+      });
+      expect(await exchange(reconnected, open)).toEqual({ kind: "ok" });
+      expect(await exchange(reconnected, get)).toMatchObject({ kind: "http", status: 200 });
+      for (const socket of hmr.clients) socket.terminate();
+      await new Promise<void>((resolve) => service.close(() => resolve()));
+      expect(await exchange(reconnected, get)).toEqual({
+        kind: "error",
+        code: "unavailable",
+      });
+    } finally {
+      await Promise.allSettled(clients.map((client) => client.close()));
+      for (const socket of hmr.clients) socket.terminate();
+      hmr.close();
+      service.close();
+      await daemon.close();
+      await stopRelay();
+    }
+  }, 75_000);
 
   test("daemon connects to relay and client ping/pong works through relay", async () => {
     process.env.PASEO_PRIMARY_LAN_IP = "192.168.1.12";

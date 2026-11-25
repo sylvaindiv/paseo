@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/constants/platform", () => ({ isWeb: true, getIsElectron: () => true }));
 vi.mock("@/workspace-tabs/browser", () => ({ openWorkspaceBrowser: vi.fn(() => ({ ok: true })) }));
 vi.mock("@/utils/open-external-url", () => ({ openExternalUrl: vi.fn(async () => {}) }));
+vi.mock("@/desktop/daemon/desktop-daemon", () => ({
+  getDesktopDaemonStatus: async () => ({ serverId: "macbook" }),
+}));
 import { openWorkspaceBrowser } from "@/workspace-tabs/browser";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { openWebUrl } from "./open-web-url";
@@ -22,6 +25,22 @@ describe("workspace web link routing", () => {
       intent: "reveal",
     });
     expect(openExternalUrl).not.toHaveBeenCalled();
+  });
+  it.each([
+    {
+      host: "mini",
+      preview: { serverId: "mini", workspaceId: "work", origin: "http://localhost:5173" },
+    },
+    { host: "macbook", preview: null },
+  ])("keeps the localhost destination tied to $host", async ({ host, preview }) => {
+    window.location.pathname = `/h/${host}/workspace/work`;
+    await openWebUrl("http://localhost:5173/app");
+    expect(openWorkspaceBrowser).toHaveBeenCalledWith({
+      workspaceKey: `${host}:work`,
+      url: "http://localhost:5173/app",
+      intent: "reveal",
+      ...(preview ? { servicePreview: preview } : {}),
+    });
   });
   it.each([{ metaKey: true }, { nativeEvent: { metaKey: true } }])(
     "captures Command from the click",

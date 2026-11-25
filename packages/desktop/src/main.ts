@@ -1,3 +1,10 @@
+import {
+  getServicePreviewSession,
+  isServicePreviewGuest,
+  isServicePreviewPartition,
+  registerServicePreviewIpc,
+} from "./features/service-preview.js";
+import { isAllowedBrowserWebviewUrl } from "./features/browser-webviews/window-open.js";
 import { registerDesktopCapture } from "./features/desktop-capture/index.js";
 import { CometProfileImporter } from "./features/browser-profile-import/index.js";
 import { registerAgentWidget } from "./features/agent-widget/index.js";
@@ -281,21 +288,22 @@ function installBrowserWindowOpenHandler(input: {
     if (decision.kind === "deny") {
       return { action: "deny" };
     }
-    if (decision.kind === "popup") {
+    const sourceBrowserId = getPaseoBrowserIdForWebContents(sourceContents);
+    if (decision.kind === "popup" && !isServicePreviewGuest(sourceContents)) {
       return {
         action: "allow",
         overrideBrowserWindowOptions: getBrowserPopupWindowOptions(mainWindow),
       };
     }
 
-    const sourceBrowserId = getPaseoBrowserIdForWebContents(sourceContents);
+    const targetUrl = decision.kind === "workspace-tab" ? decision.url : url;
     if (sourceBrowserId) {
       mainWindow.webContents.send(BROWSER_NEW_TAB_REQUEST_EVENT, {
         sourceBrowserId,
-        url: decision.url,
+        url: targetUrl,
       });
     } else {
-      pendingBrowserWindowOpenRequests.add(sourceContents.id, decision.url);
+      pendingBrowserWindowOpenRequests.add(sourceContents.id, targetUrl);
     }
     return { action: "deny" };
   });
@@ -417,7 +425,9 @@ ipcMain.handle("paseo:browser:register-attached", (event, rawInput: unknown) => 
   const registered = registerAttachedPaseoBrowser({
     ...input,
     sender: event.sender,
-    profileSession: getPaseoBrowserProfileSession(session),
+    profileSession:
+      getServicePreviewSession(event.sender, input.browserId) ??
+      getPaseoBrowserProfileSession(session),
     findWebContents: (webContentsId) => webContents.fromId(webContentsId) ?? null,
   });
   if (!registered) {
@@ -817,7 +827,13 @@ async function createWindow(
   setupDefaultContextMenu(mainWindow);
   setupDragDropPrevention(mainWindow);
   mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
-    if (!isPaseoBrowserWebviewAttach(params)) {
+    if (
+      !isPaseoBrowserWebviewAttach(params) &&
+      !(
+        isAllowedBrowserWebviewUrl(params.src) &&
+        isServicePreviewPartition(params.partition, mainWindow.webContents)
+      )
+    ) {
       event.preventDefault();
       return;
     }
@@ -1089,6 +1105,7 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("paseo:opener:openDirectory", (_event, value: unknown) => openDirectory(value));
   registerEditorTargetHandlers();
   registerBrowserAutomationIpc();
+  registerServicePreviewIpc((owner) => browserProfileHosts.has(owner.id));
 
   // In-app "Open in new window": opens a window that lands on the given project
   // via the same open-project flow as a CLI launch (no move, no ownership).

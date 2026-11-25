@@ -1,3 +1,4 @@
+import type { PreviewOperation, PreviewResult } from "@getpaseo/protocol/messages";
 import type { DesktopExecuteResponse } from "@getpaseo/protocol/desktop-capture";
 import type { WorkspaceTodoMutation } from "@getpaseo/protocol/workspace-todos";
 import { legacyUsageIcon } from "./legacy-usage-icons.js";
@@ -6442,6 +6443,22 @@ export class DaemonClient {
 
   private createRequestId(requestId?: string): string {
     return requestId ?? crypto.randomUUID();
+  }
+
+  async exchangeServicePreview(
+    previewId: string,
+    operation: PreviewOperation,
+  ): Promise<PreviewResult> {
+    if (!this.isConnected) return { kind: "error", code: "expired" };
+    const requestId = this.createRequestId();
+    const response = await this.sendCorrelatedRequest({
+      requestId,
+      message: { type: "preview.service.exchange.request", requestId, previewId, operation },
+      responseType: "preview.service.exchange.response",
+      timeout: 25_000,
+      options: { skipQueue: true },
+    });
+    return response.result;
   }
 
   getLastServerInfoMessage(): ServerInfoStatusPayload | null {

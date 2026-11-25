@@ -1,3 +1,4 @@
+import type { ServicePreviewTarget } from "@/desktop/browser/store/state";
 import { getDesktopHost, type DesktopBrowserBridge } from "@/desktop/host";
 import {
   readResidentBrowserUrl,
@@ -30,6 +31,7 @@ export interface OpenWorkspaceBrowserInput {
   url?: string;
   viewport?: BrowserViewport;
   browserId?: string;
+  servicePreview?: ServicePreviewTarget;
   intent: "reveal" | "background";
   placement?: WorkspaceTabPlacement;
   insertionPosition?: WorkspaceTabInsertionPosition;
@@ -157,7 +159,10 @@ export function openWorkspaceBrowser(input: OpenWorkspaceBrowserInput): OpenWork
     explorerPaneId: store.explorerSidebarPaneIdByWorkspace[workspaceKey] ?? "explorer",
   });
   if (!placement) return { ok: false, code: "placement_unavailable" };
-  const browserId = input.browserId ?? createWorkspaceBrowser({ initialUrl: input.url }).browserId;
+  const browserId =
+    input.browserId ??
+    createWorkspaceBrowser({ initialUrl: input.url, servicePreview: input.servicePreview })
+      .browserId;
   if (!hasBrowserId && input.viewport)
     useBrowserStore.getState().setBrowserViewport(browserId, input.viewport);
   let tabId: string | null;
@@ -223,6 +228,7 @@ export async function closeWorkspaceBrowser(
         [input.workspaceKey]: {
           url: readResidentBrowserUrl(input.browserId) ?? record.url,
           viewport: record.viewport,
+          servicePreview: record.servicePreview,
           paneId: findPaneContainingTab(layout.root, tab.tabId)?.id ?? null,
           state: tab.state,
         },
@@ -256,6 +262,7 @@ export function reopenLastWorkspaceBrowser(workspaceKey: string): OpenWorkspaceB
     workspaceKey,
     url: descriptor.url,
     viewport: descriptor.viewport,
+    servicePreview: descriptor.servicePreview,
     intent: "reveal",
     state: descriptor.state,
     ...(paneId ? { placement: { mode: "pane", paneId } } : {}),

@@ -1,3 +1,4 @@
+import { ServicePreviewSession } from "./session/service-preview.js";
 import { DaemonBusyError } from "./lifecycle-reasons.js";
 import { AgentBrowserError, agentBrowserDashboardsForHome } from "./agent-browser.js";
 import type { DesktopToolsBroker } from "./desktop-tools/broker.js";
@@ -1238,6 +1239,8 @@ export class Session {
     }
   }
 
+  private readonly servicePreviews = new ServicePreviewSession();
+
   updateClientCapabilities(
     capabilities: Record<string, unknown> | null,
     source?: object,
@@ -1246,6 +1249,7 @@ export class Session {
     this.clientCapabilities = parseClientCapabilities(capabilities);
     if (source) {
       this.delivery.attach(source, capabilities?.[CLIENT_CAPS.ownedSubscriptions] === true);
+      this.servicePreviews.attach(source);
       this.clientSources.set(source, {
         capabilities: this.clientCapabilities,
         appVersion,
@@ -1277,6 +1281,7 @@ export class Session {
   }
 
   clearAgentTimelineSubscription(source: object): void {
+    this.servicePreviews.detach(source);
     void this.delivery
       .detach(source)
       .catch((err) => this.sessionLogger.error({ err }, "Failed to release source subscriptions"));
@@ -2204,6 +2209,12 @@ export class Session {
 
   public setPermissions(permissions: readonly DaemonPermission[]): void {
     this.authorization.replacePermissions(permissions);
+    if (!this.allowsPermission("daemon.manage") || !this.allowsPermission("workspace.write")) {
+      for (const source of this.clientSources.keys()) {
+        this.servicePreviews.detach(source);
+        this.servicePreviews.attach(source);
+      }
+    }
     this.revokeDesktopHosting();
     if (!this.authorization.allowsPermission("workspace.write")) {
       void this.delivery
@@ -3154,11 +3165,43 @@ export class Session {
     }
   }
 
+  private async handleServicePreview(
+    msg: Extract<SessionInboundMessage, { type: "preview.service.exchange.request" }>,
+    source?: object,
+  ): Promise<void> {
+    if (!source) return;
+    const allowed = this.allowsPermission("daemon.manage");
+    const workspaceExists =
+      allowed &&
+      (msg.operation.kind !== "open" ||
+        (await this.workspaceRegistry.get(msg.operation.workspaceId)));
+    const result =
+      workspaceExists &&
+      this.allowsPermission("daemon.manage") &&
+      this.allowsPermission("workspace.write")
+        ? await this.servicePreviews.exchange(source, msg.previewId, msg.operation)
+        : ({ kind: "error", code: "denied" } as const);
+    this.emitForSource(
+      {
+        type: "preview.service.exchange.response",
+        payload: {
+          requestId: msg.requestId,
+          result: this.allowsPermission("daemon.manage")
+            ? result
+            : { kind: "error", code: "denied" },
+        },
+      },
+      source,
+    );
+  }
+
   private dispatchWorkspaceFileMessage(
     msg: SessionInboundMessage,
     source?: object,
   ): Promise<void> | undefined {
     switch (msg.type) {
+      case "preview.service.exchange.request":
+        return this.handleServicePreview(msg, source);
       case "file_explorer_request":
         return this.workspaceFilesSession.handleFileExplorerRequest(msg, source);
       case "fs.file.subscribe.request":
@@ -9037,6 +9080,7 @@ export class Session {
   public async cleanup(): Promise<void> {
     this.sessionLogger.trace({}, "agent.session.lifecycle.cleanup");
     this.isCleanedUp = true;
+    this.servicePreviews.close();
     this.agentManager.setTimelineReaders(this, []);
     await this.delivery.close();
 

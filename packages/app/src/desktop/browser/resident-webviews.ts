@@ -375,6 +375,7 @@ export function prepareBrowserWebview(
     browserId: string;
     workspaceId: string;
     initialUrl?: string | null;
+    previewPartition?: string;
     profileHost?: BrowserWebviewProfileHost;
   },
 ): void {
@@ -387,7 +388,7 @@ export function prepareBrowserWebview(
     registered: false,
   });
   webview.setAttribute(BROWSER_ID_ATTRIBUTE, input.browserId);
-  webview.setAttribute("partition", browser.profilePartition);
+  webview.setAttribute("partition", input.previewPartition ?? browser.profilePartition);
   webview.setAttribute("allowpopups", "true");
   webview.setAttribute("spellcheck", "false");
   webview.setAttribute("autosize", "on");
@@ -428,6 +429,7 @@ export function ensureResidentBrowserWebview(input: {
     return existing;
   }
 
+  if (useBrowserStore.getState().browsersById[browserId]?.servicePreview) return null;
   const webview = ownerDocument.createElement("webview") as BrowserWebviewElement;
   prepareBrowserWebview(webview, {
     browserId,

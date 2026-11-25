@@ -1,3 +1,4 @@
+import { useServicePreviewPartition } from "../service-preview.electron";
 import {
   useCallback,
   useEffect,
@@ -601,6 +602,7 @@ export function BrowserPane({
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const browser = useBrowserStore((state) => state.browsersById[browserId] ?? null);
+  const previewPartition = useServicePreviewPartition(browserId, browser?.servicePreview);
   const updateBrowser = useBrowserStore((state) => state.updateBrowser);
   const setBrowserViewport = useBrowserStore((state) => state.setBrowserViewport);
   const browserViewport = browser?.viewport ?? RESPONSIVE_BROWSER_VIEWPORT;
@@ -733,10 +735,12 @@ export function BrowserPane({
     }
   }, []);
 
+  const canAttachBrowser =
+    isElectronRuntime() &&
+    (!browser?.servicePreview || Boolean(previewPartition)) &&
+    (!browser?.suspended || isPresented);
   useEffect(() => {
-    if (!isElectronRuntime() || (browser?.suspended && !isPresented)) {
-      return;
-    }
+    if (!canAttachBrowser) return;
 
     const host = webviewHostRef.current;
     const clip = webviewClipRef.current;
@@ -758,6 +762,7 @@ export function BrowserPane({
       prepareBrowserWebview(webview, {
         browserId,
         workspaceId,
+        previewPartition,
         initialUrl: initialUnsafeNavigationMessage
           ? "about:blank"
           : (browserRef.current?.url ?? initialUrlRef.current),
@@ -929,7 +934,7 @@ export function BrowserPane({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserId, onFocusPane, browser?.suspended, isPresented]);
+  }, [browserId, onFocusPane, browser?.suspended, canAttachBrowser, isPresented, previewPartition]);
 
   useEffect(() => {
     const webview = webviewRef.current;

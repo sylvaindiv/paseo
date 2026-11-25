@@ -1,3 +1,4 @@
+import type { PreviewOperation, PreviewResult } from "@getpaseo/protocol/messages";
 import type { DesktopCaptureBridge } from "@getpaseo/protocol/desktop-capture";
 import type { AgentWidgetBridge } from "@getpaseo/protocol/desktop-agent-widget";
 import { Platform } from "react-native";
@@ -148,6 +149,14 @@ export interface DesktopAttachedBrowserRegistration {
 }
 
 export interface DesktopBrowserBridge {
+  servicePreview?: {
+    open(browserId: string, origin: string): Promise<string>;
+    close(browserId: string): Promise<void>;
+    onExchange(
+      handler: (input: { browserId: string; id: string; operation: PreviewOperation }) => void,
+    ): () => void;
+    reply(id: string, result: PreviewResult | { kind: "error"; code: "upgrade" }): void;
+  };
   onDiscarded?: (listener: (payload: { browserId: string; url: string }) => void) => () => void;
   setPresented?: (input: { browserId: string; presented: boolean }) => Promise<void>;
   setShortcutPolicy?: (input: BrowserKeyboardPolicy) => Promise<void>;

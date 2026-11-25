@@ -2978,6 +2978,41 @@ export const FileUnsubscribeRequestSchema = z.object({
   requestId: z.string(),
 });
 
+// Preview leases and their WebSockets are owned by the physical daemon connection.
+const PreviewHeadersSchema = z.array(z.tuple([z.string(), z.string()])).max(128);
+const PreviewFrameSchema = z.object({
+  binary: z.boolean(),
+  data: z.string().max(1_400_000),
+});
+const PreviewOperationSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("open"), workspaceId: z.string(), origin: z.string().max(128) }),
+  z.object({ kind: z.literal("close") }),
+  z.object({
+    kind: z.literal("http"),
+    method: z.string().max(16),
+    path: z.string().max(16_384),
+    headers: PreviewHeadersSchema,
+    body: z.string().max(2_800_000),
+  }),
+  z.object({
+    kind: z.literal("ws-open"),
+    socketId: z.string().uuid(),
+    path: z.string().max(16_384),
+    headers: PreviewHeadersSchema,
+    protocols: z.array(z.string().max(128)).max(16),
+  }),
+  z.object({ kind: z.literal("ws-read"), socketId: z.string().uuid() }),
+  z.object({ kind: z.literal("ws-send"), socketId: z.string().uuid(), frame: PreviewFrameSchema }),
+  z.object({ kind: z.literal("ws-close"), socketId: z.string().uuid() }),
+]);
+export const PreviewExchangeRequestSchema = z.object({
+  type: z.literal("preview.service.exchange.request"),
+  requestId: z.string(),
+  previewId: z.string().uuid(),
+  operation: PreviewOperationSchema,
+});
+export type PreviewOperation = z.infer<typeof PreviewOperationSchema>;
+
 export const FileWriteRequestSchema = z.object({
   type: z.literal("fs.file.write.request"),
   cwd: z.string(),
@@ -3606,6 +3641,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   FileSubscribeRequestSchema,
   FileUnsubscribeRequestSchema,
   FileWriteRequestSchema,
+  PreviewExchangeRequestSchema,
   FileEntryCreateRequestSchema,
   FileEntryRenameRequestSchema,
   FileEntryDuplicateRequestSchema,
@@ -3946,6 +3982,7 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceRecovery: z.boolean().optional(),
         // COMPAT(workspaceFileEditing): added in v0.2.0, remove after 2027-01-18 once daemon floor >= v0.2.0.
         workspaceFileEditing: z.boolean().optional(),
+        privateServicePreview: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
@@ -6334,6 +6371,31 @@ export const FileWriteResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("error"), error: z.string() }),
 ]);
 
+const PreviewResultSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("ok") }),
+  z.object({
+    kind: z.literal("error"),
+    code: z.enum(["unavailable", "denied", "expired", "failed"]),
+  }),
+  z.object({
+    kind: z.literal("http"),
+    status: z.number().int().min(200).max(599),
+    headers: PreviewHeadersSchema,
+    body: z.string(),
+  }),
+  z.object({ kind: z.literal("ws-open"), protocol: z.string() }),
+  z.object({
+    kind: z.literal("ws-read"),
+    frames: z.array(PreviewFrameSchema),
+    closed: z.boolean(),
+  }),
+]);
+export type PreviewResult = z.infer<typeof PreviewResultSchema>;
+export const PreviewExchangeResponseSchema = z.object({
+  type: z.literal("preview.service.exchange.response"),
+  payload: z.object({ requestId: z.string(), result: PreviewResultSchema }),
+});
+
 export const FileWriteResponseSchema = z.object({
   type: z.literal("fs.file.write.response"),
   payload: z.object({
@@ -7351,6 +7413,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   FileSubscribeResponseSchema,
   FileUnsubscribeResponseSchema,
   FileWriteResponseSchema,
+  PreviewExchangeResponseSchema,
   FileEntryCreateResponseSchema,
   FileEntryRenameResponseSchema,
   FileEntryDuplicateResponseSchema,
