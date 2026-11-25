@@ -30,6 +30,7 @@ interface WaitingLaunch {
   agentId: string | undefined;
   start: () => Promise<void>;
   onWaiting?: () => void;
+  blocked?: { pressure: "warning" | "critical"; since: number };
   reject: (reason: Error) => void;
 }
 
@@ -45,6 +46,11 @@ export class AgentLaunchPressure {
   constructor(
     private readonly readPressure: () => Promise<MacMemoryPressure | null>,
     private readonly onPressure: () => void,
+    private readonly onAdmittedAfterWait?: (wait: {
+      agentId: string | undefined;
+      pressure: "warning" | "critical";
+      waitedMs: number;
+    }) => void,
   ) {}
 
   launch<T>(
@@ -119,6 +125,7 @@ export class AgentLaunchPressure {
         if (!this.waiting.length) break;
         if (pressure === "critical" || (pressure === "warning" && this.starting > 0)) {
           for (const launch of this.waiting) {
+            launch.blocked ??= { pressure, since: performance.now() };
             launch.onWaiting?.();
             launch.onWaiting = undefined;
           }
@@ -131,6 +138,13 @@ export class AgentLaunchPressure {
         }
         const launch = this.waiting.shift();
         if (!launch) break;
+        if (launch.blocked) {
+          this.onAdmittedAfterWait?.({
+            agentId: launch.agentId,
+            pressure: launch.blocked.pressure,
+            waitedMs: Math.round(performance.now() - launch.blocked.since),
+          });
+        }
         this.starting++;
         void launch.start().finally(() => {
           this.starting--;

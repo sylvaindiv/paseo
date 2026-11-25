@@ -1082,11 +1082,15 @@ export class AgentManager {
     this.paseoHome = options.paseoHome;
     this.terminalManager = options.terminalManager;
     if (options.readMemoryPressure) {
-      this.launchPressure = new AgentLaunchPressure(options.readMemoryPressure, () => {
-        void this.hibernateInactiveAgents(Date.now(), true).catch((err) =>
-          this.logger.warn({ err }, "Failed to release inactive agents under memory pressure"),
-        );
-      });
+      this.launchPressure = new AgentLaunchPressure(
+        options.readMemoryPressure,
+        () => {
+          void this.hibernateInactiveAgents(Date.now(), true).catch((err) =>
+            this.logger.warn({ err }, "Failed to release inactive agents under memory pressure"),
+          );
+        },
+        (wait) => this.logger.info(wait, "Agent launch admitted after waiting for memory pressure"),
+      );
     }
     this.timelineStore = createAgentTimelineStore(options.paseoHome);
     this.onFirstUserPrompt = options.onFirstUserPrompt;
@@ -1936,8 +1940,8 @@ export class AgentManager {
     options?: { rehydrateFromDisk?: boolean },
   ): Promise<ManagedAgent> {
     return this.trackAgentRegistrationOperation(
-      this.launchProviderSession(agentId, () =>
-        this.runLifecycleMutation(agentId, () =>
+      this.runLifecycleMutation(agentId, () =>
+        this.launchProviderSession(agentId, () =>
           this.reloadAgentSessionInternal(agentId, overrides, options),
         ),
       ),

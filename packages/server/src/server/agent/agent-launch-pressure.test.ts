@@ -35,9 +35,10 @@ test("starts immediately under persistent warning and serializes the next launch
 test.each(["warning", "normal"] as const)(
   "keeps FIFO order under critical pressure and resumes on the next %s reading",
   async (recovery) => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     let level: MacMemoryPressure | null = "critical";
-    const pressure = new AgentLaunchPressure(async () => level, vi.fn());
+    const admittedAfterWait = vi.fn();
+    const pressure = new AgentLaunchPressure(async () => level, vi.fn(), admittedAfterWait);
     const order: string[] = [];
     const waiting = vi.fn();
     const first = pressure.launch(
@@ -67,6 +68,10 @@ test.each(["warning", "normal"] as const)(
     await Promise.all([first, second]);
     expect(order).toEqual(["first", "second"]);
     expect(waiting).toHaveBeenCalledTimes(2);
+    expect(admittedAfterWait.mock.calls).toEqual([
+      [{ agentId: "first", pressure: "critical", waitedMs: 2_000 }],
+      [{ agentId: "second", pressure: "critical", waitedMs: 2_000 }],
+    ]);
   },
 );
 

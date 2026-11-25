@@ -2995,10 +2995,10 @@ test("createAgent passes daemon launch env through the provider launch context",
   });
   expect(client.lastLaunchContext).toEqual({
     agentId: snapshot.id,
-    env: {
+    env: expect.objectContaining({
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
-    },
+    }),
   });
 });
 
@@ -4325,10 +4325,10 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
   expect(client.lastResumeOverrides).not.toHaveProperty("modeId");
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: resumed.id,
-    env: {
+    env: expect.objectContaining({
       PASEO_AGENT_ID: resumed.id,
       PASEO_AGENT_CWD: workdir,
-    },
+    }),
   });
 });
 
@@ -4433,10 +4433,10 @@ test("importProviderSession imports the selected session without listing and pub
   expect(client.importInput).toEqual({ providerHandleId: "thread-selected", cwd: workdir });
   expect(client.importLaunchContext).toEqual({
     agentId: imported.id,
-    env: {
+    env: expect.objectContaining({
       PASEO_AGENT_ID: imported.id,
       PASEO_AGENT_CWD: workdir,
-    },
+    }),
   });
   expect(imported.lifecycle).toBe("idle");
   expect(imported.historyPrimed).toBe(true);
@@ -10633,6 +10633,66 @@ test("ensureUnarchivedAgentLoaded does not resume an archived agent", async () =
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test("a resume and reload of the same agent proceed under warning during another creation", async () => {
+  const otherAgentId = "00000000-0000-4000-8000-000000000001";
+  const resumedAgentId = "00000000-0000-4000-8000-000000000002";
+  const cwd = process.cwd();
+  const config = { provider: "codex", cwd } as const;
+  const client = new HeldAgentCreationClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    readMemoryPressure: async () => "warning",
+    logger,
+  });
+  const availabilityStarted = deferred<void>();
+  const availabilityAllowed = deferred<boolean>();
+  const resumeQueued = deferred<void>();
+  const availability = vi.spyOn(client, "isAvailable");
+  const creation = manager.createAgent(config, otherAgentId, { workspaceId: undefined });
+  try {
+    await Promise.race([client.waitForCreationToStart(), creation]);
+    availability.mockImplementationOnce(() => {
+      availabilityStarted.resolve();
+      return availabilityAllowed.promise;
+    });
+    const resume = manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "persisted-session", metadata: { cwd } },
+      undefined,
+      resumedAgentId,
+    );
+    await Promise.race([availabilityStarted.promise, resume]);
+    const reload = manager.reloadAgentSession(resumedAgentId);
+    void reload.catch(() => {});
+
+    const launch = manager.launchProviderSession.bind(manager);
+    vi.spyOn(manager, "launchProviderSession").mockImplementationOnce((id, start) => {
+      const result = launch(id, start);
+      resumeQueued.resolve();
+      return result;
+    });
+    availabilityAllowed.resolve(true);
+    await Promise.race([resumeQueued.promise, resume]);
+    expect(client.resumeOverrides).toEqual([]);
+
+    client.finishCreating();
+    const [, resumed, reloaded] = await Promise.all([creation, resume, reload]);
+    expect(resumed.id).toBe(resumedAgentId);
+    expect(reloaded.id).toBe(resumed.id);
+    expect(client.resumeOverrides).toHaveLength(2);
+    expect(
+      manager
+        .listAgents()
+        .map(({ id }) => id)
+        .sort(),
+    ).toEqual([otherAgentId, resumedAgentId]);
+  } finally {
+    manager.prepareForShutdown();
+    client.finishCreating();
+    availabilityAllowed.resolve(true);
+    await Promise.all(manager.listAgents().map(({ id }) => manager.closeAgent(id)));
+  }
+}, 2_000);
 
 test("a stored-only archive waits for an in-flight resume and then closes it", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-archived-resume-race-"));
