@@ -51,7 +51,7 @@ export function UsageSidebarItem({ sources }: { sources: readonly PinnedUsageSou
 const OpenSidebarUsageContext = createContext<(() => void) | null>(null);
 
 /**
- * One owner for the footer icon and summary: both open the Usage modal over the current screen.
+ * The footer summary opens the Usage modal over the current screen.
  * The modal mounts on first open and unmounts once it has finished closing, so its host's reports
  * load only while it is shown.
  */
@@ -73,7 +73,6 @@ export function UsageSidebarRoot({ children }: { children: ReactNode }) {
   );
 }
 
-/** Both sidebar entry points send the same open command. */
 export function useOpenSidebarUsage(): () => void {
   const openUsage = useContext(OpenSidebarUsageContext);
   if (!openUsage) throw new Error("Sidebar Usage must be inside UsageSidebarRoot.");

@@ -55,15 +55,17 @@ export const workflowSettings = defineSettings({
           request: z.string(),
           constraints: z.array(z.string()),
           assumptions: z.array(z.string()),
-          git: z.object({
-            // COMPAT(workflow-start-head): added in v0.8.0, remove after 2027-09-13.
-            base: z.string().optional(),
-            startHead: z.string().optional(),
-            targetBase: z.string().optional(),
-            targetRef: z.string().optional(),
-            branch: z.string(),
-            dirty: z.string(),
-          }),
+          git: z
+            .object({
+              // COMPAT(workflow-start-head): added in v0.8.0, remove after 2027-09-13.
+              base: z.string().optional(),
+              startHead: z.string().optional(),
+              targetBase: z.string().optional(),
+              targetRef: z.string().optional(),
+              branch: z.string(),
+              dirty: z.string(),
+            })
+            .optional(),
           recommendation: executorSelection.nullable(),
           plans: z.record(
             z.string(),

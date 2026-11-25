@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   WorkflowController,
@@ -6,6 +10,8 @@ import {
   type WorkflowState,
 } from "./workflow";
 import { profiles } from "../shared/profiles";
+import { runtime } from "./runtime";
+import { workflowSettings } from "./state";
 
 function fixture() {
   const launches: Parameters<WorkflowPort["create"]>[0][] = [];
@@ -1166,6 +1172,88 @@ test("handoff delivers only the exact plan and original git context", async () =
   expect(f.decisions).toEqual(["permission-1"]);
   expect(f.port).not.toHaveProperty("classify");
 });
+
+test.each(["no Git", "unborn", "existing"] as const)(
+  "handoff delivers the exact plan with appropriate Git context in a %s folder",
+  async (kind) => {
+    const cwd = await mkdtemp(join(tmpdir(), "workflow-handoff-"));
+    try {
+      const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" });
+      const file = join(cwd, "change.txt");
+      let expectedGit;
+      if (kind !== "no Git") {
+        git("init", "--quiet", "--initial-branch=feature");
+        await writeFile(file, "original\n");
+        git("add", "change.txt");
+        expectedGit = { branch: "feature", dirty: "A  change.txt\n" };
+        if (kind === "existing") {
+          git(
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "base",
+          );
+          const head = git("rev-parse", "HEAD").trim();
+          git("update-ref", "refs/remotes/origin/main", head);
+          git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+          await writeFile(file, "modified\n");
+          expectedGit = {
+            branch: "feature",
+            dirty: " M change.txt\n",
+            startHead: head,
+            targetRef: "refs/remotes/origin/main",
+            targetBase: head,
+          };
+        } else {
+          await writeFile(join(cwd, "untracked.txt"), "available\n");
+          expectedGit = {
+            branch: "feature",
+            dirty: "A  change.txt\n?? untracked.txt\n",
+          };
+        }
+      }
+
+      const f = fixture();
+      const settings = {
+        read: async () => ({ status: "ready", revision: "1", values: await f.port.read() }),
+      };
+      const { port } = runtime(
+        {} as Parameters<typeof runtime>[0],
+        settings as unknown as Parameters<typeof runtime>[1],
+      ) as unknown as { port: WorkflowPort };
+      f.port.git = port.git;
+      f.port.workspace = async () => ({ cwd });
+      const write = f.port.write;
+      f.port.write = (state) => write(workflowSettings.schema.parse(state));
+      const context = { ...plan, text: "  Keep this exact plan.\nÉtape 1.\n" };
+      f.agents.get("planner")!.pendingPermissions[0].input = { plan: context.text };
+      const controller = new WorkflowController(f.port);
+      const results = await Promise.all([
+        preparedHandoff(controller, f, context),
+        preparedHandoff(controller, f, context),
+      ]);
+      const retry = await preparedHandoff(new WorkflowController(f.port), f, context);
+
+      expect([...results, retry]).toEqual(Array(3).fill({ agentId: "child-1" }));
+      expect(f.launches).toHaveLength(1);
+      expect(f.launches[0].workspaceId).toBe(context.workspaceId);
+      expect(f.prompts).toHaveLength(1);
+      const savedWorkflow = (await f.port.read()).workflows.planner;
+      if (expectedGit) expect(savedWorkflow.git).toStrictEqual(expectedGit);
+      else expect(savedWorkflow).not.toHaveProperty("git");
+      const { text } = f.prompts[0];
+      expect(JSON.parse(text.slice(text.indexOf("\n{") + 1))).toStrictEqual({
+        plan: context.text,
+        ...(expectedGit ? { git: expectedGit } : {}),
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
 
 test("plan review preserves the exact plan and projected clarification exchanges", async () => {
   const f = fixture();

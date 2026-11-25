@@ -228,25 +228,15 @@ export async function expectFooterItemHidden(page: Page, key: string): Promise<v
   await expect(page.locator(`[data-testid="${shellFooterTestID(key)}"]:visible`)).toHaveCount(0);
 }
 
-const FOOTER_ICON_TEST_IDS = [
-  "sidebar-add-project",
-  "sidebar-usage-icon",
-  "sidebar-hosts-trigger",
-  "sidebar-help",
-  "sidebar-settings",
-];
+const FOOTER_ICON_TEST_IDS = ["sidebar-add-project", "sidebar-hosts-trigger", "sidebar-settings"];
 
 // Browser layout boxes include floating-point rounding, even for whole-pixel styles.
 const FOOTER_GEOMETRY_TOLERANCE = 0.01;
 
-/**
- * One line of same-size icons: Add project, Usage and Hosts together on the left, Help and
- * Settings together at the end.
- */
 export async function expectFooterIconRow(page: Page): Promise<void> {
   // Read one browser-frame snapshot: the compact drawer can translate between separate RPCs.
   const boxes = await page
-    .locator(FOOTER_ICON_TEST_IDS.map((testID) => `[data-testid="${testID}"]:visible`).join(","))
+    .locator('[data-testid="sidebar-footer-bottom-line"]:visible [role="button"]')
     .evaluateAll((elements) =>
       elements.map((element) => {
         const { x, y, width, height } = element.getBoundingClientRect();
@@ -260,10 +250,8 @@ export async function expectFooterIconRow(page: Page): Promise<void> {
     expect(Math.abs(box.width - first!.width)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
   }
   const gaps = boxes.slice(1).map((box, index) => box.x - (boxes[index]!.x + boxes[index]!.width));
-  for (const index of [0, 1, 3]) {
-    expect(Math.abs(gaps[index]!)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
-  }
-  expect(gaps[2]).toBeGreaterThan(first!.width);
+  expect(Math.abs(gaps[0]!)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
+  expect(gaps[1]).toBeGreaterThan(first!.width);
 }
 
 export async function expectFooterSeparator(page: Page, shown: boolean): Promise<void> {

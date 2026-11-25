@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { CircleGauge, FolderPlus, GitBranch, Server, Settings, X } from "lucide-react-native";
+import { FolderPlus, GitBranch, Server, Settings, X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
@@ -25,7 +25,6 @@ import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-pref
 import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
 import { SidebarNavRows } from "@/components/sidebar/sidebar-nav-rows";
 import { OpenDesignRow } from "@/components/sidebar/open-design-row";
-import { SidebarHelpMenu } from "@/components/sidebar/sidebar-help-menu";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { buttonControlHeight } from "@/components/ui/control-geometry";
 import { Shortcut } from "@/components/ui/shortcut";
@@ -47,7 +46,7 @@ import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model
 import { type SidebarGroupMode, useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { useHosts } from "@/runtime/host-runtime";
 import { PluginSidebarItem } from "@/plugins/sidebar-items";
-import { builtinSidebarNavLabelKey, type SidebarNavItem } from "@/sidebar-nav/model";
+import type { SidebarNavItem } from "@/sidebar-nav/model";
 import { useSidebarNavItems } from "@/sidebar-nav/use-sidebar-nav-items";
 import { usePanelStore } from "@/stores/panel-store";
 import { useOwnsWindowChromeCorner, WindowChromeSafeArea } from "@/utils/desktop-window";
@@ -55,7 +54,7 @@ import { useCloseAgentListGesture } from "@/mobile-panels/gestures";
 import { MobilePanelOverlay } from "@/mobile-panels/presentation";
 import { buildSettingsAddHostRoute, buildSettingsRoute } from "@/utils/host-routes";
 import { openHostOverview } from "@/navigation/settings-navigation";
-import { UsageSidebarItem, UsageSidebarRoot, useUsageSummary, useOpenSidebarUsage } from "@/usage";
+import { UsageSidebarItem, UsageSidebarRoot, useUsageSummary } from "@/usage";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
@@ -94,7 +93,6 @@ interface SidebarLabels {
   hosts: string;
   settings: string;
   searchHosts: string;
-  usage: string;
   closeSidebar: string;
 }
 
@@ -201,7 +199,6 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
       hosts: t("sidebar.actions.hosts"),
       settings: t("sidebar.actions.settings"),
       searchHosts: t("sidebar.host.searchPlaceholder"),
-      usage: t(builtinSidebarNavLabelKey("usage")),
       closeSidebar: t("sidebar.actions.closeSidebar"),
     }),
     [t],
@@ -412,7 +409,6 @@ function SidebarFooter({
     hosts: string;
     settings: string;
     searchHosts: string;
-    usage: string;
   };
   handleAddHost: () => void;
   handleOpenHostSettings: (serverId: string) => void;
@@ -421,7 +417,6 @@ function SidebarFooter({
   const newAgentKeys = useShortcutKeys("new-agent");
   const settingsKeys = useShortcutKeys("toggle-settings");
 
-  // One line of icons: Add project, Usage, Hosts, then Help and Settings at the end.
   return (
     <UsageSidebarRoot>
       <View style={styles.footerContainer} testID="sidebar-footer">
@@ -435,7 +430,6 @@ function SidebarFooter({
             shortcutKeys={newAgentKeys}
             theme={theme}
           />
-          <SidebarUsageIcon label={labels.usage} theme={theme} />
           <SidebarHostPicker
             theme={theme}
             label={labels.hosts}
@@ -443,7 +437,6 @@ function SidebarFooter({
             onOpenHostSettings={handleOpenHostSettings}
           />
           <View style={styles.footerSpacer} />
-          <SidebarHelpMenu />
           <FooterIconButton
             onPress={handleSettings}
             testID="sidebar-settings"
@@ -455,19 +448,6 @@ function SidebarFooter({
         </View>
       </View>
     </UsageSidebarRoot>
-  );
-}
-
-function SidebarUsageIcon({ label, theme }: { label: string; theme: SidebarTheme }) {
-  const openUsage = useOpenSidebarUsage();
-  return (
-    <FooterIconButton
-      onPress={openUsage}
-      testID="sidebar-usage-icon"
-      label={label}
-      icon={CircleGauge}
-      theme={theme}
-    />
   );
 }
 
@@ -959,7 +939,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1.5],
   },
-  // Pushes Help and Settings to the end of the icon line.
+  // Pushes Settings to the end of the icon line.
   footerSpacer: {
     flex: 1,
   },

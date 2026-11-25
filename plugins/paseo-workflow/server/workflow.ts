@@ -83,7 +83,7 @@ export interface Workflow {
   request: string;
   constraints: string[];
   assumptions: string[];
-  git: {
+  git?: {
     base?: string;
     startHead?: string;
     targetBase?: string;
@@ -951,6 +951,7 @@ export class WorkflowController {
     const request = requestFrom(timeline);
     if (!request)
       throw new Error("The original request is unavailable. Reopen the agent history and retry.");
+    const git = await this.port.git(workspace.cwd);
     const workflow: Workflow = {
       id,
       workspaceId: agent.workspaceId,
@@ -959,7 +960,7 @@ export class WorkflowController {
       request,
       constraints: [],
       assumptions: [],
-      git: await this.port.git(workspace.cwd),
+      ...(git ? { git } : {}),
       recommendation: null,
       plans: {},
     };

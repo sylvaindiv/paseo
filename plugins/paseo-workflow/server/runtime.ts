@@ -174,11 +174,14 @@ export function runtime(
       };
     },
     git: async (cwd) => {
-      const [startHead, branch, dirty] = await Promise.all([
-        git(cwd, ["rev-parse", "HEAD"]),
+      const snapshot = await Promise.all([
+        git(cwd, ["rev-parse", "--verify", "HEAD"]).catch(() => undefined),
         git(cwd, ["branch", "--show-current"]),
         git(cwd, ["status", "--porcelain=v1"]),
-      ]);
+      ]).catch(() => undefined);
+      if (!snapshot) return undefined;
+      const [startHead, branch, dirty] = snapshot;
+      if (!startHead) return { branch: branch.trim(), dirty };
       let targetRef: string | undefined;
       let targetBase: string | undefined;
       try {
