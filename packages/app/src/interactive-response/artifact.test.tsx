@@ -237,7 +237,7 @@ it("waits for pending visual state when another visual fails and blocks sending"
       items: [
         { id: "tool" } as React.ComponentProps<typeof InteractiveResponseCard>["items"][number],
       ],
-      height: 420,
+      maxHeight: 420,
     }),
   );
   try {

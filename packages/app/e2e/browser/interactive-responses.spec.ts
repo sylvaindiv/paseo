@@ -224,6 +224,58 @@ if([typeof fetch,typeof parent,typeof document,typeof WebSocket,typeof process].
   }
 });
 
+for (const width of [1450, 390]) {
+  test(`short questions fit their content before and after sending at ${width}px`, async ({
+    page,
+  }, info) => {
+    const question = {
+      title: "Choose a delivery option",
+      summary: "Which delivery option should we use?",
+      source:
+        'root = Selection("delivery", "Your choice", ["Keep the current schedule", "Move delivery to next week"])',
+    };
+    const session = await seedMockAgentWorkspace({
+      repoPrefix: "interactive-question-",
+      title: question.title,
+      initialPrompt: `Render synthetic interactive response: ${JSON.stringify(question)}`,
+    });
+    try {
+      await page.setViewportSize({ width, height: 844 });
+      await openAgentRoute(page, session);
+      const chat = page.getByTestId("agent-chat-scroll");
+      const rail = page.getByTestId("interactive-response-rail");
+      const first = rail.getByRole("button", { name: "Keep the current schedule" });
+      const second = rail.getByRole("button", { name: "Move delivery to next week" });
+      const send = rail.getByRole("button", { name: "Send to agent" });
+      await first.click();
+      for (const [state, action] of [
+        ["ready", send],
+        ["sent", rail.getByRole("button", { name: "Sent", exact: true })],
+      ] as const) {
+        await expect(action).toBeVisible();
+        const [panel, viewport, option1, option2, button] = await Promise.all(
+          [rail, chat, first, second, action].map((locator) => locator.boundingBox()),
+        );
+        expect(panel!.x).toBeGreaterThanOrEqual(viewport!.x - 1);
+        expect(panel!.x + panel!.width).toBeLessThanOrEqual(viewport!.x + viewport!.width + 1);
+        expect(panel!.y + panel!.height - button!.y - button!.height).toBeCloseTo(17, 0);
+        if (width > 390) {
+          expect(option1!.y).toBeCloseTo(option2!.y, 0);
+          expect(panel!.x + panel!.width - option2!.x - option2!.width).toBeCloseTo(17, 0);
+        } else {
+          expect(option2!.y).toBeGreaterThan(option1!.y);
+          expect(option2!.x + option2!.width).toBeLessThan(panel!.x + panel!.width);
+        }
+        await scrollTimelineToOldestLoadedEdge(page);
+        await rail.screenshot({ path: info.outputPath(`question-${width}-${state}.png`) });
+        if (state === "ready") await send.click();
+      }
+    } finally {
+      await session.cleanup();
+    }
+  });
+}
+
 async function expectRailSize(rail: Locator, chat: Locator) {
   await expect
     .poll(async () => {
@@ -232,15 +284,13 @@ async function expectRailSize(rail: Locator, chat: Locator) {
       return {
         fullWidth:
           Math.abs(panel.width - viewport.width) <= 2 && Math.abs(panel.x - viewport.x) <= 2,
-        height: Math.abs(panel.height - viewport.height * 0.7) <= 2,
+        height: panel.height <= viewport.height * 0.7 + 2,
       };
     })
     .toEqual({ fullWidth: true, height: true });
 }
 
-test("proposal titles navigate a full-width rail and preserve independent choices", async ({
-  page,
-}, info) => {
+test("proposal tabs resize the card and preserve independent choices", async ({ page }, info) => {
   const html = `<script>
 let count=paseo.getState()?.count??1;
 function draw(){paseo.render('<button id="add">Atlas '+count+'</button>')}
@@ -255,7 +305,7 @@ draw();paseo.on('add','click',()=>{count++;paseo.setState({count});draw()});
     {
       title: "Boreal · Projet prioritaire",
       summary: "Les priorités de Boreal.",
-      source: 'root = Layout([Text("Projet Boreal"), Input("borealNote","Note Boreal")])',
+      source: `root = Layout([Input("borealNote","Note Boreal"), ${Array.from({ length: 30 }, (_, index) => `Text("Priority ${index + 1}")`).join(", ")}])`,
     },
     {
       title: "Cygnus · Toutes les tâches",
@@ -300,11 +350,17 @@ draw();paseo.on('add','click',()=>{count++;paseo.setState({count});draw()});
     await rail.scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath("interactive-proposals-atlas.png") });
 
+    const tallCard = (await rail.boundingBox())!;
     await cygnus.click();
+    await expect
+      .poll(async () => (await rail.boundingBox())!.height)
+      .toBeLessThan(tallCard.height / 2);
+    expect((await rail.boundingBox())!.width).toBeLessThan(tallCard.width);
     await expect(cygnus).toHaveAttribute("aria-pressed", "true");
     await expect(note).toHaveCount(0);
     await rail.getByRole("textbox", { name: "Note Cygnus" }).fill("Choix Cygnus");
     await expect(rail.getByText("Projet Cygnus", { exact: true })).toBeInViewport();
+    await rail.screenshot({ path: info.outputPath("interactive-proposal-short.png") });
 
     await atlas.press("Enter");
     await expect(note).toHaveValue("Garder cette note");
@@ -315,12 +371,19 @@ draw();paseo.on('add','click',()=>{count++;paseo.setState({count});draw()});
     await boreal.click();
     await expect(boreal).toHaveAttribute("aria-pressed", "true");
     await expect(rail.getByRole("textbox", { name: "Note Boreal" })).toBeInViewport();
+    await expect
+      .poll(async () => {
+        const [panel, viewport] = await Promise.all([rail.boundingBox(), chat.boundingBox()]);
+        return Math.abs(panel!.height - viewport!.height * 0.7);
+      })
+      .toBeLessThanOrEqual(2);
+    await rail.getByRole("button", { name: "Send to agent" }).scrollIntoViewIfNeeded();
+    await expect(rail.getByRole("button", { name: "Send to agent" })).toBeInViewport();
     await rail.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath("interactive-proposals-sidebar.png") });
+    await rail.screenshot({ path: info.outputPath("interactive-proposal-long.png") });
 
     await page.getByTestId("workspace-todos-close").click();
     await page.setViewportSize({ width: 390, height: 844 });
-    await expectRailSize(rail, chat);
     await cygnus.click();
     await expect(rail.getByRole("textbox", { name: "Note Cygnus" })).toHaveValue("Choix Cygnus");
     await rail.scrollIntoViewIfNeeded();

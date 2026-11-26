@@ -25,6 +25,8 @@ function SelectionOption({ name, option }: { name: string; option: string }) {
       variant={state[name] === option ? "default" : "outline"}
       disabled={disabled}
       onPress={select}
+      style={styles.option}
+      textStyle={styles.optionText}
     >
       {option}
     </Button>

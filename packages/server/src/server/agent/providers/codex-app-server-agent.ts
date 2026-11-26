@@ -5592,6 +5592,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (this.deps.customCodexConfig) {
       Object.assign(innerConfig, this.deps.customCodexConfig);
     }
+    if (this.harnessEnvironment.PASEO_CODEX_DISABLE_SHELL_SNAPSHOT === "1") {
+      innerConfig.features = { ...toObjectRecord(innerConfig.features), shell_snapshot: false };
+    }
     const browserEnv = Object.fromEntries(
       Object.entries(this.harnessEnvironment).filter(([key]) =>
         [
@@ -7567,6 +7570,11 @@ export class CodexAppServerAgentClient implements AgentClient {
     const environment =
       options?.environment ?? buildCodexAppServerEnv(this.runtimeSettings, launchEnv);
     const args = [...launchPrefix.args];
+    const snapshotFlags =
+      launchEnv?.PASEO_CODEX_DISABLE_SHELL_SNAPSHOT === "1"
+        ? ["-c", "features.shell_snapshot=false"]
+        : [];
+    args.push(...snapshotFlags);
     if (options?.readOnlyCwd === undefined) {
       for (const name of disabledOptionalCodexMcps(environment)) {
         args.push("-c", `mcp_servers.${name}={command="false",enabled=false}`);
@@ -7593,6 +7601,7 @@ export class CodexAppServerAgentClient implements AgentClient {
           launchPrefix.command,
           ...launchPrefix.args,
           ...READ_ONLY_CODEX_FLAGS,
+          ...snapshotFlags,
           "app-server",
         ],
         {

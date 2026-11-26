@@ -8,8 +8,8 @@ import {
   Component,
   type ReactNode,
 } from "react";
-import { ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
-import { InteractiveRenderer, getArtifactNames } from "./renderer";
+import { ScrollView, Text, View } from "react-native";
+import { InteractiveRenderer, getArtifactNames, usesWideLayout } from "./renderer";
 import { useTranslation } from "react-i18next";
 import { useFetchQueries } from "@/data/query";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -44,18 +44,14 @@ class RenderBoundary extends Component<
 }
 export function InteractiveResponseCard({
   items,
-  height,
+  maxHeight,
 }: {
   items: ToolCallItem[];
-  height: number;
+  maxHeight: number;
 }) {
   const context = useInteractiveConversation();
   const { t } = useTranslation();
   const [selectedId, setSelectedId] = useState<string>();
-  const [width, setWidth] = useState(0);
-  const measure = useCallback((event: LayoutChangeEvent) => {
-    setWidth(event.nativeEvent.layout.width);
-  }, []);
   const proposals = items.map((item) => ({
     id: item.id,
     documentId: interactiveToolDocumentId(item),
@@ -82,11 +78,16 @@ export function InteractiveResponseCard({
     ({ documentId, status }) => documentId && status === "completed",
   );
   const activeIndex = selectedIndex >= 0 ? selectedIndex : Math.max(0, firstSuccessIndex);
+  const activeSource = queries[activeIndex]?.data?.source;
+  const wide = useMemo(() => activeSource && usesWideLayout(activeSource), [activeSource]);
   const multiple = proposals.length > 1;
   if (!context?.supported) return <Text style={styles.error}>{t("interactive.updateHost")}</Text>;
 
   return (
-    <View style={[styles.card, { height }]} testID="interactive-response-rail">
+    <View
+      style={[styles.card, wide && styles.wide, { maxHeight: maxHeight || undefined }]}
+      testID="interactive-response-rail"
+    >
       {multiple ? (
         <ScrollView
           horizontal
@@ -107,29 +108,24 @@ export function InteractiveResponseCard({
           ))}
         </ScrollView>
       ) : null}
-      <View style={styles.viewport} onLayout={measure}>
-        <View style={[styles.pages, { transform: [{ translateX: -activeIndex * width }] }]}>
-          {proposals.map(({ id, documentId, status }, index) => (
-            <View key={id} style={[styles.page, { width: width || "100%" }]}>
-              <ScrollView
-                style={[styles.pageScroll, index !== activeIndex && styles.hidden]}
-                contentContainerStyle={styles.pageContent}
-                keyboardShouldPersistTaps="handled"
-                nestedScrollEnabled
-                testID="interactive-response"
-              >
-                <Proposal
-                  documentId={documentId}
-                  status={status}
-                  query={queries[index]!}
-                  artifactHeight={height > 0 ? Math.round(height * 0.78) : undefined}
-                  showTitle={!multiple}
-                />
-              </ScrollView>
-            </View>
-          ))}
-        </View>
-      </View>
+      {proposals.map(({ id, documentId, status }, index) => (
+        <ScrollView
+          key={id}
+          style={[styles.pageScroll, index !== activeIndex && styles.hidden]}
+          contentContainerStyle={styles.pageContent}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          testID="interactive-response"
+        >
+          <Proposal
+            documentId={documentId}
+            status={status}
+            query={queries[index]!}
+            artifactHeight={maxHeight > 0 ? Math.round(maxHeight * 0.78) : undefined}
+            showTitle={!multiple}
+          />
+        </ScrollView>
+      ))}
     </View>
   );
 }

@@ -410,6 +410,7 @@ export interface PaseoAgentHandle {
    */
   commands(options?: PaseoAgentCommandsOptions): Promise<PaseoAgentCommandsResult>;
   archive(): Promise<{ archivedAt: string }>;
+  hibernate(): Promise<boolean>;
   detach(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
 }
@@ -1040,6 +1041,7 @@ function createAgentHandleFactory(
         }
         return result;
       },
+      hibernate: async () => (await daemonClient.hibernateAgent(id)).released,
       detach: async () => {
         await daemonClient.detachAgent(id);
       },

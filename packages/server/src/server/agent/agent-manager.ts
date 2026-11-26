@@ -1665,7 +1665,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       options?.env,
-      { reason: "create", purpose: "interactive", workspaceId: options.workspaceId ?? null },
+      {
+        reason: "create",
+        purpose: "interactive",
+        workspaceId: options.workspaceId ?? null,
+        labels: options.labels,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
@@ -1805,6 +1810,7 @@ export class AgentManager {
     // settled before the config is prepared, because a history load reads an archived
     // agent whose working directory may be gone.
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
+    const workspaceId = options?.workspaceId ?? record?.workspaceId;
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }
       : resumeOptions;
@@ -1832,7 +1838,8 @@ export class AgentManager {
       {
         reason: "resume",
         purpose,
-        workspaceId: options?.workspaceId ?? record?.workspaceId ?? null,
+        workspaceId: workspaceId ?? null,
+        labels: record?.labels ?? options?.labels,
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
@@ -1842,7 +1849,7 @@ export class AgentManager {
     await this.requireExternalMcpSupport(session, storedConfig);
     return this.registerSession(session, storedConfig, resolvedAgentId, {
       ...options,
-      workspaceId: options?.workspaceId ?? record?.workspaceId,
+      workspaceId,
       persistence: handle,
       restoring: true,
     });
@@ -1986,7 +1993,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "refresh", purpose: "interactive", workspaceId: existing.workspaceId },
+      {
+        reason: "refresh",
+        purpose: "interactive",
+        workspaceId: existing.workspaceId,
+        labels: existing.labels,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     if (
@@ -6259,6 +6271,7 @@ export class AgentManager {
       reason: PluginSessionOpenRequest["reason"];
       purpose: PluginSessionOpenRequest["purpose"];
       workspaceId?: string | null;
+      labels?: Record<string, string>;
     },
   ): Promise<AgentLaunchContext> {
     if (this.pluginLifecycle) {
@@ -6285,6 +6298,9 @@ export class AgentManager {
         ),
         PASEO_AGENT_ID: agentId,
         PASEO_AGENT_CWD: cwd,
+        ...(opening?.labels?.["projets.coach"] !== undefined
+          ? { PASEO_CODEX_DISABLE_SHELL_SNAPSHOT: "1" }
+          : {}),
       },
     };
     if (

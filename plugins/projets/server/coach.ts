@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import {
   coachAction,
@@ -141,6 +142,7 @@ export function registerCoach(
     );
     if (request.action === "phases" && !output.phases) throw new Error("Phases indisponibles.");
     if (request.action === "tasks" && !output.tasks) throw new Error("Tâches indisponibles.");
+    await releaseCoach(request.threadId, context);
     return {
       message: output.message,
       objective: request.action === "discuss" ? output.objective : undefined,
@@ -165,7 +167,16 @@ export function registerCoach(
       }
     },
     sequence.applyCoachTask,
+    releaseCoach,
   );
+}
+
+async function releaseCoach(id: string, { paseo }: PluginHandlerContext) {
+  try {
+    await paseo.agents.ref(id).hibernate();
+  } catch (error) {
+    console.warn("Impossible de mettre le coach au repos", error);
+  }
 }
 
 export function coachHandler(
@@ -176,11 +187,13 @@ export function coachHandler(
   home: string,
   ensureAgent: (state: CoachState, context: PluginHandlerContext) => Promise<void> = async () => {},
   applyTask?: ApplyTask,
+  release?: typeof releaseCoach,
 ) {
   let database: DatabaseSync | undefined;
   const databasePath = join(home, "projets-coach.sqlite3");
   const working = new Map<string, Promise<void>>();
   const previews = new Map<string, string>();
+  const resting = new Map<string, { started: boolean; done: Promise<void> }>();
   function db() {
     if (database) return database;
     database = new DatabaseSync(databasePath);
@@ -652,6 +665,19 @@ export function coachHandler(
           : "Réponse indisponible. Réessaie.";
       }
       if (!saveShared || state.error) save(state);
+      if (!isApplying(state.draft) && release) {
+        const rest = { started: false, done: nextTurn() };
+        rest.done = rest.done.then(async () => {
+          if (resting.get(state.threadId) !== rest) return undefined;
+          rest.started = true;
+          try {
+            return await release(state.threadId, context);
+          } finally {
+            resting.delete(state.threadId);
+          }
+        });
+        resting.set(state.threadId, rest);
+      }
     })().finally(() => {
       previews.delete(state.threadId);
       working.delete(state.threadId);
@@ -742,6 +768,28 @@ export function coachHandler(
     return true;
   }
 
+  async function continueConversation(
+    input: Parameters<typeof prepareAction>[0],
+    state: CoachState,
+    context: PluginHandlerContext,
+  ) {
+    const rest = resting.get(state.threadId);
+    if (rest?.started) {
+      await rest.done;
+      state = read(state.threadId) ?? state;
+      if (working.has(state.threadId)) return view(state);
+    }
+    const applying = isApplying(state.draft);
+    const replay = applying && input.action === "confirm" && state.draft?.id === input.id;
+    if (input.revision !== state.revision && !replay) return view(state);
+    if (applying && input.action !== "confirm" && input.action !== "retry") return view(state);
+    if ("id" in input && state.draft?.id !== input.id) return view(state);
+    if (!prepareAction(input, state, applying)) return view(state);
+    if (rest && !rest.started) resting.delete(state.threadId);
+    await work(state, context, input.action === "confirm" || Boolean(applying));
+    return view(state);
+  }
+
   server.handle(coachAction, async (input, context) => {
     if (input.action === "start") return startConversation(input, context);
     let state = read(input.threadId);
@@ -751,17 +799,11 @@ export function coachHandler(
       save(state);
     }
     if (input.action === "read" || working.has(state.threadId)) return view(state);
-    const applying = isApplying(state.draft);
-    const replay = applying && input.action === "confirm" && state.draft?.id === input.id;
-    if (input.revision !== state.revision && !replay) return view(state);
-    if (applying && input.action !== "confirm" && input.action !== "retry") return view(state);
-    if ("id" in input && state.draft?.id !== input.id) return view(state);
-    if (!prepareAction(input, state, applying)) return view(state);
-    await work(state, context, input.action === "confirm" || Boolean(applying));
-    return view(state);
+    return continueConversation(input, state, context);
   });
   return async () => {
     await Promise.allSettled(working.values());
+    await Promise.allSettled([...resting.values()].map((rest) => rest.done));
     database?.close();
   };
 }

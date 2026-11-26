@@ -637,3 +637,73 @@ test("all coaches share memory, protect a concurrent edit, and follow up only on
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test("a message arriving during hibernation stays in the same conversation", async () => {
+  const home = await mkdtemp(join(tmpdir(), "projets-coach-rest-"));
+  type Handler = (input: unknown, context: PluginHandlerContext) => unknown;
+  let action!: Handler;
+  const server = {
+    handle(rpc: { name: string }, handler: Handler) {
+      if (rpc.name === coachAction.name) action = handler;
+    },
+  } as PluginServerContext;
+  const invoke = async (input: Parameters<typeof coachAction.input.parse>[0]) =>
+    coachAction.output.parse(await action(input, {} as PluginHandlerContext));
+  let releaseStarted!: () => void;
+  let finishRelease!: () => void;
+  const started = new Promise<void>((resolve) => {
+    releaseStarted = resolve;
+  });
+  const pause = new Promise<void>((resolve) => {
+    finishRelease = resolve;
+  });
+  const run = vi.fn<Parameters<typeof coachHandler>[2]>(async () =>
+    JSON.stringify({ message: "Réponse." }),
+  );
+  const stop = coachHandler(
+    server,
+    async () => ({ sequence: { day: 20300107, projects: [], rows: [] } }),
+    run,
+    {
+      read: async () => ({ access: "ready", blocks: [], events: [] }),
+      apply: async () => ({ status: "applied" }),
+    },
+    home,
+    undefined,
+    undefined,
+    async () => {
+      releaseStarted();
+      await pause;
+    },
+  );
+  const threadId = randomUUID();
+  try {
+    await invoke({ action: "start", skill: "day", threadId, timeZone: "UTC" });
+    await started;
+    const saved = await invoke({ action: "read", threadId });
+    expect(saved.busy).toBe(false);
+    expect(saved.lines.filter((line) => line.kind === "answer")).toHaveLength(1);
+
+    const input = {
+      action: "send" as const,
+      threadId,
+      timeZone: "UTC",
+      revision: saved.revision,
+      text: "La suite.",
+    };
+    const message = invoke(input);
+    const duplicate = invoke(input);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(run).toHaveBeenCalledTimes(1);
+    finishRelease();
+    await Promise.all([message, duplicate]);
+    const resumed = await invoke({ action: "read", threadId });
+    expect(resumed.threadId).toBe(threadId);
+    expect(resumed.lines.filter((line) => line.text === input.text)).toHaveLength(1);
+    expect(run).toHaveBeenCalledTimes(2);
+  } finally {
+    finishRelease();
+    await stop();
+    await rm(home, { recursive: true, force: true });
+  }
+});

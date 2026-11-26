@@ -1224,7 +1224,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           const proposals = interactiveGroups.byHostId.get(item.id);
           content = proposals ? (
             <Suspense fallback={interactiveLoading}>
-              <InteractiveResponseCard items={proposals} height={conversationHeight * 0.7} />
+              <InteractiveResponseCard items={proposals} maxHeight={conversationHeight * 0.7} />
             </Suspense>
           ) : null;
         } else if (header) {

@@ -17,6 +17,19 @@ export function getArtifactNames(source: string): string[] {
   return names;
 }
 
+const WIDE_COMPONENTS = new Set(["Comparison", "BarChart", "LineChart", "Mermaid", "HtmlArtifact"]);
+
+export function usesWideLayout(source: string): boolean {
+  function visit(node: Root): boolean {
+    return (
+      WIDE_COMPONENTS.has(node.typeName) ||
+      (Array.isArray(node.props.children) &&
+        node.props.children.some((child) => visit(child as Root)))
+    );
+  }
+  return visit(validateInteractiveSource(source));
+}
+
 function Content({ root }: { root: Root }) {
   const renderNode = useRenderNode();
   return <>{renderNode(root)}</>;
