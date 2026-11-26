@@ -22,6 +22,7 @@ import {
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useIsFocused } from "@react-navigation/native";
 import { BackHandler, Keyboard, Pressable, Text, View, type LayoutChangeEvent } from "react-native";
+import { useForeignPinnedAgentIds } from "@/workspace-tabs/use-foreign-pinned-agent-ids";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, type Href } from "expo-router";
 import * as Clipboard from "expo-clipboard";
@@ -2042,11 +2043,17 @@ function WorkspaceScreenContent({
   const paneFocusSuppressedRef = useRef(false);
   const resizeWorkspaceSplit = useWorkspaceLayoutStore((state) => state.resizeSplit);
   const reorderWorkspaceTabsInPane = useWorkspaceLayoutStore((state) => state.reorderTabsInPane);
-  const _pinnedAgentIds = useWorkspaceLayoutStore((state) =>
+  const pinnedAgentIds = useWorkspaceLayoutStore((state) =>
     persistenceKey
       ? (state.pinnedAgentIdsByWorkspace[persistenceKey] ?? EMPTY_PINNED_AGENT_IDS)
       : EMPTY_PINNED_AGENT_IDS,
   );
+  const foreignPinnedAgentIds = useForeignPinnedAgentIds({
+    serverId: normalizedServerId,
+    workspaceId: normalizedWorkspaceId,
+    pinnedAgentIds,
+    client: isConnected && isRouteFocused && hasHydratedAgents ? client : null,
+  });
   const _hiddenAgentIds = useWorkspaceLayoutStore((state) =>
     persistenceKey ? (state.hiddenAgentIdsByWorkspace[persistenceKey] ?? EMPTY_SET) : EMPTY_SET,
   );
@@ -2215,6 +2222,7 @@ function WorkspaceScreenContent({
     reconcileWorkspaceTabs(
       persistenceKey,
       buildWorkspaceTabSnapshot({
+        foreignPinnedAgentIds,
         agentVisibility: workspaceAgentVisibility,
         agentsHydrated: hasHydratedAgents,
         terminalsHydrated: terminalsQuery.isSuccess,
@@ -2244,6 +2252,7 @@ function WorkspaceScreenContent({
     terminalsQuery.isSuccess,
     uiTabs,
     workspaceAgentVisibility,
+    foreignPinnedAgentIds,
   ]);
 
   const activeTabId = focusedPaneTabState.activeTabId;

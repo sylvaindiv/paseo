@@ -270,6 +270,7 @@ export interface WorkspaceTabSnapshot {
   agentsHydrated: boolean;
   terminalsHydrated: boolean;
   activeAgentIds: Iterable<string>;
+  foreignPinnedAgentIds?: ReadonlySet<string>;
   autoOpenAgentIds: Iterable<string>;
   knownTerminalIds?: Iterable<string>;
   standaloneTerminalIds: Iterable<string>;
@@ -2631,7 +2632,9 @@ export function reconcileWorkspaceTabs(
   // hydration never decides whether the user's target is allowed to stay open.
   const pinnedAgentIds = new Set(
     [...(state.pinnedAgentIds ?? [])].filter(
-      (agentId) => !snapshot.agentsHydrated || !activeAgentIds.has(agentId),
+      (agentId) =>
+        !snapshot.agentsHydrated ||
+        (!activeAgentIds.has(agentId) && !snapshot.foreignPinnedAgentIds?.has(agentId)),
     ),
   );
   const standaloneTerminalIds = normalizeStringSet(snapshot.standaloneTerminalIds);

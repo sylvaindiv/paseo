@@ -9,7 +9,7 @@ export default function contribute(server: PluginServerContext) {
   const sequence = registerSequence(server);
   const stopTracking = registerSequenceTracking(server);
   const capture = registerTaskCapture(server);
-  const stopCoach = registerCoach(server, sequence.read, capture.open);
+  const stopCoach = registerCoach(server, sequence, capture.open);
   return async () => {
     await stopCoach();
     await sequence.stop();

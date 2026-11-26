@@ -1,10 +1,16 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop -- Local dialog interactions. */
 import { useRpc } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useMemo, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { coachAction, coachSkills, type CoachSkill } from "../shared/coach.js";
+import {
+  coachAction,
+  coachMessageLimit,
+  coachSkills,
+  type CoachSkill,
+  type CoachView,
+} from "../shared/coach.js";
 import { CaptureConversation, captureStyles, type Line } from "./task-capture.js";
 
 interface Props {
@@ -23,6 +29,7 @@ interface Props {
 const emptyLines: Line[] = [];
 const choices = Object.entries(coachSkills) as [CoachSkill, string][];
 const labels = {
+  task: "Appliquer",
   plan: "Valider le planning",
   reflection: "Enregistrer le bilan",
   season: "Enregistrer la saison",
@@ -41,7 +48,7 @@ const css = `
 `;
 
 type Action =
-  | { action: "send"; text: string; skill?: CoachSkill }
+  | { action: "send"; text: string }
   | { action: "confirm" | "reject"; id: string }
   | { action: "retry" };
 
@@ -49,26 +56,41 @@ type Action =
 export function CoachPanel({ hostId, web, colors, close }: Props) {
   const rpc = useRpc(coachAction);
   const cache = useQueryClient();
-  const key = ["projets", "coach", hostId];
+  const [selected, setSelected] = useState<string>();
+  const key = ["projets", "coach", hostId, selected];
   const query = useQuery({
     queryKey: key,
-    queryFn: () => rpc({ action: "read" }),
+    queryFn: () => rpc({ action: "read", threadId: selected }),
     refetchInterval: (current) => (current.state.data?.busy ? 1000 : false),
     retry: false,
+    gcTime: selected ? undefined : 0,
   });
   const state = query.data;
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState("");
-  const locked = useRef(false);
+  const threadId = state?.threadId;
+  const [texts, setTexts] = useState<Record<string, string>>({});
+  const [sending, setSending] = useState<Set<string>>(() => new Set());
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const locked = useRef(new Set<string>());
+  const text = (threadId && texts[threadId]) || "";
+  const setText = (value: string) => {
+    if (threadId) setTexts((previous) => ({ ...previous, [threadId]: value }));
+  };
   const dialog = useRef<HTMLDialogElement>(null);
   const history = useRef<HTMLDivElement>(null);
   const nativeHistory = useRef<ScrollView>(null);
-  const busy = sending || Boolean(state?.busy);
+  const busy = (threadId !== undefined && sending.has(threadId)) || Boolean(state?.busy);
   const draft = state?.draft;
-  const applying = draft?.kind === "plan" && draft.applying === true;
+  const applying = (draft?.kind === "plan" || draft?.kind === "task") && draft.applying === true;
   const disabled = !state || busy;
-  const notice = error || state?.error || (query.isError ? "Coach indisponible." : "");
+  const notice =
+    errors[selected ?? threadId ?? ""] ||
+    state?.error ||
+    (query.isError ? "Coach indisponible." : "");
+  const threads = state?.threads ?? [];
+  const threadOptions = threads.map((thread, index) => ({
+    id: thread.threadId,
+    label: `${coachSkills[thread.skill]} · ${threads.length - index}`,
+  }));
   const decisions: { label: string; action: Action; primary?: boolean }[] = [];
   if (draft) {
     decisions.push({
@@ -76,10 +98,33 @@ export function CoachPanel({ hostId, web, colors, close }: Props) {
       action: { action: "confirm", id: draft.id },
       primary: true,
     });
-    if (!applying) decisions.push({ label: "Refuser", action: { action: "reject", id: draft.id } });
+    if (!applying)
+      decisions.push({
+        label: draft.kind === "task" ? "Passer" : "Refuser",
+        action: { action: "reject", id: draft.id },
+      });
   }
   if (state?.canRetry) decisions.push({ label: "Réessayer", action: { action: "retry" } });
-  const lines = state?.lines ?? emptyLines;
+  const lines = useMemo(() => {
+    const savedLines = state?.lines ?? emptyLines;
+    if (draft?.kind !== "task") return savedLines;
+    const { edit } = draft.proposal;
+    return [
+      ...savedLines,
+      {
+        id: draft.id,
+        kind: "answer" as const,
+        text: [
+          draft.summary,
+          ...edit.subtasks.map((step) => "• " + step),
+          edit.criteria,
+          edit.today ? "Aujourd’hui" : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
+    ];
+  }, [state?.lines, draft]);
   const unavailable = disabled || applying;
 
   useEffect(() => {
@@ -93,24 +138,23 @@ export function CoachPanel({ hostId, web, colors, close }: Props) {
   }, [state?.lines.length, busy]);
 
   async function act(action: Action) {
-    if (disabled || locked.current || !state) return;
-    locked.current = true;
-    setSending(true);
-    setError("");
+    if (disabled || !state || !threadId || locked.current.has(threadId)) return;
+    locked.current.add(threadId);
+    setSending(new Set(locked.current));
+    setErrors((previous) => ({ ...previous, [threadId]: "" }));
     try {
+      const target = { threadId, revision: state.revision };
       const result = await rpc(
         action.action === "send"
-          ? {
-              ...action,
-              revision: state.revision,
-              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            }
-          : { ...action, revision: state.revision },
+          ? { ...action, ...target, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+          : { ...action, ...target },
       );
-      cache.setQueryData(key, result);
+      if (result.threadId !== threadId) return;
+      cache.setQueryData<CoachView>(key, (current) =>
+        current?.threadId === threadId && current.revision <= result.revision ? result : current,
+      );
       if (
         action.action === "send" &&
-        !action.skill &&
         result.lines
           .slice(state.lines.length)
           .some((line) => line.kind === "you" && line.text === action.text)
@@ -118,18 +162,38 @@ export function CoachPanel({ hostId, web, colors, close }: Props) {
         setText("");
       }
     } catch {
-      setError("Connexion interrompue. Réessaie.");
-      void query.refetch();
+      setErrors((previous) => ({ ...previous, [threadId]: "Connexion interrompue. Réessaie." }));
+      void cache.invalidateQueries({ queryKey: key, exact: true });
     } finally {
-      locked.current = false;
-      setSending(false);
+      locked.current.delete(threadId);
+      setSending(new Set(locked.current));
     }
   }
   function send() {
     if (text.trim() && !applying) void act({ action: "send", text: text.trim() });
   }
   function enter(skill: CoachSkill) {
-    void act({ action: "send", skill, text: coachSkills[skill] });
+    const id = crypto.randomUUID();
+    const launch = {
+      action: "start" as const,
+      threadId: id,
+      skill,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+    const target = ["projets", "coach", hostId, id];
+    setSelected(id);
+    void rpc(launch)
+      .catch(() => rpc(launch))
+      .then((result) => {
+        cache.setQueryData<CoachView>(target, (current) =>
+          current && current.revision >= result.revision ? current : result,
+        );
+        return cache.invalidateQueries({ queryKey: target, exact: true });
+      })
+      .catch(() => {
+        setErrors((previous) => ({ ...previous, [id]: "Connexion interrompue." }));
+        void cache.invalidateQueries({ queryKey: target, exact: true });
+      });
   }
 
   if (!web)
@@ -146,6 +210,9 @@ export function CoachPanel({ hostId, web, colors, close }: Props) {
           decisions,
           act,
           enter,
+          threadId,
+          threadOptions,
+          selectThread: setSelected,
           nativeHistory,
           text,
           setText,
@@ -185,14 +252,28 @@ export function CoachPanel({ hostId, web, colors, close }: Props) {
           <button
             key={skill}
             type="button"
-            disabled={unavailable}
-            aria-pressed={Boolean(state?.lines.length) && state?.skill === skill}
+            aria-pressed={Boolean(state?.revision) && state?.skill === skill}
             onClick={() => enter(skill)}
           >
             {label}
           </button>
         ))}
       </div>
+      {threadOptions.length > 1 && (
+        <div className="skills">
+          <select
+            aria-label="Conversation"
+            value={threadId}
+            onChange={(event) => setSelected(event.target.value)}
+          >
+            {threadOptions.map(({ id, label }) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="history" role="log" ref={history}>
         <CaptureConversation lines={lines} busy={busy || query.isLoading} />
       </div>
@@ -222,7 +303,7 @@ export function CoachPanel({ hostId, web, colors, close }: Props) {
           aria-label="Message"
           placeholder="Ton message"
           value={text}
-          maxLength={3500}
+          maxLength={coachMessageLimit}
           disabled={unavailable}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
@@ -254,6 +335,9 @@ function NativeCoach({
   decisions,
   act,
   enter,
+  threadId,
+  threadOptions,
+  selectThread,
   nativeHistory,
   text,
   setText,
@@ -267,6 +351,9 @@ function NativeCoach({
   decisions: { label: string; action: Action }[];
   act(action: Action): Promise<void>;
   enter(skill: CoachSkill): void;
+  threadId?: string;
+  threadOptions: { id: string; label: string }[];
+  selectThread(id: string): void;
   nativeHistory: React.RefObject<ScrollView | null>;
   text: string;
   setText(text: string): void;
@@ -289,8 +376,15 @@ function NativeCoach({
           {button("Fermer", close, false)}
         </View>
         <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
-          {choices.map(([skill, label]) => button(label, () => enter(skill), unavailable))}
+          {choices.map(([skill, label]) => button(label, () => enter(skill), false))}
         </View>
+        {threadOptions.length > 1 && (
+          <ScrollView horizontal style={{ flexGrow: 0 }}>
+            {threadOptions.map(({ id, label }) =>
+              button(label, () => selectThread(id), id === threadId),
+            )}
+          </ScrollView>
+        )}
         <ScrollView ref={nativeHistory} style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
           {lines.map((line) => (
             <Text
@@ -316,7 +410,7 @@ function NativeCoach({
           placeholder="Ton message"
           placeholderTextColor={colors.foregroundMuted}
           multiline
-          maxLength={3500}
+          maxLength={coachMessageLimit}
           value={text}
           editable={!unavailable}
           onChangeText={setText}

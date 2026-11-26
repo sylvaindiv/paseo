@@ -83,10 +83,13 @@ export const thingsPlanning = {
       requestID: id,
       changes: changes.map(({ action, start, end, ...entry }) => ({
         kind: action,
-        slot: {
-          start: new Date(start).toISOString().replace(".000Z", "Z"),
-          end: new Date(end).toISOString().replace(".000Z", "Z"),
-        },
+        slot:
+          start && end
+            ? {
+                start: new Date(start).toISOString().replace(".000Z", "Z"),
+                end: new Date(end).toISOString().replace(".000Z", "Z"),
+              }
+            : undefined,
         ...("task" in entry
           ? { taskID: entry.task.id }
           : { id: entry.block.id, version: entry.block.version }),
@@ -95,6 +98,11 @@ export const thingsPlanning = {
     if (result.receipt?.requestID.toLowerCase() === id.toLowerCase()) return { status: "applied" };
     if (result.conflict)
       return { status: result.conflict.reason === "calendarUnknown" ? "denied" : "conflict" };
+    if (
+      result.error === "Modification invalide." &&
+      changes.some(({ start, end }) => !start || !end)
+    )
+      return { status: "conflict" };
     throw new Error(result.error ?? "Confirmation de Things indisponible.");
   },
 };

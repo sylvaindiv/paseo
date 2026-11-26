@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type { CoachTaskProposal } from "../shared/coach.js";
 import { sequenceAction, type SequenceRequest } from "../shared/sequence.js";
 
 export function registerSequence(server: PluginServerContext) {
@@ -49,7 +50,9 @@ export function registerSequence(server: PluginServerContext) {
     });
   }
 
-  async function send(input: SequenceRequest) {
+  async function send(
+    input: SequenceRequest | { action: "coachTask"; id: string; proposal: CoachTaskProposal },
+  ) {
     if (process.platform !== "darwin") return { error: "Things Local est disponible sur Mac." };
     try {
       executable ??= build().catch((error) => {
@@ -76,6 +79,8 @@ export function registerSequence(server: PluginServerContext) {
   });
   return {
     read: () => send({ action: "read" }),
+    applyCoachTask: (id: string, proposal: CoachTaskProposal) =>
+      send({ action: "coachTask", id, proposal }),
     stop: async () => {
       lifetime.abort();
       await executable?.catch(() => {});

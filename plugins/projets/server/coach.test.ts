@@ -1,13 +1,23 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import { expect, test, vi } from "vitest";
-import { coachAction } from "../shared/coach.js";
-import { coachHandler } from "./coach.js";
+import {
+  coachAction,
+  coachEnergy,
+  coachList,
+  coachMemory,
+  coachReview,
+  coachState,
+  type CoachSkill,
+} from "../shared/coach.js";
+import { coachHandler, coachReplyPreview } from "./coach.js";
 import { thingsPlanning } from "./coach-planning.js";
+
+const draftId = (state: ReturnType<typeof coachState.parse>) => state.draft?.id;
 
 test("a revised draft needs explicit confirmation and a conflict needs a new decision", async () => {
   const home = await mkdtemp(join(tmpdir(), "projets-coach-"));
@@ -32,14 +42,16 @@ test("a revised draft needs explicit confirmation and a conflict needs a new dec
   db.close();
   const task = {
     id: "brief",
+    parent: "client",
     title: "Relire le brief",
     version: "v1",
     kind: "task" as const,
     today: true,
     eligible: true,
     someday: false,
-    notes: "",
-    checklist: [],
+    createdAt: "2029-12-17T09:00:00Z",
+    notes: "Relire rapidement.",
+    checklist: [{ id: "read", title: "Revoir la conclusion", done: false }],
     images: [],
   };
   const sequence = async () => ({
@@ -83,7 +95,32 @@ test("a revised draft needs explicit confirmation and a conflict needs a new dec
     }
     return { status: "applied" };
   });
+  const taskReceipts = new Set<string>();
+  const applyTask = vi.fn<NonNullable<Parameters<typeof coachHandler>[6]>>(async (id) => {
+    if (!taskReceipts.has(id)) {
+      taskReceipts.add(id);
+      return { error: "Réponse interrompue" };
+    }
+    return { receipt: { ids: ["brief"], summary: "Tâche enregistrée." } };
+  });
   const run = vi.fn<Parameters<typeof coachHandler>[2]>(async (_id, _context, prompt) => {
+    if (prompt.includes('"message":"Découpons"')) {
+      expect(prompt).toContain('"projetChoisi":"client"');
+      return JSON.stringify({
+        message: "Commençons par le brief.",
+        tasks: [
+          {
+            projectId: "client",
+            taskId: "brief",
+            edit: { title: "Relire le brief", subtasks: [], criteria: "", today: false },
+          },
+          {
+            projectId: "client",
+            edit: { title: "Envoyer le brief", subtasks: [], criteria: "", today: false },
+          },
+        ],
+      });
+    }
     if (prompt.includes('"message":"Bilan du jour"'))
       return JSON.stringify({
         message: "Ton bilan",
@@ -136,31 +173,89 @@ test("a revised draft needs explicit confirmation and a conflict needs a new dec
   let invoke: (input: Input) => Promise<ReturnType<typeof coachAction.output.parse>> = async () => {
     throw new Error("Coach RPC was not registered");
   };
+  let list: () => Promise<ReturnType<typeof coachList.output.parse>> = async () => {
+    throw new Error("Coach list RPC was not registered");
+  };
   const context = {} as PluginHandlerContext;
   const server = {
     handle(
-      _rpc: typeof coachAction,
+      rpc: typeof coachAction | typeof coachList,
       handler: (
-        input: ReturnType<typeof coachAction.input.parse>,
+        input:
+          | ReturnType<typeof coachAction.input.parse>
+          | ReturnType<typeof coachList.input.parse>,
         context: PluginHandlerContext,
-      ) => Promise<unknown>,
+      ) => unknown,
     ) {
-      invoke = async (input) =>
-        coachAction.output.parse(await handler(coachAction.input.parse(input), context));
+      if (rpc.name === coachList.name) {
+        list = async () =>
+          coachList.output.parse(await handler(coachList.input.parse({}), context));
+      } else if (rpc.name === coachAction.name) {
+        invoke = async (input) =>
+          coachAction.output.parse(await handler(coachAction.input.parse(input), context));
+      }
     },
   } as PluginServerContext;
-  let stop = coachHandler(server, sequence, run, { read, apply }, home);
+  const emptyHome = join(home, "empty");
+  await mkdir(emptyHome);
+  const stopEmpty = coachHandler(server, sequence, run, { read, apply }, emptyHome);
+  try {
+    expect(await list()).toEqual([]);
+    expect(await list()).toEqual([]);
+    expect(await readdir(emptyHome)).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+  } finally {
+    await stopEmpty();
+  }
+  const legacyDb = new DatabaseSync(join(home, "projets-coach.sqlite3"));
+  const legacyId = randomUUID();
+  legacyDb.exec("CREATE TABLE coach (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+  legacyDb.prepare("INSERT INTO coach VALUES (1, ?)").run(
+    JSON.stringify({
+      threadId: legacyId,
+      revision: 3,
+      skill: "day",
+      lines: [],
+      reflections: [],
+    }),
+  );
+  legacyDb.close();
+  let stop = coachHandler(server, sequence, run, { read, apply }, home, undefined, applyTask);
   try {
     let state = await invoke({ action: "read" });
-    const send = (text: string, skill?: "day" | "reflection" | "week" | "season") =>
-      invoke({ action: "send", revision: state.revision, timeZone, text, skill });
+    expect(state.threadId).toBe(legacyId);
+    const send = (text: string) =>
+      invoke({
+        action: "send",
+        threadId: state.threadId,
+        revision: state.revision,
+        timeZone,
+        text,
+      });
+    async function finished(threadId: string) {
+      return vi.waitFor(async () => {
+        const current = await invoke({ action: "read", threadId });
+        expect(current.busy).toBe(false);
+        return current;
+      });
+    }
+    async function start(skill: CoachSkill) {
+      const threadId = randomUUID();
+      await invoke({ action: "start", threadId, skill, timeZone });
+      return finished(threadId);
+    }
     const decision = (action: "confirm" | "reject") =>
-      invoke({ action, revision: state.revision, id: state.draft?.id });
+      invoke({ action, threadId: state.threadId, revision: state.revision, id: draftId(state) });
     state = await send("J’ai 45 minutes avant mon rendez-vous, que puis-je avancer ?");
-    expect(state.draft?.summary).toContain("09:00–09:45 (45 min)");
-    const stale = { action: "confirm", revision: state.revision, id: state.draft?.id };
+    expect(state.draft!.summary).toContain("09:00–09:45 (45 min)");
+    const stale = {
+      action: "confirm",
+      threadId: state.threadId,
+      revision: state.revision,
+      id: draftId(state),
+    };
     state = await send("30 minutes");
-    expect(state.draft?.summary).toContain("09:00–09:30 (30 min)");
+    expect(state.draft!.summary).toContain("09:00–09:30 (30 min)");
     await invoke(stale);
     state = await decision("reject");
     expect(state.draft).toBeUndefined();
@@ -168,43 +263,153 @@ test("a revised draft needs explicit confirmation and a conflict needs a new dec
 
     state = await send("30 minutes");
     moved = true;
-    const oldId = state.draft?.id;
+    const oldId = draftId(state);
     state = await decision("confirm");
     expect(receipts.size).toBe(0);
-    expect(state.draft?.id).not.toBe(oldId);
-    expect(state.draft?.summary).toContain("10:00–10:30 (30 min)");
-    const newId = state.draft?.id;
+    expect(draftId(state)).not.toBe(oldId);
+    expect(state.draft!.summary).toContain("10:00–10:30 (30 min)");
+    const newId = draftId(state);
+    const revisionToReplay = state.revision;
     state = await decision("confirm");
     expect(state.error).toContain("Réessaie");
     expect(receipts.size).toBe(1);
     await stop();
-    stop = coachHandler(server, sequence, run, { read, apply }, home);
+    stop = coachHandler(server, sequence, run, { read, apply }, home, undefined, applyTask);
     state = await invoke({ action: "read" });
-    expect(state.draft?.id).toBe(newId);
-    const confirmed = { action: "confirm", revision: state.revision, id: newId };
-    state = await decision("confirm");
+    expect(draftId(state)).toBe(newId);
+    const confirmed = {
+      action: "confirm",
+      threadId: state.threadId,
+      revision: revisionToReplay,
+      id: newId,
+    };
+    state = await invoke(confirmed);
     expect(state.draft).toBeUndefined();
     expect((await invoke(confirmed)).lines.at(-1)?.text).toBe("Planning enregistré dans Things.");
     expect([...receipts]).toEqual([newId]);
     expect(apply.mock.calls.map(([draft]) => draft.id)).toEqual([oldId, newId, newId]);
 
-    state = await send("Bilan du jour", "reflection");
+    const legacy = state.threadId;
+    state = await start("reflection");
     state = await decision("confirm");
     await stop();
-    stop = coachHandler(server, sequence, run, { read, apply }, home);
+    stop = coachHandler(server, sequence, run, { read, apply }, home, undefined, applyTask);
     state = await invoke({ action: "read" });
-    expect(state.lines.at(0)?.text).toContain("45 minutes");
+    expect((await invoke({ action: "read", threadId: legacy })).lines.at(0)?.text).toContain(
+      "45 minutes",
+    );
     expect(state.lines.at(-1)?.text).toBe("Bilan enregistré.");
-    state = await send("Revue hebdomadaire", "week");
+    state = await start("week");
     expect(state.lines.at(-1)?.text).toContain("tu as déclaré");
-    state = await send("Saison et objectifs", "season");
-    expect(state.draft?.summary).toContain("Principal · Client · Dossier prêt");
+    state = await start("season");
+    expect(state.draft!.summary).toContain("Principal · Client · Dossier prêt");
     state = await decision("confirm");
     access = "denied";
-    state = await send("Planifier ma journée", "day");
+    state = await start("day");
     expect(state.lines.at(-1)?.text).toBe("Agenda indisponible.\nRelis le brief en 30 minutes.");
     expect(state.draft).toBeUndefined();
     expect(receipts.size).toBe(1);
+
+    access = "ready";
+    const first = { action: "start", threadId: randomUUID(), skill: "day", timeZone } as const;
+    const second = { ...first, threadId: randomUUID() };
+    const earlier = Promise.withResolvers<string>();
+    run.mockImplementationOnce((_id, _context, _prompt, _messageId, publish) => {
+      publish("Réponse en cours");
+      return earlier.promise;
+    });
+    const [firstView, secondView] = await Promise.all([invoke(first), invoke(second)]);
+    expect(firstView.lines).toEqual([]);
+    expect(secondView.lines).toEqual([]);
+    expect(secondView.draft).toBeUndefined();
+    expect((await invoke(first)).threadId).toBe(first.threadId);
+    state = await finished(second.threadId);
+    state = await send("30 minutes");
+    expect(run.mock.lastCall![0]).toBe(second.threadId);
+    expect(run.mock.lastCall![2]).toContain('"createdAt":"2029-12-17T09:00:00Z"');
+    expect(run.mock.lastCall![2]).toContain('"title":"Revoir la conclusion","done":false');
+    expect((await invoke({ action: "read", threadId: first.threadId })).preview).toBe(
+      "Réponse en cours",
+    );
+    expect((await invoke({ action: "read", threadId: second.threadId })).preview).toBeUndefined();
+    earlier.resolve(
+      JSON.stringify({
+        message: "Réponse de la première conversation.",
+        changes: [
+          {
+            action: "create",
+            taskId: "brief",
+            start: "2030-01-07T10:30:00Z",
+            end: "2030-01-07T10:40:00Z",
+          },
+        ],
+      }),
+    );
+    const late = await finished(first.threadId);
+    expect(late.lines.at(-1)?.text).toContain("première conversation");
+    expect(late.draft).toBeUndefined();
+    expect(late.preview).toBeUndefined();
+    const latest = await invoke({ action: "read" });
+    expect(latest.threadId).toBe(second.threadId);
+    expect(draftId(latest)).toBe(draftId(state));
+    expect(draftId(latest)).not.toBe(draftId(late));
+    const writes = apply.mock.calls.length;
+    await invoke({
+      action: "confirm",
+      threadId: latest.threadId,
+      revision: latest.revision,
+      id: randomUUID(),
+    });
+    expect(apply).toHaveBeenCalledTimes(writes);
+    expect(run.mock.calls.filter(([id]) => id === first.threadId)).toHaveLength(1);
+    state = await invoke({
+      action: "send",
+      threadId: state.threadId,
+      revision: state.revision,
+      timeZone,
+      text: "Découpons",
+      projectId: "client",
+    });
+    expect(state.draft?.kind).toBe("task");
+    expect(state.draft?.kind === "task" && state.draft.proposal.existing).toEqual({
+      id: "brief",
+      version: "v1",
+    });
+    const decisionToReplay = {
+      action: "confirm" as const,
+      threadId: state.threadId,
+      revision: state.revision,
+      id: draftId(state),
+      edit: {
+        title: "Relire et corriger le brief",
+        subtasks: ["Conclusion"],
+        criteria: "Conclusion validée",
+        today: true,
+      },
+    };
+    state = await invoke(decisionToReplay);
+    expect(state.canRetry).toBe(true);
+    expect(draftId(state)).toBe(decisionToReplay.id);
+    await stop();
+    stop = coachHandler(server, sequence, run, { read, apply }, home, undefined, applyTask);
+    state = await invoke(decisionToReplay);
+    expect(state.lines.at(-1)?.text).toBe("Tâche enregistrée.");
+    expect(state.draft?.kind === "task" && state.draft.proposal.edit.title).toBe(
+      "Envoyer le brief",
+    );
+    expect(applyTask.mock.calls.map(([id, proposal]) => [id, proposal.edit])).toEqual([
+      [decisionToReplay.id, decisionToReplay.edit],
+      [decisionToReplay.id, decisionToReplay.edit],
+    ]);
+    state = await decision("reject");
+    expect(state.draft).toBeUndefined();
+    expect(state.lines.at(-1)?.text).toBe("Proposition passée.");
+    expect(taskReceipts.size).toBe(1);
+    const brief = "Brief complet\n" + "Un livrable par étape. ".repeat(250).trimEnd();
+    state = await send(brief);
+    expect(state.lines.at(-2)?.text).toBe(brief);
+    const prompt = run.mock.lastCall![2];
+    expect(prompt.split(JSON.stringify(brief))).toHaveLength(2);
   } finally {
     await stop();
     vi.restoreAllMocks();
@@ -227,7 +432,21 @@ test("the Mac tool receives the date range and stable, versioned write request o
         start: "2030-01-07T11:00:00+01:00",
         end: "2030-01-07T11:30:00+01:00",
       },
+      {
+        action: "remove" as const,
+        block: { id: "block-2", version: "v2" },
+        start: "2030-01-07T12:00:00+01:00",
+        end: "2030-01-07T12:30:00+01:00",
+      },
     ];
+    const draft = coachState.shape.draft.parse({
+      kind: "plan",
+      id,
+      ...range,
+      changes,
+      summary: "Brief",
+    });
+    if (draft?.kind !== "plan") throw new Error("Brouillon absent");
     await writeFile(
       executable,
       `#!${process.execPath}
@@ -245,7 +464,9 @@ if (input.action === "planning.read") {
 } else {
   assert.deepEqual(input, { action: "planning.apply", timeZone,
     requestID: ${JSON.stringify(id)}, changes: [{ kind: "move", id: "block-1", version: "v5",
-      slot: { start: "2030-01-07T10:00:00Z", end: "2030-01-07T10:30:00Z" } }] });
+      slot: { start: "2030-01-07T10:00:00Z", end: "2030-01-07T10:30:00Z" } },
+      { kind: "remove", id: "block-2", version: "v2",
+      slot: { start: "2030-01-07T11:00:00Z", end: "2030-01-07T11:30:00Z" } }] });
   console.log(JSON.stringify({ conflict: { reason: "occupied" } }));
 }
 `,
@@ -256,11 +477,163 @@ if (input.action === "planning.read") {
       access: "ready",
       blocks: [{ id: "block-1", version: "v5", taskId: "brief" }],
     });
-    expect(
-      await thingsPlanning.apply({ kind: "plan", id, ...range, changes, summary: "Brief" }),
-    ).toEqual({ status: "conflict" });
+    expect(await thingsPlanning.apply(draft)).toEqual({ status: "conflict" });
   } finally {
     vi.unstubAllEnvs();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("streaming reveals only the coach message, including split JSON escapes", () => {
+  expect(coachReplyPreview('{"mess')).toBeUndefined();
+  expect(coachReplyPreview('{"message":"Premier point\\')).toBe("Premier point");
+  expect(coachReplyPreview('{"message":"Premier point\\nSuite","tasks":[{')).toBe(
+    "Premier point\nSuite",
+  );
+  expect(coachReplyPreview('{"message":"En cours \\ud83d')).toBe("En cours ");
+  expect(coachReplyPreview('{"message":"En cours \\ud83d\\ude42')).toBe("En cours 🙂");
+});
+
+test("all coaches share memory, protect a concurrent edit, and follow up only on an attempted review", async () => {
+  const home = await mkdtemp(join(tmpdir(), "projets-coach-profile-"));
+  const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2030-01-07T10:00:00Z"));
+  type Handler = (input: unknown, context: PluginHandlerContext) => unknown;
+  const handlers = new Map<string, Handler>();
+  const server = {
+    handle(rpc: { name: string }, handler: Handler) {
+      handlers.set(rpc.name, handler);
+    },
+  } as PluginServerContext;
+  const context = {} as PluginHandlerContext;
+  const call = async (method: string, input: unknown) => handlers.get(method)!(input, context);
+  const invoke = async (input: Parameters<typeof coachAction.input.parse>[0]) =>
+    coachAction.output.parse(await call(coachAction.name, input));
+  const memory = async (text?: string) =>
+    coachMemory.output.parse(await call(coachMemory.name, { text }));
+  const seen: string[] = [];
+  let started = () => {};
+  let finish = () => {};
+  const pause = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const enter = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const run: Parameters<typeof coachHandler>[2] = async (_id, _context, prompt) => {
+    const data = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1));
+    seen.push(data.memoireDuCoach);
+    if (data.message === "Retiens que je préfère les blocs d’une heure.") {
+      return JSON.stringify({ message: "D’accord.", memoryUpdate: "Blocs d’une heure." });
+    }
+    if (data.message === "Retiens que je commence à neuf heures.") {
+      started();
+      await pause;
+      return JSON.stringify({ message: "D’accord.", memoryUpdate: "Écriture périmée" });
+    }
+    if (data.ajustementCetteSemaine === undefined && data.observationEnergie.length) {
+      return JSON.stringify({
+        message: "Revue.",
+        adjustment: "Garde une heure libre chaque jour.",
+      });
+    }
+    return JSON.stringify({
+      message: "Priorité du jour.",
+      suggestedSlot: { start: "2030-01-07T11:00:00Z", end: "2030-01-07T11:30:00Z" },
+    });
+  };
+  const attach = () =>
+    coachHandler(
+      server,
+      async () => ({ sequence: { day: 20300107, projects: [], rows: [] } }),
+      run,
+      {
+        read: async () => ({
+          access: "ready",
+          blocks: [],
+          events: [
+            {
+              id: "busy",
+              title: "Occupé",
+              busy: true,
+              start: "2030-01-07T10:45:00Z",
+              end: "2030-01-07T11:15:00Z",
+            },
+          ],
+        }),
+        apply: async () => ({ status: "applied" }),
+      },
+      home,
+    );
+  const start = async (skill: CoachSkill) => {
+    const threadId = randomUUID();
+    let state = await invoke({ action: "start", skill, threadId, timeZone: "UTC" });
+    while (state.busy) {
+      await new Promise((resolve) => setImmediate(resolve));
+      state = await invoke({ action: "read", threadId });
+    }
+    return state;
+  };
+  let stop = attach();
+  try {
+    expect((await memory()).text).toContain("90 minutes");
+    await memory("Mon texte.");
+    for (const kind of ["day", "reflection", "week", "season"] as const) {
+      const thread = await start(kind);
+      expect(seen.at(-1)).toBe("Mon texte.");
+      expect(thread.lines.at(-1)?.text).not.toContain("Créneau proposé");
+    }
+    let thread = await start("day");
+    const send = (text: string) =>
+      invoke({
+        action: "send",
+        threadId: thread.threadId,
+        revision: thread.revision,
+        text,
+        timeZone: "UTC",
+      });
+    thread = await send("Retiens que je préfère les blocs d’une heure.");
+    expect((await memory()).text).toBe("Blocs d’une heure.");
+    const stale = send("Retiens que je commence à neuf heures.");
+    await enter;
+    await memory("Saisie de Sylvain.");
+    finish();
+    expect((await stale).lines.at(-1)?.text).toContain("Redemande-moi");
+    expect((await memory()).text).toBe("Saisie de Sylvain.");
+    await memory("");
+    await stop();
+    stop = attach();
+    expect((await memory()).text).toBe("");
+    for (const kind of ["day", "reflection", "week", "season"] as const) {
+      await start(kind);
+      expect(seen.at(-1)).toBe("");
+    }
+    const entry = { id: "task:1", title: "Devis", date: "2030-01-07T09:00:00Z" };
+    expect(await call(coachEnergy.name, { entry })).toEqual([entry]);
+    await call(coachEnergy.name, { entry: { ...entry, value: "more" } });
+    await call(coachEnergy.name, { entry: { ...entry, value: "less" } });
+    expect(await call(coachEnergy.name, { entry })).toEqual([{ ...entry, value: "less" }]);
+    const first = await start("week");
+    expect(first.adjustment?.text).toContain("une heure libre");
+    expect(await call(coachReview.name, { week: first.adjustment?.week, decision: "try" })).toBe(
+      true,
+    );
+    now.mockReturnValue(Date.parse("2030-01-14T10:00:00Z"));
+    await call(coachEnergy.name, {
+      entry: { ...entry, id: "task:2", date: "2030-01-14T09:00:00Z", value: "same" },
+    });
+    const second = await start("week");
+    expect(second.followUp?.week).toBe(first.adjustment?.week);
+    expect(await call(coachReview.name, { week: second.followUp?.week, helpful: true })).toBe(true);
+    expect(await call(coachReview.name, { week: second.adjustment?.week, decision: "pass" })).toBe(
+      true,
+    );
+    now.mockReturnValue(Date.parse("2030-01-21T10:00:00Z"));
+    const third = await start("week");
+    expect(third.followUp).toBeUndefined();
+  } finally {
+    finish();
+    await stop();
+    now.mockRestore();
+    await rm(home, { recursive: true, force: true });
   }
 });

@@ -49,6 +49,7 @@ export function deriveWorkspaceAgentVisibility(input: {
 
 export function buildWorkspaceTabSnapshot(input: {
   agentVisibility: WorkspaceAgentVisibility;
+  foreignPinnedAgentIds?: ReadonlySet<string>;
   agentsHydrated: boolean;
   terminalsHydrated: boolean;
   knownTerminalIds: Iterable<string>;
@@ -58,6 +59,7 @@ export function buildWorkspaceTabSnapshot(input: {
 }): WorkspaceTabSnapshot {
   return {
     agentsHydrated: input.agentsHydrated,
+    foreignPinnedAgentIds: input.foreignPinnedAgentIds,
     terminalsHydrated: input.terminalsHydrated,
     activeAgentIds: input.agentVisibility.activeAgentIds,
     autoOpenAgentIds: input.agentVisibility.autoOpenAgentIds,

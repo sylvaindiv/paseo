@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigation } from "@react-navigation/native";
+import { useIsFocused, useNavigation, type NavigationProp } from "@react-navigation/native";
 import { StyleSheet, View } from "react-native";
-import { useGlobalSearchParams, useLocalSearchParams, useRootNavigationState } from "expo-router";
+import { useLocalSearchParams, useRootNavigationState } from "expo-router";
 import { HostRouteBootstrapBoundary } from "@/components/host-route-bootstrap-boundary";
 import { RetainedPanel } from "@/components/retained-panel";
 import {
@@ -27,6 +27,7 @@ import {
 import {
   decodeWorkspaceIdFromPathSegment,
   parseWorkspaceOpenIntent,
+  parseHostWorkspaceRouteFromPathname,
   type WorkspaceOpenIntent,
 } from "@/utils/host-routes";
 import {
@@ -64,25 +65,21 @@ function getOpenIntentTarget(openIntent: WorkspaceOpenIntent): WorkspaceTabTarge
   return { kind: "draft", draftId: openIntent.draftId };
 }
 
-function stripOpenSearchParamFromBrowserUrl() {
+function stripOpenSearchParamFromBrowserUrl(serverId: string, workspaceId: string, open: string) {
   if (!isWeb || typeof window === "undefined") {
     return;
   }
   const url = new URL(window.location.href);
-  if (!url.searchParams.has("open")) {
+  const route = parseHostWorkspaceRouteFromPathname(url.pathname);
+  if (
+    route?.serverId !== serverId ||
+    route.workspaceId !== workspaceId ||
+    url.searchParams.get("open") !== open
+  ) {
     return;
   }
   url.searchParams.delete("open");
   replaceBrowserRouteWithCanonicalHostWorkspaceRoute(`${url.pathname}${url.search}${url.hash}`);
-}
-
-function clearConsumedOpenIntent(input: {
-  navigation: { setParams: (params: { open?: string | undefined }) => void };
-}) {
-  input.navigation.setParams({ open: undefined });
-  if (isWeb) {
-    stripOpenSearchParamFromBrowserUrl();
-  }
 }
 
 export default function HostWorkspaceIndexRoute() {
@@ -94,7 +91,8 @@ export default function HostWorkspaceIndexRoute() {
 }
 
 function HostWorkspaceRouteContent() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<{ workspace: { open?: string } }>>();
+  const isFocused = useIsFocused();
   const rootNavigationState = useRootNavigationState();
   const hasHydratedWorkspaceLayoutStore = useWorkspaceLayoutStoreHydrated();
   const consumedIntentRef = useRef<string | null>(null);
@@ -102,8 +100,6 @@ function HostWorkspaceRouteContent() {
   const params = useLocalSearchParams<{
     serverId?: string | string[];
     workspaceId?: string | string[];
-  }>();
-  const globalParams = useGlobalSearchParams<{
     open?: string | string[];
   }>();
   const serverId = getParamValue(params.serverId);
@@ -111,7 +107,7 @@ function HostWorkspaceRouteContent() {
   const workspaceId = workspaceValue
     ? (decodeWorkspaceIdFromPathSegment(workspaceValue) ?? "")
     : "";
-  const openValue = getParamValue(globalParams.open);
+  const openValue = getParamValue(params.open);
   const hasHydratedWorkspaces = useHasHydratedWorkspaces(serverId);
   const workspaceExists = useWorkspaceExists(serverId, workspaceId);
   const openIntent = useMemo(() => parseWorkspaceOpenIntent(openValue), [openValue]);
@@ -128,9 +124,16 @@ function HostWorkspaceRouteContent() {
 
   useEffect(() => {
     if (!openValue) {
+      consumedIntentRef.current = null;
       return;
     }
-    if (!rootNavigationState?.key) {
+    if (
+      !isFocused ||
+      !navigation.isFocused() ||
+      !serverId ||
+      !workspaceId ||
+      !rootNavigationState?.key
+    ) {
       return;
     }
     if (!hasHydratedWorkspaceLayoutStore) {
@@ -141,18 +144,8 @@ function HostWorkspaceRouteContent() {
     }
 
     const consumptionKey = `${serverId}:${workspaceId}:${openValue}`;
-    if (consumedIntentRef.current === consumptionKey) {
-      clearConsumedOpenIntent({
-        navigation: navigation as unknown as {
-          setParams: (params: { open?: string | undefined }) => void;
-        },
-      });
-      setIntentConsumed(true);
-      return;
-    }
-    consumedIntentRef.current = consumptionKey;
-
-    if (openIntent) {
+    if (openIntent && consumedIntentRef.current !== consumptionKey) {
+      consumedIntentRef.current = consumptionKey;
       prepareWorkspaceTab({
         serverId,
         workspaceId,
@@ -164,16 +157,13 @@ function HostWorkspaceRouteContent() {
     // Expo Router's replace ignores query-param-only changes (findDivergentState
     // skips search params). Strip ?open from the browser URL directly so the
     // address bar reflects the clean workspace route.
-    clearConsumedOpenIntent({
-      navigation: navigation as unknown as {
-        setParams: (params: { open?: string | undefined }) => void;
-      },
-    });
-
+    navigation.setParams({ open: undefined });
+    stripOpenSearchParamFromBrowserUrl(serverId, workspaceId, openValue);
     setIntentConsumed(true);
   }, [
     hasHydratedWorkspaceLayoutStore,
     isOpenIntentWaitingForWorkspace,
+    isFocused,
     navigation,
     openIntent,
     openValue,

@@ -4213,6 +4213,55 @@ describe("workspace-layout-store actions", () => {
     ).toEqual(["agent_archived-agent"]);
   });
 
+  it("repairs foreign history pins across reloads without changing the owning workspace", async () => {
+    const key = createWorkspaceKey();
+    const owner = "server-1:other-space";
+    const store = workspaceLayoutStore.getState();
+    const foreign = new Set(["foreign-active", "foreign-archived"]);
+    for (const agentId of ["local-active", ...foreign, "local-archived", "unknown"]) {
+      store.openTab({
+        workspaceKey: key,
+        target: { kind: "agent", agentId },
+        intent: "reveal",
+        pin: true,
+      });
+    }
+    store.openTab({
+      workspaceKey: key,
+      target: { kind: "draft", draftId: "keep" },
+      intent: "reveal",
+    });
+    store.openTab({
+      workspaceKey: owner,
+      target: { kind: "agent", agentId: "foreign-active" },
+      intent: "reveal",
+    });
+    const restored = createWorkspaceLayoutStore(createDeterministicWorkspaceLayoutIds());
+    await restored.persist.rehydrate();
+    const snapshot = {
+      agentsHydrated: true,
+      terminalsHydrated: false,
+      activeAgentIds: ["local-active"],
+      autoOpenAgentIds: ["local-active"],
+      standaloneTerminalIds: [],
+    };
+    const before = restored.getState().getWorkspaceTabs(key);
+    const originalOwner = restored.getState().getWorkspaceTabs(owner);
+    restored.getState().reconcileTabs(key, snapshot);
+    expect(restored.getState().getWorkspaceTabs(key)).toEqual(before);
+    restored.getState().reconcileTabs(key, { ...snapshot, foreignPinnedAgentIds: foreign });
+    const reader = createWorkspaceLayoutStore(createDeterministicWorkspaceLayoutIds());
+    await reader.persist.rehydrate();
+    reader.getState().reconcileTabs(key, snapshot);
+    expect(reader.getState().getWorkspaceTabs(key)).toEqual(
+      before.filter((tab) => tab.target.kind !== "agent" || !foreign.has(tab.target.agentId)),
+    );
+    expect(reader.getState().pinnedAgentIdsByWorkspace[key]).toEqual(
+      new Set(["local-archived", "unknown"]),
+    );
+    expect(reader.getState().getWorkspaceTabs(owner)).toEqual(originalOwner);
+  });
+
   it("restores the selected historical agent before any server data or cache is available", async () => {
     const workspaceKey = createWorkspaceKey();
     workspaceLayoutStore.getState().openTab({

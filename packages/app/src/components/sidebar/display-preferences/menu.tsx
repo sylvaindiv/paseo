@@ -69,6 +69,7 @@ const ThemedCircle = withUnistyles(Circle);
 /** Fits the item's 16pt leading slot with a hair of room, matching the trailing check. */
 const OPTION_ICON_SIZE = 14;
 const MENU_WIDTH = 232;
+const PROJECT_FILTER_MENU_WIDTH = MENU_WIDTH * 2;
 
 /**
  * Unlabelled's stand-in for a color dot: the same circle at the same size, hollow.
@@ -269,7 +270,7 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
         </MenuTrigger>
         <MenuSurface
           align="end"
-          width={MENU_WIDTH}
+          width={allProjects.length > 1 ? PROJECT_FILTER_MENU_WIDTH : MENU_WIDTH}
           pages={pages}
           sheetTitle={t("sidebar.display.heading")}
           testID="sidebar-display-preferences-content"
@@ -603,16 +604,22 @@ function ProjectFilterItems({
       >
         {t("sidebar.display.projectFilter.all")}
       </MenuItem>
-      {sortedProjects.map((project) => (
-        <ProjectFilterItem
-          key={project.viewKey}
-          viewKey={project.viewKey}
-          label={project.projectName}
-          icon={iconByProjectViewKey.get(project.viewKey)}
-          selected={!resolvedHiddenProjectKeys.includes(project.viewKey)}
-          onToggle={preferences.toggleProjectVisibility}
-        />
-      ))}
+      <View style={styles.projectFilterGrid}>
+        {sortedProjects.map((project) => (
+          <View
+            key={project.viewKey}
+            style={sortedProjects.length > 1 ? styles.projectFilterCell : styles.singleProject}
+          >
+            <ProjectFilterItem
+              viewKey={project.viewKey}
+              label={project.projectName}
+              icon={iconByProjectViewKey.get(project.viewKey)}
+              selected={!resolvedHiddenProjectKeys.includes(project.viewKey)}
+              onToggle={preferences.toggleProjectVisibility}
+            />
+          </View>
+        ))}
+      </View>
     </>
   );
 }
@@ -735,6 +742,16 @@ const styles = StyleSheet.create((theme) => ({
   },
   triggerHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
+  },
+  projectFilterGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+  },
+  projectFilterCell: {
+    width: "50%",
+  },
+  singleProject: {
+    width: "100%",
   },
   // The icon sits in a 14pt menu slot, so the fallback initial is sized down to match rather
   // than reusing the sidebar row's 16pt figure.

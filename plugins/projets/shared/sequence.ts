@@ -6,6 +6,7 @@ const row = z.object({
   id: z.string(),
   title: z.string(),
   notes: z.string(),
+  acceptanceCriteria: z.string().optional(),
   version: z.string(),
   status: z.enum(["todo", "inProgress", "waiting", "done"]).optional(),
   parent: z.string().optional(),
@@ -15,6 +16,8 @@ const row = z.object({
   eligible: z.boolean(),
   someday: z.boolean(),
   deadline: z.number().optional(),
+  createdAt: z.iso.datetime().optional(),
+  startDay: z.number().optional(),
   checklist: z.array(z.object({ id: z.string(), title: z.string(), done: z.boolean() })),
   images: z.array(z.string()),
 });
